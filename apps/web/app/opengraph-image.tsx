@@ -36,7 +36,7 @@ export default function OpenGraphImage() {
           </div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 24, color: "#7fb3dc" }}>
-          <span>harness.kyro.house</span>
+          <span>relay.kyro.house</span>
           <span style={{ color: "#a7a7a3" }}>open source · Apache-2.0</span>
         </div>
       </div>

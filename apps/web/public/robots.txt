@@ -1,4 +1,4 @@
-# relay — https://harness.kyro.house
+# relay — https://relay.kyro.house
 # Everything public is crawlable. Internal polling endpoints are not worth indexing.
 
 User-agent: *
@@ -25,4 +25,4 @@ Allow: /
 User-agent: Claude-User
 Allow: /
 
-Sitemap: https://harness.kyro.house/sitemap.xml
+Sitemap: https://relay.kyro.house/sitemap.xml

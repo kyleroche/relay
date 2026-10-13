@@ -24,7 +24,7 @@ pnpm relay link       # in a repo: relay.md, owned sections, caller workflows, l
 pnpm relay brief 42   # the memory envelope a lane would get for issue 42
 pnpm --filter @relay/web dev
 pnpm --filter @relay/web build && pnpm --filter @relay/web typecheck
-RELAY_PUBLIC_URL=https://harness.kyro.house pnpm --filter @relay/web check:agentic   # is-agentic score gate, after deploy
+RELAY_PUBLIC_URL=https://relay.kyro.house pnpm --filter @relay/web check:agentic   # is-agentic score gate, after deploy
 ```
 
 Memory commands (`docs/MEMORY.md`): `relay brief`, `relay recall`, `relay decide`, `relay prefer`, `relay capture`, `relay memory history`. Hooks call the CLI through the repo's own `tsx`, so the checkout must stay where `relay setup` ran (re-run it after moving).

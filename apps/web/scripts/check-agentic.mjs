@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
  * Post-deploy gate: run Vercel's is-agentic scanner against the public URL and fail
- * below a threshold. Usage: RELAY_PUBLIC_URL=https://harness.kyro.house pnpm --filter @relay/web check:agentic
+ * below a threshold. Usage: RELAY_PUBLIC_URL=https://relay.kyro.house pnpm --filter @relay/web check:agentic
  * Env: RELAY_PUBLIC_URL (or first arg), AGENTIC_THRESHOLD (default 95).
  */
 import { spawnSync } from "node:child_process";
 
-const target = process.argv[2] ?? process.env.RELAY_PUBLIC_URL ?? "https://harness.kyro.house";
+const target = process.argv[2] ?? process.env.RELAY_PUBLIC_URL ?? "https://relay.kyro.house";
 const threshold = Number(process.env.AGENTIC_THRESHOLD ?? 95);
 const domain = target.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
 

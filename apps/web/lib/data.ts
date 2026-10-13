@@ -40,5 +40,5 @@ export function publicReadEnabled(): boolean {
   return dataMode() === "mock";
 }
 
-export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://harness.kyro.house").replace(/\/$/, "");
+export const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL ?? "https://relay.kyro.house").replace(/\/$/, "");
 export const REPO_URL = "https://github.com/kyroche/relay"; // placeholder until the repo is public

@@ -39,5 +39,5 @@ Payments (x402, UCP, ACP) do not apply to a free tool. WebMCP and NLWeb are opti
 ## Verification
 
 ```bash
-npx is-agentic harness.kyro.house --json | jq '.score, .issues[] | {id, result, recommendation}'
+npx is-agentic relay.kyro.house --json | jq '.score, .issues[] | {id, result, recommendation}'
 ```

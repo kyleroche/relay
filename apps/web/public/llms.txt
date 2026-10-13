@@ -4,26 +4,26 @@
 
 ## Start here
 
-- [What relay is](https://harness.kyro.house/info): the five rules, how a task flows, quick install, linking model accounts
-- [Feed](https://harness.kyro.house/): every issue, run, model call, PR, review and deployment, newest first
-- [AGENTS.md](https://harness.kyro.house/docs/agents): instructions for coding agents working in or installing relay
-- [README](https://harness.kyro.house/docs/readme): what it does, quick install, how to link model accounts
+- [What relay is](https://relay.kyro.house/info): the five rules, how a task flows, quick install, linking model accounts
+- [Feed](https://relay.kyro.house/): every issue, run, model call, PR, review and deployment, newest first
+- [AGENTS.md](https://relay.kyro.house/docs/agents): instructions for coding agents working in or installing relay
+- [README](https://relay.kyro.house/docs/readme): what it does, quick install, how to link model accounts
 
 ## Guides
 
-- [Architecture](https://harness.kyro.house/docs/architecture): the design and the rules behind it
-- [API and MCP](https://harness.kyro.house/docs/api): the read API under /api/v1, rate limits, scopes, and the MCP server at /mcp
-- [Versioning and deprecation](https://harness.kyro.house/docs/versioning): how the API changes and the RFC 9745 headers used when something is retired
-- [Agent readiness](https://harness.kyro.house/docs/agent-readiness): what the hosted site serves so agents can find, read, and use it
+- [Architecture](https://relay.kyro.house/docs/architecture): the design and the rules behind it
+- [API and MCP](https://relay.kyro.house/docs/api): the read API under /api/v1, rate limits, scopes, and the MCP server at /mcp
+- [Versioning and deprecation](https://relay.kyro.house/docs/versioning): how the API changes and the RFC 9745 headers used when something is retired
+- [Agent readiness](https://relay.kyro.house/docs/agent-readiness): what the hosted site serves so agents can find, read, and use it
 
 ## Machine-readable
 
-- [OpenAPI](https://harness.kyro.house/openapi.json): OpenAPI 3.1 description of /api/v1
-- [API catalog](https://harness.kyro.house/.well-known/api-catalog): RFC 9727 linkset
-- [MCP server card](https://harness.kyro.house/.well-known/mcp/server-card.json): tools and transport for /mcp
-- [Agent skills](https://harness.kyro.house/.well-known/agent-skills/index.json): the relay install skill
-- [AI catalog](https://harness.kyro.house/.well-known/ai-catalog.json): site catalog for agents
-- [Full docs](https://harness.kyro.house/llms-full.txt): everything above concatenated
+- [OpenAPI](https://relay.kyro.house/openapi.json): OpenAPI 3.1 description of /api/v1
+- [API catalog](https://relay.kyro.house/.well-known/api-catalog): RFC 9727 linkset
+- [MCP server card](https://relay.kyro.house/.well-known/mcp/server-card.json): tools and transport for /mcp
+- [Agent skills](https://relay.kyro.house/.well-known/agent-skills/index.json): the relay install skill
+- [AI catalog](https://relay.kyro.house/.well-known/ai-catalog.json): site catalog for agents
+- [Full docs](https://relay.kyro.house/llms-full.txt): everything above concatenated
 
 ## Optional
 
