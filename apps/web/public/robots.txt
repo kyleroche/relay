@@ -1,0 +1,28 @@
+# relay — https://harness.kyro.house
+# Everything public is crawlable. Internal polling endpoints are not worth indexing.
+
+User-agent: *
+Allow: /
+Disallow: /api/feed
+Disallow: /api/meters
+Disallow: /api/markdown
+
+User-agent: GPTBot
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: Claude-User
+Allow: /
+
+Sitemap: https://harness.kyro.house/sitemap.xml

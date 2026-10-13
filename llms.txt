@@ -17,6 +17,8 @@
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
 - [Feed](docs/FEED.md): event kinds, sources, and the ledger view
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it
+- [Versioning](docs/VERSIONING.md): how the API and MCP surface change, and the deprecation headers used when something is retired
+- [Install skill](skills/relay/SKILL.md): the agent skill for installing and operating relay
 
 ## Reference
 

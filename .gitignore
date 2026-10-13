@@ -13,3 +13,4 @@ dist/
 coverage/
 .turbo/
 *.pglite/
+next-env.d.ts
