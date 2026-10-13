@@ -1,8 +1,8 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { LocalStore, verifyLocalUploadUrl } from "@relay/core";
+import { verifyLocalUploadUrl } from "@relay/core";
 import { NextResponse, type NextRequest } from "next/server";
-import { getStore } from "@/lib/assets";
+import { localStore } from "@/lib/assets";
 import { problem } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -16,8 +16,8 @@ const MAX_BYTES = 200 * 1024 * 1024;
  * Finish with POST /api/v1/assets/{id}/finalize. In Blob mode the presigned URL points at Blob and this route 404s.
  */
 export async function PUT(req: NextRequest) {
-  const store = getStore();
-  if (!(store instanceof LocalStore)) return problem(404, "Not Found", "This deployment uploads straight to Vercel Blob; use the presigned URL from the API.", req.nextUrl.pathname);
+  const store = localStore();
+  if (!store) return problem(404, "Not Found", "This deployment uploads straight to Vercel Blob; use the presigned URL from the API.", req.nextUrl.pathname);
   const sp = req.nextUrl.searchParams;
   const key = sp.get("key") ?? "";
   const exp = sp.get("exp") ?? "";

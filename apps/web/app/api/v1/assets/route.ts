@@ -143,7 +143,17 @@ export const POST = api(
         headers: { "content-type": contentType },
         expires_at: new Date(Date.now() + UPLOAD_TTL * 1000).toISOString(),
         finalize_url: `${new URL(req.url).origin}/api/v1/assets/${id}/finalize`,
-        finalize_body: { key, project: meta.project, ...(meta.issue !== undefined ? { issue: meta.issue } : {}), ...(meta.pr !== undefined ? { pr: meta.pr } : {}), ...(meta.title ? { title: meta.title } : {}), ...(meta.description ? { description: meta.description } : {}), ...(meta.replaces ? { replaces: meta.replaces } : {}), ...(meta.tags ? { tags: meta.tags } : {}) },
+        finalize_body: {
+          key,
+          project: meta.project,
+          ...(meta.issue !== undefined ? { issue: meta.issue } : {}),
+          ...(meta.pr !== undefined ? { pr: meta.pr } : {}),
+          ...(meta.title ? { title: meta.title } : {}),
+          ...(meta.description ? { description: meta.description } : {}),
+          ...(meta.replaces ? { replaces: meta.replaces } : {}),
+          ...(meta.tags ? { tags: meta.tags } : {}),
+          ...(meta.by ? { by: meta.by } : {}),
+        },
       },
       { status: 201 },
     );

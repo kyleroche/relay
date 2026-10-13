@@ -49,13 +49,16 @@ export async function GET(req: NextRequest, ctx: Ctx) {
   }
   const data = readZipEntry(hit.bytes, hit.root + entry);
   if (!data) return problem(404, "Not Found", `No entry '${entry}' in the bundle.`, instance);
+  // The document is sandboxed into an opaque origin, where 'self' matches nothing; name the app origin so the
+  // bundle's own css, js and images (served by this route) load, and nothing else does.
+  const origin = req.nextUrl.origin;
   return new NextResponse(new Uint8Array(data), {
     headers: {
       "content-type": mimeForEntry(entry),
       "content-length": String(data.length),
       "cache-control": "private, max-age=300",
       "x-content-type-options": "nosniff",
-      "content-security-policy": "sandbox allow-scripts; default-src 'self' data: blob: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; font-src * data:",
+      "content-security-policy": `sandbox allow-scripts; default-src ${origin} data: blob: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; font-src * data:; frame-src 'none'; form-action 'none'`,
     },
   });
 }

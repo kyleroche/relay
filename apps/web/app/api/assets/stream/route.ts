@@ -2,9 +2,9 @@ import { createReadStream, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Readable } from "node:stream";
-import { LocalStore, sniffMime, verifyLocalSignedUrl } from "@relay/core";
+import { sniffMime, verifyLocalSignedUrl } from "@relay/core";
 import { NextResponse, type NextRequest } from "next/server";
-import { getStore } from "@/lib/assets";
+import { localStore } from "@/lib/assets";
 import { problem } from "@/lib/api";
 
 export const dynamic = "force-dynamic";
@@ -15,8 +15,8 @@ export const dynamic = "force-dynamic";
  * that resolves outside the asset root. In Blob mode this route does not apply: view URLs are presigned Blob URLs.
  */
 export async function GET(req: NextRequest) {
-  const store = getStore();
-  if (!(store instanceof LocalStore)) return problem(404, "Not Found", "This deployment serves assets from Vercel Blob; use the signed URL from the API.", req.nextUrl.pathname);
+  const store = localStore();
+  if (!store) return problem(404, "Not Found", "This deployment serves assets from Vercel Blob; use the signed URL from the API.", req.nextUrl.pathname);
   const sp = req.nextUrl.searchParams;
   const key = sp.get("key") ?? "";
   const exp = sp.get("exp") ?? "";
@@ -60,7 +60,8 @@ export async function GET(req: NextRequest) {
     "x-content-type-options": "nosniff",
     "content-disposition": `inline; filename="${encodeURIComponent(key.split("/").pop() ?? "asset")}"`,
     // Bare HTML files are shown in a sandboxed iframe; never let them run as part of the app's origin.
-    ...(mime === "text/html" ? { "content-security-policy": "sandbox allow-scripts; default-src 'self' data: blob:; img-src * data: blob:; style-src 'unsafe-inline' *" } : {}),
+    // A bare HTML file is sandboxed into an opaque origin, where 'self' matches nothing; name the app origin instead.
+    ...(mime === "text/html" ? { "content-security-policy": `sandbox allow-scripts; default-src ${req.nextUrl.origin} data: blob: 'unsafe-inline'; img-src * data: blob:; media-src * data: blob:; font-src * data:; frame-src 'none'; form-action 'none'` } : {}),
   };
   if (range) {
     const m = /^bytes=(\d*)-(\d*)$/.exec(range);

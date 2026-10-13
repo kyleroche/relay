@@ -65,8 +65,8 @@ export async function upsertProvider(db: Db, p: ProviderRow): Promise<ProviderRo
     `INSERT INTO providers (slug, name, doc_domains, skill_sources) VALUES ($1, $2, $3::text[], $4::text[])
      ON CONFLICT (slug) DO UPDATE SET
        name = EXCLUDED.name,
-       doc_domains = (SELECT array_agg(DISTINCT d ORDER BY d) FROM unnest(providers.doc_domains || EXCLUDED.doc_domains) AS d),
-       skill_sources = (SELECT array_agg(DISTINCT s ORDER BY s) FROM unnest(providers.skill_sources || EXCLUDED.skill_sources) AS s),
+       doc_domains = coalesce((SELECT array_agg(DISTINCT d ORDER BY d) FROM unnest(providers.doc_domains || EXCLUDED.doc_domains) AS d), '{}'),
+       skill_sources = coalesce((SELECT array_agg(DISTINCT s ORDER BY s) FROM unnest(providers.skill_sources || EXCLUDED.skill_sources) AS s), '{}'),
        updated_at = now()
      RETURNING doc_domains, skill_sources`,
     [p.slug, p.name, p.doc_domains, p.skill_sources],

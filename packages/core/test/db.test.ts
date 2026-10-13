@@ -74,6 +74,11 @@ describe("guidance", () => {
     const p = await guidance.upsertProvider(db, { slug: "acme", name: "Acme Inc", doc_domains: ["help.acme.test"], skill_sources: ["https://acme.test/skills/"] });
     expect(p.doc_domains.sort()).toEqual(["docs.acme.test", "help.acme.test"]);
     expect((await guidance.getProvider(db, "acme"))?.name).toBe("Acme Inc");
+    // re-seeding a provider with empty arrays must not turn the union into NULL (relay init runs seedRegistry every time)
+    await guidance.upsertProvider(db, { slug: "bare", name: "Bare", doc_domains: [], skill_sources: [] });
+    const bare = await guidance.upsertProvider(db, { slug: "bare", name: "Bare", doc_domains: [], skill_sources: [] });
+    expect(bare.skill_sources).toEqual([]);
+    expect((await guidance.getProvider(db, "bare"))?.doc_domains).toEqual([]);
     await guidance.upsertModel(db, { id: model, provider: "acme", lanes: ["image"], staleDays: 30 });
     await guidance.upsertModel(db, { id: "acme/other", provider: "acme", lanes: [], staleDays: 30 });
     const m = await guidance.getModel(db, model);

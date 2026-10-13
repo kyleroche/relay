@@ -59,11 +59,20 @@ export async function viewUrl(key: string | null, absolute = false): Promise<str
 
 // ---------- bundle signing (app level, store independent) ----------
 
+/**
+ * The local store, or undefined in Blob mode. Checked by `kind`, never `instanceof`: the store instance is shared on
+ * globalThis across Next's server bundles (pages, route handlers), each of which carries its own copy of the class.
+ */
+export function localStore(): LocalStore | undefined {
+  const store = getStore();
+  return store.kind === "local" ? (store as LocalStore) : undefined;
+}
+
 function bundleSecret(): Buffer {
   const env = process.env.RELAY_ASSET_SIGNING_KEY;
   if (env) return Buffer.from(env, "utf8");
-  const store = getStore();
-  if (store instanceof LocalStore) return store.signingSecret();
+  const local = localStore();
+  if (local) return local.signingSecret();
   // Blob mode without RELAY_ASSET_SIGNING_KEY: the store token is a secret the app already holds.
   return Buffer.from(process.env.BLOB_READ_WRITE_TOKEN ?? "relay", "utf8");
 }
