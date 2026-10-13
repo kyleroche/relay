@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# relay CLI shim: runs the TypeScript CLI with the caller's working directory intact.
+# `pnpm --dir <repo> relay …` changes cwd to the relay repo, which breaks `relay link`; use this instead.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$ROOT/node_modules/.bin/tsx" "$ROOT/packages/cli/src/main.ts" "$@"

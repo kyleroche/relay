@@ -28,7 +28,7 @@ git clone https://github.com/<org>/relay && cd relay
 pnpm install
 pnpm relay doctor     # what is installed, logged in, and reachable
 pnpm relay setup      # hooks + memory server into each CLI you have
-cd ~/code/some-repo && pnpm --dir ~/relay relay link
+cd ~/code/some-repo && ~/relay/bin/relay link
 ```
 
 ## Link your model accounts
