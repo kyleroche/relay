@@ -4,9 +4,9 @@ relay is an open-source harness that lets one person's coding-agent subscription
 
 ## Layout
 
-- `packages/core` — TypeScript library: `db/` (Postgres schema + migrations + typed queries; PGlite locally, Neon in production), `memory/` (decisions, preferences, recall), `onboard/` (official-vendor-docs ingestion gate), `lanes/` (headless adapters for `claude -p`, `fx`, `codex exec`, `grok -p`), `events/` (feed writers), `assets/` (Blob or local store, versions, review), `rules/` (generated `relay.md` owned-section installer), `hooks/` (per-CLI hook installers).
-- `packages/cli` — the `relay` command. `relay setup` configures the CLIs on this machine; `relay link` registers a repo; `relay onboard <model>` ingests vendor guidance; `relay feed`, `relay usage`, `relay doctor`.
-- `packages/mcp` — the memory MCP server (stdio for CLIs, HTTP handler for the web app).
+- `packages/core` — TypeScript library: `db/` (Postgres schema + migrations + typed queries; PGlite locally, Neon in production), `brief/` (the brief compiler and `relay.md` renderer), `memory/` (transcript capture: parse, gate, extract decisions with the Sonnet lane), `onboard/` (official-vendor-docs ingestion gate), `lanes/` (headless adapters for `claude -p`, `fx`, `codex exec`, `grok -p`), `ledger/` (step.usage writer and price table), `rules/` (owned-section installer for `AGENTS.md`/`CLAUDE.md`), `hooks/` (per-CLI hook installers and the brief cache), `state/` (project registration and file digests).
+- `packages/cli` — the `relay` command. `src/commands/` holds one file per memory command (`setup`, `link`, `brief`, `recall`, `decide`, `prefer`, `capture`, `memory`), `hooks/*.mjs` are the dependency-free scripts the CLIs' hooks point at, `templates/` the caller workflows `relay link` installs. `relay onboard <model>` ingests vendor guidance; `relay feed`, `relay usage`, `relay doctor`.
+- `packages/mcp` — the memory MCP server `@relay/mcp`: `bin/relay-mcp.mjs` (stdio for the CLIs), `createMcpHandler` (Streamable HTTP for the web app), seven `relay_*` tools.
 - `apps/web` — Next.js app: event feed, projects, usage meters, asset library with review, info page, webhook ingest (GitHub, Vercel).
 - `.github/workflows` — reusable runner workflows that repos call with a thin caller.
 - `docs/` — `ARCHITECTURE.md` is the source of truth for design; `research/` holds dated surveys.
@@ -18,8 +18,13 @@ pnpm install          # Node 24 is pinned via .npmrc
 pnpm -r typecheck
 pnpm -r test          # vitest; DB tests run on PGlite, no server needed
 pnpm relay --help
+pnpm relay setup      # plan hooks + MCP server for the CLIs on this machine; --yes writes
+pnpm relay link       # in a repo: relay.md, owned sections, caller workflows, labels
+pnpm relay brief 42   # the memory envelope a lane would get for issue 42
 pnpm --filter @relay/web dev
 ```
+
+Memory commands (`docs/MEMORY.md`): `relay brief`, `relay recall`, `relay decide`, `relay prefer`, `relay capture`, `relay memory history`. Hooks call the CLI through the repo's own `tsx`, so the checkout must stay where `relay setup` ran (re-run it after moving).
 
 ## Conventions
 
@@ -37,8 +42,8 @@ If a user asks you to set up relay, do these steps and stop at anything that nee
 
 1. `git clone <repo> && cd relay && pnpm install`
 2. `pnpm relay doctor` — reports which CLIs are installed and logged in (`claude`, `codex` or `fx`, `grok`, `gh`), Node version, and database reachability. Tell the user what is missing; logins are theirs to do.
-3. `pnpm relay setup` — installs hooks and the memory MCP server into each detected CLI's config. It prints every file it will touch and asks before writing; use `--yes` only if the user said so.
-4. In each repo they want managed: `pnpm relay link` — adds the owned section to `AGENTS.md`/`CLAUDE.md`, the GitHub labels, and the caller workflow.
+3. `pnpm relay setup` — prints every file it would touch in `~/.claude`, `~/.codex`, `~/.grok` (hooks and the memory MCP server) and writes nothing; run `pnpm relay setup --yes` only if the user said so. Run it through `pnpm` so the hooks record the pinned Node 24.
+4. In each repo they want managed: `pnpm --dir <relay checkout> relay link` — registers the project, writes `relay.md`, adds the owned section to `AGENTS.md`/`CLAUDE.md`, the GitHub labels (`gh`), and the caller workflows.
 5. Optional, for runners: follow `docs/RUNNERS.md` to register a self-hosted GitHub Actions runner on a machine that holds the logins.
 6. Optional, for a model the user will prompt (image/video models): `pnpm relay onboard <provider/model>`.
 

@@ -14,15 +14,17 @@ it, the old row gets `valid_to = now()` and `superseded_by = <new id>`; nothing 
 "what did we believe on the 3rd". Recall only returns current decisions unless asked for history.
 
 Sources (`decisions.source`): `claude`, `codex`, `grok` (captured by the session-end hook), `pr` (extracted from a
-merged PR's description and review thread), `human` (typed through the CLI or the web app), `nightly` (produced by
-consolidation). `source_ref` keeps the session id or PR URL so a decision can be traced.
+merged PR's description and review thread), `human` (typed through the CLI, the MCP tools or the web app), `nightly`
+(produced by consolidation). `source_ref` keeps the session id or PR URL so a decision can be traced.
 
 ### Preferences, with scopes
 
 A preference is a key/value such as `test_runner = vitest` or `commit_style = imperative, one topic`. Scopes, from
 widest to narrowest: `global`, `project` (`scope_id` = project slug), `lane` (`scope_id` = `claude|codex|grok`),
-`model` (`scope_id` = model id). Narrower scopes override wider ones when a brief is assembled, so you can say
-"globally, prefer small PRs; in the grok lane, never touch migrations".
+`model` (`scope_id` = model id). Narrower scopes override wider ones when a brief is assembled
+(`mergedPreferences` in `packages/core/src/brief/`), so you can say "globally, prefer small PRs; in the grok lane,
+never touch migrations". Lane preferences are merged only when the caller names a lane (hooks pass the CLI they run
+in; `relay brief --lane`).
 
 ### Vendor guidance, behind a gate
 
@@ -38,70 +40,126 @@ prompt guides are excluded unless you allowlist a domain yourself. `onboard.refr
 summary per file, keyed by content hash, re-summarized only when the hash changes. Digests make briefs cheap:
 a brief names the files that matter instead of pasting them.
 
+## The brief compiler
+
+`compileBrief(db, {project, issue?, intent, model?, lane?, maxTokens})` in `packages/core/src/brief/index.ts` is the
+one place an envelope is assembled. It returns `{text, sections: [{name, tokens}], tokens, omitted}` and holds a hard
+cap:
+
+| Section | Content | Atomicity |
+|---|---|---|
+| `summary` | the project's ≤2K-token summary | whole or omitted |
+| `preferences` | merged preferences for the project (and lane / model when given), rendered as hard rules | whole or omitted |
+| `decisions` | current decisions matching the issue text and intent (`searchDecisions`, vector when `AI_GATEWAY_API_KEY` is set, else full text), topped up with the most recent and a few global ones | whole items until the budget; omitted when none fits |
+| `guidance` | vendor guidance for `model` matching the query (`vectorSearchGuidance` or `textSearchGuidance`) | whole chunks until the budget; omitted when none fits |
+
+Sections are allocated in the order preferences, decisions, summary, guidance (binding and cheap first, the big
+summary after, guidance last) and rendered in the order summary, preferences, decisions, guidance so every brief
+reads the same way. Nothing is ever cut mid-sentence; a section that does not fit is reported in `omitted`. Tokens
+are the ≈4-chars/token estimate from `approxTokens`; the ledger records real counts.
+
 ## How recall reaches a model
 
 Nothing reads memory inside the model loop. Memory is injected at two edges and captured at a third:
 
 1. **Brief time (runners).** `scripts/runner/run-lane.sh` calls `relay brief <issue>` when the relay CLI is
-   installed on the runner and appends its output to the brief under a `## Memory` heading. `relay brief` returns
-   the current decisions for the project, the merged preferences for the project and lane, and up to 3K tokens of
-   guidance matched to the issue text. Without the CLI the section is skipped and the lane still runs.
-2. **Session start (hooks).** `pnpm relay setup` installs a session-start hook into each CLI it finds:
-   Claude Code `SessionStart` hook, Codex `notify`/session hook, Grok Build session hook. The hook runs `relay
-   recall --cwd .` and prints the same decisions-and-preferences block, which the CLI adds to the system context
-   of that session. Injection is capped (default 3K tokens) and the cap is a preference (`recall_tokens`).
-3. **Session end (hooks).** The matching session-end hook runs `relay capture`, which asks for the session's
-   decisions in one structured call on the same CLI, writes them as `decisions` rows with `source = <cli>`, and
-   emits `decision.captured` events. It never stores the transcript.
+   installed on the runner and appends its output to the brief under a `## Memory` heading. `relay brief` fetches
+   the issue through `gh` when it can, compiles the envelope under a 3K-token cap (`--max-tokens`), and prints it.
+   Without the CLI the section is skipped and the lane still runs.
+2. **Session start and every prompt (hooks).** `pnpm relay setup` installs hooks into each CLI it finds:
 
-Cloud agents and the web app reach the same data through the memory MCP server (`packages/mcp`): stdio for local
-CLIs, HTTP at `/api/memory` with `RELAY_MEMORY_TOKEN` for anything remote. Tools: `recall`, `decide`, `prefer`,
-`guidance`.
+   | CLI | File | Events installed | Injects |
+   |---|---|---|---|
+   | Claude Code | `~/.claude/settings.json` (hooks), `~/.claude.json` (user-scope `mcpServers.relay`) | `SessionStart`, `UserPromptSubmit`, `SessionEnd` | brief ≤2.5K tokens; recall ≤1K tokens; capture |
+   | Codex | `~/.codex/config.toml`, one block between `# relay:begin` and `# relay:end`: `[mcp_servers.relay]`, `[[hooks.SessionStart]]`, `[[hooks.SessionEnd]]` | `SessionStart`, `SessionEnd` (Codex has no `UserPromptSubmit`; the `relay_recall` tool covers it) | brief ≤2.5K tokens; capture |
+   | Grok Build | `~/.grok/hooks/relay.json` (relay owns the whole file), `~/.grok/settings.json` (`mcpServers.relay`) | `SessionStart`, `UserPromptSubmit`, `Stop` | brief ≤2.5K tokens; recall ≤1K tokens; capture |
+
+   The hooks are `packages/cli/hooks/{session-start,user-prompt,session-end}.mjs --cli <name>`: dependency-free Node
+   scripts that read the hook payload on stdin, look for `.relay/rules.json` above the cwd (so an unlinked repo gets
+   nothing and costs nothing), and call the relay CLI through the repo's own `tsx`. `session-start` keeps the brief
+   per project and lane for ten minutes under `~/.harness/cache/brief/` and answers from the cache without starting
+   the CLI (≈30 ms); a cold start is ≈0.5 s. `user-prompt` skips prompts shorter than 20 characters and slash
+   commands. `relay decide` and `relay prefer` drop the project's cache so a new decision reaches the next session.
+   The budgets are fixed in the scripts (2.5K / 1K), not preferences.
+3. **Session end (hooks).** `session-end` starts `relay capture --transcript <path>` detached, so the session never
+   waits on a model call, and logs to `~/.harness/cache/capture.log`. Capture parses the transcript (Claude Code and
+   Grok JSONL, Codex rollouts, or plain text), splits it into ≈2.5K-token segments on turn boundaries, gates each
+   segment with a cheap rule (decision-flavoured language) or with the command in `capture.gateCommand` of
+   `~/.harness/config.json` / `RELAY_CAPTURE_GATE` (Jev plugs in here: the segment arrives on stdin, exit 0 plus
+   anything but `no` passes), and asks the Sonnet lane (`runClaude` with `tools: []`, structured output) for the
+   durable decisions in the segments that passed, with the project's current decisions in the prompt so it can
+   return `supersedes_id`. New rows get `source = <cli>` and `source_ref = <session id>`; each one emits a
+   `decision.captured` event and the Sonnet call is a `step.usage` row. A byte offset per transcript in
+   `~/.harness/cache/capture-state.json` makes per-turn `Stop` hooks and re-runs incremental. The transcript is never
+   stored and never sent whole.
+
+Cloud agents and the web app reach the same data through the memory MCP server (`packages/mcp`): the `relay-mcp`
+stdio binary for local CLIs (`packages/mcp/bin/relay-mcp.mjs`, run through the repo's `tsx` with the node that ran
+`relay setup`), and `createMcpHandler(db, {token, publicRead?})` for a Next.js route at `/api/memory`
+(Streamable HTTP, stateless; `RELAY_MEMORY_TOKEN` as the bearer enables `relay_decide` and `relay_prefer`, reads
+are open only when `publicRead` is set). Tools: `relay_recall(query, project?)`, `relay_decide(text, project,
+source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`, `relay_guidance(model, query)`,
+`relay_brief(project, intent)`, `relay_feed(project?, limit?)`, `relay_project(slug)`. Every result is text capped at
+3K tokens.
 
 ## The rules file and the owned section
 
-Each linked repo gets a generated `relay.md`: the current decisions and preferences for that project rendered as
-plain rules, plus the one-paragraph description of how relay works in this repo (labels, branches, what the runner
-does). `run-lane.sh` puts `relay.md` at the top of every brief.
+Each linked repo gets a generated `relay.md` (`renderRulesFile`, ≤2K tokens): a header that says how relay works in
+this repo (labels, `relay/<lane>-<issue>` branches, cross-model review) and tells the model to use the memory
+tools, the hard rules from preferences, the top current decisions, and as many whole paragraphs of the project
+summary as still fit. `run-lane.sh` puts `relay.md` at the top of every brief.
 
 So that every CLI reads it without being told, `relay link` adds a short owned section to `AGENTS.md` (and
-`CLAUDE.md` if present) between two markers:
+`CLAUDE.md` when it exists and is more than an `@AGENTS.md` include) between two markers:
 
 ```markdown
 <!-- relay:begin -->
-This repository is managed with relay. Read `relay.md` before making changes; it holds the current decisions and
-preferences for this project. Issues labelled `agent:claude|codex|grok` are implemented by lanes on self-hosted
-runners that open pull requests from `relay/<lane>-<issue>` branches.
+This repository is managed with relay (project `demo`). Read `relay.md` before making changes; it holds the current
+decisions and preferences for this project.
+Issues labelled `agent:claude`, `agent:codex` or `agent:grok` are implemented by lanes on self-hosted runners that
+open pull requests from `relay/<lane>-<issue>` branches.
+Memory tools (MCP server `relay`): `relay_recall`, `relay_decide`, `relay_prefer`, `relay_guidance`, `relay_brief`,
+`relay_feed`, `relay_project`. Call `relay_recall` before choosing an approach and `relay_decide` when you settle one.
 <!-- relay:end -->
 ```
 
-Rules for the owned section:
+Rules for the owned section (`packages/core/src/rules/owned-section.ts`):
 
 - relay rewrites only the text between `<!-- relay:begin -->` and `<!-- relay:end -->`. Everything else in the file
   is yours and is never touched.
-- If the markers are missing, `relay link` appends the section at the end of the file and tells you.
-- If you delete the markers, relay stops writing to that file; `relay doctor` reports it.
-- Regeneration happens after a merge (the post-merge job extracts decisions and re-renders `relay.md`) and on
-  `relay link --refresh`. The regenerated files are committed by the job on a `relay/rules-<date>` branch as a PR,
-  never pushed to the default branch directly.
+- If `AGENTS.md` is missing it is created; if the markers are missing, the section is appended at the end.
+- `.relay/rules.json` in the repo records the project slug, the repo, and a hash of what relay last wrote per file.
+  If the text inside the markers no longer matches that hash (you edited it), or markers exist that relay never
+  wrote, `relay link` refuses to overwrite and says so; `relay link --force` takes the section over.
+- If you delete the markers, relay stops writing to that file (`checkOwnedSection` reports it).
+- `relay link --refresh` re-renders `relay.md` and the caller workflows. The post-merge job that extracts decisions
+  and opens a `relay/rules-<date>` PR is not built yet; until it is, run `relay link --refresh` after memory changes.
 
 ## Consolidation
 
 A nightly job (`memory.consolidated` events) merges duplicate decisions, closes the validity of decisions
 contradicted by newer ones, and drops preferences whose scope target no longer exists. It runs on the web app's
 schedule, not on your machines, and it uses the Gateway only if `AI_GATEWAY_API_KEY` is set; otherwise it does the
-exact-match merges only.
+exact-match merges only. (Not built yet; capture already dedupes exact matches and records supersessions.)
 
 ## Working with memory by hand
 
 ```text
-pnpm relay recall --project <slug>            # what a brief would contain right now
-pnpm relay decide "<text>" --project <slug>   # add a decision as source=human
+pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
+pnpm relay link [--repo owner/name] [--refresh] [--force]        # register the cwd repo: relay.md, owned sections, workflows, labels
+pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
+pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now
+pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]
 pnpm relay prefer <key> <value> --scope lane --id grok
-pnpm relay memory history --project <slug>    # decisions including superseded ones
+pnpm relay capture --transcript <path> [--source claude|codex|grok] [--dry-run] [--all]
+pnpm relay memory history [--project <slug>] [--current]         # decisions including superseded ones
 ```
 
-Any of these also writes a feed event, so the web app shows who changed memory and when.
+`relay decide` writes a `decision.captured` event, `relay prefer` a `preference.set` event, `relay link` a
+`project.linked` event, so the web app shows who changed memory and when. Commands resolve the project from the cwd:
+`--project` wins, then `.relay/rules.json`, then the origin remote's repo name. `RELAY_HOME` relocates `~/.harness`
+(database, cache, config); `RELAY_USER_HOME` relocates where `relay setup` looks for `~/.claude`, `~/.codex` and
+`~/.grok` (tests use both).
 
 ## Data model and query modules
 
@@ -139,10 +197,17 @@ retrieval falls back to full text.
 `repo.ts` re-exports all of them as one namespace (`repo.getModel(h.db, id)`). The `Ledger` class in
 `ledger/ledger.ts` is a thin adapter that writes `step.usage` events and holds the Gateway list-price table.
 
+Above the query layer: `brief/` (`compileBrief`, `renderRulesFile`, `mergedPreferences`), `rules/owned-section.ts`,
+`hooks/` (per-CLI installers, `planSetup`/`applyPlan`, the brief cache), `memory/capture.ts` (`captureDecisions`,
+`parseTranscript`, the gates).
+
 ### Configuration
 
 - `DATABASE_URL` (env, optional): use Postgres over TCP instead of the embedded database.
 - `AI_GATEWAY_API_KEY` (env, optional): enables embeddings for guidance and decisions.
+- `RELAY_REPO`, `RELAY_REF` (env, optional) or `relay.repo` / `relay.ref` in `~/.harness/config.json`: what
+  `relay link` substitutes for `__RELAY_REPO__` / `__RELAY_REF__` in the caller workflows (default `<owner>/relay@main`).
+- `RELAY_CAPTURE_GATE` (env, optional) or `capture.gateCommand` in `~/.harness/config.json`: the segment gate command.
 - `~/.harness/config.json`: `staleDays` and `gateway.embeddingModel`. No secrets are ever written there.
 
 `relay doctor` reports database reachability and schema version alongside the CLI login checks.
