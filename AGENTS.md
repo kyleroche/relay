@@ -4,10 +4,10 @@ relay is an open-source harness that lets one person's coding-agent subscription
 
 ## Layout
 
-- `packages/core` — TypeScript library: `db/` (Postgres schema + migrations + typed queries; PGlite locally, Neon in production), `memory/` (decisions, preferences, recall), `onboard/` (official-vendor-docs ingestion gate), `lanes/` (headless adapters for `claude -p`, `fx`, `codex exec`, `grok -p`), `events/` (feed writers), `rules/` (generated `relay.md` owned-section installer), `hooks/` (per-CLI hook installers).
+- `packages/core` — TypeScript library: `db/` (Postgres schema + migrations + typed queries; PGlite locally, Neon in production), `memory/` (decisions, preferences, recall), `onboard/` (official-vendor-docs ingestion gate), `lanes/` (headless adapters for `claude -p`, `fx`, `codex exec`, `grok -p`), `events/` (feed writers), `assets/` (Blob or local store, versions, review), `rules/` (generated `relay.md` owned-section installer), `hooks/` (per-CLI hook installers).
 - `packages/cli` — the `relay` command. `relay setup` configures the CLIs on this machine; `relay link` registers a repo; `relay onboard <model>` ingests vendor guidance; `relay feed`, `relay usage`, `relay doctor`.
 - `packages/mcp` — the memory MCP server (stdio for CLIs, HTTP handler for the web app).
-- `apps/web` — Next.js app: event feed, projects, usage meters, info page, webhook ingest (GitHub, Vercel).
+- `apps/web` — Next.js app: event feed, projects, usage meters, asset library with review, info page, webhook ingest (GitHub, Vercel).
 - `.github/workflows` — reusable runner workflows that repos call with a thin caller.
 - `docs/` — `ARCHITECTURE.md` is the source of truth for design; `research/` holds dated surveys.
 
