@@ -70,7 +70,7 @@ Variables, or per repo):
 | Variable | Required | Meaning |
 |---|---|---|
 | `RELAY_ALLOWED_SENDERS` | yes | Comma-separated GitHub logins allowed to start a lane (the people who label issues, plus the runner's own gh account for reviews) |
-| `RELAY_REPO` | no | `owner/relay` if the relay repo is not `<org>/relay` |
+| `RELAY_REPO` | no | `owner/relay` if the relay repo is not `kyleroche/relay` |
 | `RELAY_REF` | no | Branch, tag or SHA of relay to take `scripts/runner` from (default `main`) |
 | `RELAY_MODEL_CLAUDE`, `RELAY_MODEL_CODEX`, `RELAY_MODEL_GROK` | no | Model override per author lane |
 | `RELAY_REVIEWER_FOR_CLAUDE`, `..._CODEX`, `..._GROK` | no | Which lane reviews which author lane (defaults: codex, claude, claude) |

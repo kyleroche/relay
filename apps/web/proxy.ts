@@ -115,6 +115,9 @@ export default async function proxy(req: NextRequest): Promise<NextResponse> {
           "content-type": "application/problem+json; charset=utf-8",
           "cache-control": "no-store",
           "WWW-Authenticate": `Bearer realm="relay", resource_metadata="${req.nextUrl.origin}/.well-known/oauth-protected-resource"`,
+          // the readiness contract wants rate-limit headers on every API response, including refusals
+          "RateLimit-Policy": '"default";q=60;w=60',
+          RateLimit: '"default";r=60;t=60',
         },
       },
     );

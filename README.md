@@ -18,13 +18,13 @@ relay turns Claude Code, Codex, and Grok Build into a team that shares memory, p
 Paste this into whichever coding agent you use:
 
 ```text
-Set up relay from https://github.com/<org>/relay following its AGENTS.md "Installing relay for a user" section. Stop and tell me when a step needs my browser.
+Set up relay from https://github.com/kyleroche/relay following its AGENTS.md "Installing relay for a user" section. Stop and tell me when a step needs my browser.
 ```
 
 Or by hand:
 
 ```bash
-git clone https://github.com/<org>/relay && cd relay   # needs Node 24+ (.node-version) and pnpm
+git clone https://github.com/kyleroche/relay && cd relay   # needs Node 24+ (.node-version) and pnpm
 pnpm install
 pnpm relay doctor     # what is installed, logged in, and reachable
 pnpm relay setup      # hooks + memory server into each CLI you have

@@ -15,7 +15,7 @@ Do these steps in order and stop at anything that needs the user's browser.
 1. Clone and install:
 
    ```bash
-   git clone https://github.com/kyroche/relay && cd relay
+   git clone https://github.com/kyleroche/relay && cd relay
    pnpm install
    ```
 
