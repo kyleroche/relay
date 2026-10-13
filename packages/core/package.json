@@ -1,0 +1,25 @@
+{
+  "name": "@relay/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./*": "./src/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "ai": "^7.0.111",
+    "cheerio": "^1.2.0",
+    "falkordb": "^6.8.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "domhandler": "^6.0.1"
+  }
+}

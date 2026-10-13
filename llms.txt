@@ -1,0 +1,20 @@
+# relay
+
+> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on.
+
+## Start here
+
+- [README](README.md): what it does, quick install, how to link model accounts
+- [AGENTS.md](AGENTS.md): instructions for coding agents working in or installing this repo
+- [Architecture](docs/ARCHITECTURE.md): the design and the rules behind it
+
+## Guides
+
+- [Runners](docs/RUNNERS.md): registering a self-hosted GitHub Actions runner that holds your logins
+- [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, and the MCP server
+- [Feed](docs/FEED.md): event kinds, sources, and the ledger view
+
+## Reference
+
+- [Database schema](packages/core/src/db/schema.sql)
+- [Research: orchestration survey](docs/research/2026-09-23-orchestration-survey.md)

@@ -1,0 +1,8 @@
+{
+  "name": "@relay/cli",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": { "@relay/core": "workspace:*", "commander": "^14.0.0" }
+}
