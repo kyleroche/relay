@@ -12,7 +12,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openHarness, retrieveGuidance, repo } from "@relay/core";
 
-const h = openHarness();
+const h = await openHarness();
 const tokenPath = join(h.cfg.home, "daemon.json");
 if (!existsSync(tokenPath)) writeFileSync(tokenPath, JSON.stringify({ token: randomBytes(24).toString("hex"), port: 7474 }, null, 2) + "\n", { mode: 0o600 });
 const { token, port } = JSON.parse(readFileSync(tokenPath, "utf8")) as { token: string; port: number };
@@ -24,13 +24,13 @@ app.use("*", async (c, next) => {
   if (c.req.header("authorization") !== `Bearer ${token}`) return c.text("unauthorized", 401);
   return next();
 });
-app.get("/health", (c) => c.json({ ok: true, graph: h.cfg.graph.name, bind, port }));
-app.get("/models", async (c) => c.json(await repo.listModels(h.graph)));
+app.get("/health", (c) => c.json({ ok: true, db: h.db.driver, bind, port }));
+app.get("/models", async (c) => c.json(await repo.listModels(h.db)));
 app.get("/models/:provider/:name/search", async (c) => {
   const model = `${c.req.param("provider")}/${c.req.param("name")}`;
   const q = c.req.query("q") ?? "";
   return c.json(await retrieveGuidance(h, model, q, { k: Number(c.req.query("k") ?? 6) }));
 });
-app.get("/preferences", async (c) => c.json(await repo.listPreferences(h.graph)));
+app.get("/preferences", async (c) => c.json(await repo.listPreferences(h.db)));
 
 serve({ fetch: app.fetch, hostname: bind, port }, (info) => console.error(`[relay-daemon] listening on http://${info.address}:${info.port} (token in ${tokenPath})`));
