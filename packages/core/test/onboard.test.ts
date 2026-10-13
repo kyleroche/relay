@@ -4,6 +4,8 @@ import { chunkDocument } from "../src/onboard/chunk.ts";
 import { classifyChunk } from "../src/onboard/classify.ts";
 import { normalizeSiteUrl, siteExtract } from "../src/onboard/extractors.ts";
 import { costEquiv, Ledger } from "../src/ledger/ledger.ts";
+import { openDb } from "../src/db/client.ts";
+import { migrate } from "../src/db/migrate.ts";
 
 describe("official-source gate", () => {
   const domains = ["docs.byteplus.com", "github.com/anthropics", "arkdocs-en.tos-ap-southeast-1.volces.com"];
@@ -67,14 +69,16 @@ describe("chunking + classification", () => {
 });
 
 describe("ledger", () => {
-  it("records calls and computes cost equivalents at gateway list price", () => {
-    const l = new Ledger(":memory:");
-    l.record({ lane: "plan", model: "anthropic/claude-fable-5-1", provider: "anthropic", subscription: "max", tokens_in: 1_000_000, tokens_out: 0, duration_ms: 1 });
-    l.record({ lane: "code", model: "xai/grok-4.7", provider: "xai", subscription: "grok", tokens_in: 0, tokens_out: 1_000_000, cache_read: 1_000_000, duration_ms: 1 });
-    const s = l.summary("2000-01-01T00:00:00Z");
+  it("records calls as step.usage events and computes cost equivalents at gateway list price", async () => {
+    const db = await openDb({ file: ":memory:" });
+    await migrate(db);
+    const l = new Ledger(db);
+    await l.record({ lane: "plan", model: "anthropic/claude-fable-5-1", provider: "anthropic", subscription: "max", tokens_in: 1_000_000, tokens_out: 0, duration_ms: 1 });
+    await l.record({ lane: "code", model: "xai/grok-4.7", provider: "xai", subscription: "grok", tokens_in: 0, tokens_out: 1_000_000, cache_read: 1_000_000, duration_ms: 1 });
+    const s = await l.summary("2000-01-01T00:00:00Z");
     expect(s.find((r) => r.subscription === "max")?.cost_equiv).toBeCloseTo(10);
     expect(s.find((r) => r.subscription === "grok")?.avg_ctx).toBe(1_000_000);
     expect(costEquiv({ lane: "x", model: "unknown/model", provider: "?", subscription: "?", tokens_in: 5, tokens_out: 5, duration_ms: 0 })).toBe(0);
-    l.close();
+    await db.close();
   });
 });

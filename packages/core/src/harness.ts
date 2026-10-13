@@ -1,26 +1,26 @@
 import { loadConfig, ensureHome, type HarnessConfig } from "./config.ts";
-import { createGraphClient, type GraphClient } from "./graph/client.ts";
+import { openDb, type Db } from "./db/client.ts";
 import { Ledger } from "./ledger/ledger.ts";
 import type { Harness } from "./onboard/index.ts";
 
 export interface OpenHarness extends Harness {
   cfg: HarnessConfig;
-  graph: GraphClient;
+  db: Db;
   ledger: Ledger;
   close(): Promise<void>;
 }
 
-export function openHarness(cfg: HarnessConfig = loadConfig()): OpenHarness {
+/** Open the database (Postgres via DATABASE_URL, else embedded PGlite) and the ledger adapter over it. */
+export async function openHarness(cfg: HarnessConfig = loadConfig()): Promise<OpenHarness> {
   ensureHome(cfg);
-  const graph = createGraphClient(cfg.graph);
-  const ledger = new Ledger(cfg.ledgerPath);
+  const db = await openDb(cfg.databaseUrl ? { url: cfg.databaseUrl } : { file: cfg.dbFile });
+  const ledger = new Ledger(db);
   return {
     cfg,
-    graph,
+    db,
     ledger,
     async close() {
-      ledger.close();
-      await graph.close();
+      await db.close();
     },
   };
 }

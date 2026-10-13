@@ -46,7 +46,8 @@ export class LaneError extends Error {
   }
 }
 
-export function recordLane(ledger: Ledger | undefined, req: LaneRequest, r: LaneResult, provider: string): void {
+/** Record a lane call as a `step.usage` event. Resolves once the row is written (or at once without a ledger). */
+export async function recordLane(ledger: Ledger | undefined, req: LaneRequest, r: LaneResult, provider: string): Promise<void> {
   const e: LedgerEntry = {
     lane: req.lane,
     model: r.model,
@@ -63,7 +64,7 @@ export function recordLane(ledger: Ledger | undefined, req: LaneRequest, r: Lane
   if (req.task) e.task = req.task;
   if (req.step !== undefined) e.step = req.step;
   if (r.costEquiv) e.cost_equiv = r.costEquiv;
-  ledger?.record(e);
+  await ledger?.record(e);
 }
 
 /** One-at-a-time gate per subscription: personal-use logins must never run parallel farms. */

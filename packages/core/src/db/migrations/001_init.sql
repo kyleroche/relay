@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS sources (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS guidance (
-  id text PRIMARY KEY,         -- sha256(source_url#index:head)
+  id text NOT NULL,            -- sha256(source_url#index:head); the same source may guide several models
   model text NOT NULL REFERENCES models(id) ON DELETE CASCADE,
   provider text NOT NULL,
   source_url text NOT NULL REFERENCES sources(url) ON DELETE CASCADE,
@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS guidance (
   tokens int NOT NULL,
   embedding vector(1536),
   tsv tsvector GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,'') || ' ' || text)) STORED,
-  fetched_at timestamptz NOT NULL DEFAULT now()
+  fetched_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (model, id)
 );
 CREATE INDEX IF NOT EXISTS guidance_model_idx ON guidance(model);
 CREATE INDEX IF NOT EXISTS guidance_tsv_idx ON guidance USING gin(tsv);

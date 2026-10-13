@@ -1,4 +1,4 @@
-import type { GuidanceKind } from "../graph/repo.ts";
+import type { GuidanceKind } from "../db/guidance.ts";
 
 /**
  * Rule-based kind classifier. Precedence: moderation > limits > api > style > prompting. Cheap and deterministic;
