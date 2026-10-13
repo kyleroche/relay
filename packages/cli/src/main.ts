@@ -7,9 +7,11 @@ import {
   runFx, runClaude, recordLane, registerProject, digestProject, summarizeProject,
 } from "@relay/core";
 import type { FxProvider, ClaudeModel, FileConfig } from "@relay/core";
+import { registerAssetCommands } from "./commands/assets.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version("0.0.1");
+registerAssetCommands(program);
 
 program
   .command("init")
