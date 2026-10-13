@@ -12,3 +12,4 @@ dist/
 *.sqlite-*
 coverage/
 .turbo/
+next-env.d.ts

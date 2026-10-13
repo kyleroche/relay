@@ -1,0 +1,31 @@
+# relay
+
+> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on. Free, Apache-2.0.
+
+## Start here
+
+- [What relay is](https://harness.kyro.house/info): the five rules, how a task flows, quick install, linking model accounts
+- [Feed](https://harness.kyro.house/): every issue, run, model call, PR, review and deployment, newest first
+- [AGENTS.md](https://harness.kyro.house/docs/agents): instructions for coding agents working in or installing relay
+- [README](https://harness.kyro.house/docs/readme): what it does, quick install, how to link model accounts
+
+## Guides
+
+- [Architecture](https://harness.kyro.house/docs/architecture): the design and the rules behind it
+- [API and MCP](https://harness.kyro.house/docs/api): the read API under /api/v1, rate limits, scopes, and the MCP server at /mcp
+- [Versioning and deprecation](https://harness.kyro.house/docs/versioning): how the API changes and the RFC 9745 headers used when something is retired
+- [Agent readiness](https://harness.kyro.house/docs/agent-readiness): what the hosted site serves so agents can find, read, and use it
+
+## Machine-readable
+
+- [OpenAPI](https://harness.kyro.house/openapi.json): OpenAPI 3.1 description of /api/v1
+- [API catalog](https://harness.kyro.house/.well-known/api-catalog): RFC 9727 linkset
+- [MCP server card](https://harness.kyro.house/.well-known/mcp/server-card.json): tools and transport for /mcp
+- [Agent skills](https://harness.kyro.house/.well-known/agent-skills/index.json): the relay install skill
+- [AI catalog](https://harness.kyro.house/.well-known/ai-catalog.json): site catalog for agents
+- [Full docs](https://harness.kyro.house/llms-full.txt): everything above concatenated
+
+## Optional
+
+- [Database schema](https://github.com/kyroche/relay/blob/main/packages/core/src/db/schema.sql)
+- [Research: orchestration survey](https://github.com/kyroche/relay/blob/main/docs/research/2026-09-23-orchestration-survey.md)
