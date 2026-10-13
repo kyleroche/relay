@@ -1,0 +1,64 @@
+# CI for the relay repo itself: install, typecheck, test, and keep README commands honest.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # pnpm version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: README commands exist
+        # Every `pnpm <script>` line inside a ```bash block in README.md must name a root package.json script.
+        run: scripts/check-readme-commands.sh
+
+      - name: Workflow and template YAML parses
+        run: |
+          python3 - .github/workflows/*.yml packages/cli/templates/*.yml <<'PY'
+          import sys, yaml
+          for f in sys.argv[1:]:
+              with open(f) as fh:
+                  yaml.safe_load(fh)
+              print("ok", f)
+          PY
+
+      - name: Runner script syntax
+        run: |
+          for f in scripts/runner/*.sh scripts/*.sh; do bash -n "$f" && echo "ok $f"; done
+
+      - name: No permission-bypass flags in runner code
+        # docs/SECURITY.md: lanes never run with permission checks disabled. Docs may name the flags; code may not.
+        run: |
+          if grep -rnE --exclude=ci.yml 'dangerously|bypassPermissions|--full-access|--yolo' .github/workflows scripts packages/cli/templates; then
+            echo "::error::permission-bypass flag found in runner code"; exit 1
+          fi
+          echo "ok: no bypass flags"

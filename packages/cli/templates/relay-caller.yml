@@ -1,0 +1,48 @@
+# relay caller: installed into a repo by `relay link` as .github/workflows/relay-caller.yml.
+# Labelling an issue `agent:claude`, `agent:codex` or `agent:grok` dispatches it to the reusable lane runner.
+# `relay link` replaces __RELAY_REPO__ (owner/relay) and __RELAY_REF__ (a branch, tag or SHA) before writing.
+#
+# Repo or org variables used: RELAY_ALLOWED_SENDERS (required, checked by the reusable workflow),
+# RELAY_MODEL_CLAUDE / RELAY_MODEL_CODEX / RELAY_MODEL_GROK (optional model overrides), RELAY_MAX_MINUTES (optional).
+name: relay
+
+on:
+  issues:
+    types: [labeled]
+
+permissions: {}
+
+jobs:
+  lane:
+    # Map the label to a lane in a shell step; GitHub expressions have no string replace.
+    if: startsWith(github.event.label.name, 'agent:')
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.map.outputs.lane }}
+      model: ${{ steps.map.outputs.model }}
+    steps:
+      - id: map
+        env:
+          LABEL: ${{ github.event.label.name }}
+          MODEL_CLAUDE: ${{ vars.RELAY_MODEL_CLAUDE }}
+          MODEL_CODEX: ${{ vars.RELAY_MODEL_CODEX }}
+          MODEL_GROK: ${{ vars.RELAY_MODEL_GROK }}
+        run: |
+          lane=""; model=""
+          case "$LABEL" in
+            agent:claude) lane=claude; model="$MODEL_CLAUDE" ;;
+            agent:codex)  lane=codex;  model="$MODEL_CODEX" ;;
+            agent:grok)   lane=grok;   model="$MODEL_GROK" ;;
+          esac
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+  run:
+    needs: lane
+    if: needs.lane.outputs.lane != ''
+    uses: __RELAY_REPO__/.github/workflows/relay-run.yml@__RELAY_REF__
+    with:
+      lane: ${{ needs.lane.outputs.lane }}
+      issue: ${{ github.event.issue.number }}
+      model: ${{ needs.lane.outputs.model }}
+      max_minutes: ${{ fromJSON(vars.RELAY_MAX_MINUTES || '60') }}

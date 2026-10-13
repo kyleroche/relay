@@ -1,0 +1,46 @@
+# Weekly keep-alive for runner logins. Codex refreshes its auth.json only when it is used; a runner that sits idle
+# for weeks can find its refresh token expired and every codex lane failing at 3am. One tiny read-only call per lane
+# keeps the login warm and shows in the Actions log which machine answered. See docs/RUNNERS.md.
+#
+# Lanes come from the repo variable RELAY_KEEPALIVE_LANES (JSON array, default ["codex"]). Only list lanes that have
+# a registered runner: a job for a label nobody serves sits queued until GitHub cancels it.
+name: relay keep-alive
+
+on:
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays 06:17 UTC
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  ping:
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: ${{ fromJSON(vars.RELAY_KEEPALIVE_LANES || '["codex"]') }}
+    runs-on: [self-hosted, relay, "${{ matrix.lane }}"]
+    timeout-minutes: 10
+    env:
+      LANE: ${{ matrix.lane }}
+      PROMPT: "Reply with the single word: pong"
+    steps:
+      - name: One read-only call on the machine's own login
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN OPENAI_API_KEY XAI_API_KEY
+          export FX_NO_OPEN_BROWSER=1 FX_AUTO_UPGRADE=0
+          echo "host: $(hostname) user: $(id -un) lane: $LANE"
+          case "$LANE" in
+            claude)
+              claude -p --output-format json --permission-mode plan --allowedTools "" \
+                --strict-mcp-config --mcp-config '{"mcpServers":{}}' --setting-sources "" -- "$PROMPT" | jq -r '.result' ;;
+            codex|grok)
+              if command -v fx >/dev/null; then
+                FX_PROVIDER="$LANE" fx --context-limit skill_catalog_bytes=1 ask --json --no-save --quiet -- "$PROMPT" | tail -n 1 | jq -r '.final_output // .output'
+              elif [ "$LANE" = codex ]; then
+                codex exec --json --sandbox read-only -c agents.enabled=false "$PROMPT" | tail -n 1
+              else
+                grok -p "$PROMPT" --output-format json --no-subagents --no-plan --permission-mode plan | jq -r '.result // .text // .output'
+              fi ;;
+          esac
+          gh auth status

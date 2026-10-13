@@ -11,6 +11,8 @@
 ## Guides
 
 - [Runners](docs/RUNNERS.md): registering a self-hosted GitHub Actions runner that holds your logins
+- [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob
+- [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, and the MCP server
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
 - [Feed](docs/FEED.md): event kinds, sources, and the ledger view
