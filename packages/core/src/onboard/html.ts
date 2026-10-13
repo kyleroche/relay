@@ -28,6 +28,8 @@ export interface ExtractedDoc {
   title: string;
   text: string;
   links: Array<{ url: string; text: string }>;
+  /** The page's own canonical URL when the site declares one (sites often serve one doc under several paths). */
+  canonicalUrl?: string;
 }
 
 /** Official-source gate: host must equal an allowed domain or be a subdomain of one. Entries may carry a path prefix (github.com/anthropics). */
@@ -78,7 +80,18 @@ function contentRoot($: cheerio.CheerioAPI): cheerio.Cheerio<import("domhandler"
 export function extractDoc(html: string, baseUrl: string): ExtractedDoc {
   const $ = cheerio.load(html);
   const site = siteExtract(html, baseUrl);
-  if (site) return { title: site.title || $("title").first().text().trim() || baseUrl, text: site.text, links: collectLinks($, baseUrl) };
+  if (site) {
+    const out: ExtractedDoc = { title: site.title || $("title").first().text().trim() || baseUrl, text: site.text, links: collectLinks($, baseUrl) };
+    const canon = site.canonicalUrl ?? $('link[rel="canonical"]').attr("href");
+    if (canon) {
+      try {
+        out.canonicalUrl = new URL(canon, baseUrl).toString();
+      } catch {
+        /* ignore */
+      }
+    }
+    return out;
+  }
   const root = contentRoot($);
   const h1 = root.find("h1").first().text().replace(/\s+/g, " ").trim();
   const title = (h1 || $("title").first().text() || baseUrl).replace(/\s+/g, " ").trim();

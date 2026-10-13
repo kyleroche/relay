@@ -22,6 +22,8 @@ export async function crawlModelDocs(spec: ModelSpec, docDomains: string[], log:
   const pages: CrawledPage[] = [];
   const dropped: string[] = [];
   const thin: string[] = [];
+  // content hashes stored this run: the same document served under two paths is one source
+  const seenSha = new Set<string>();
 
   while (queue.length && pages.length < spec.crawl.maxPages) {
     const { url, seed } = queue.shift()!;
@@ -63,7 +65,16 @@ export async function crawlModelDocs(spec: ModelSpec, docDomains: string[], log:
       thin.push(url);
       continue;
     }
-    const rec: CrawledPage = { url, title: doc.title, text: doc.text, sha256: sha256(doc.text) };
+    // prefer the site's canonical URL as the source identity, and drop byte-identical duplicates
+    const identity = doc.canonicalUrl ? normalizeSiteUrl(doc.canonicalUrl) : url;
+    if (identity !== url) seen.add(identity);
+    const sha = sha256(doc.text);
+    if (seenSha.has(sha)) {
+      log(`duplicate content, skipping: ${url}`);
+      continue;
+    }
+    seenSha.add(sha);
+    const rec: CrawledPage = { url: identity, title: doc.title, text: doc.text, sha256: sha };
     if (etag) rec.etag = etag;
     pages.push(rec);
     log(`fetched ${seed ? "seed" : "link"}: ${doc.title} (${doc.text.length} chars, ${doc.links.length} links)`);
