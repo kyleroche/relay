@@ -25,12 +25,19 @@ export interface HarnessConfig {
   gateway: GatewayConfig;
   /** Days before a model's onboarding is considered stale. */
   staleDays: number;
+  /** Shell command used to gate transcript segments before capture (e.g. a Jev invocation). Unset = built-in rule. */
+  captureGate?: string;
+  /** `owner/relay` and ref substituted into the caller workflows by `relay link` (env RELAY_REPO / RELAY_REF win). */
+  relayRepo?: string;
+  relayRef?: string;
 }
 
 /** The subset a user may put in ~/.harness/config.json. */
 export interface FileConfig {
   staleDays?: number;
   gateway?: { embeddingModel?: string; embeddingDim?: number };
+  capture?: { gateCommand?: string };
+  relay?: { repo?: string; ref?: string };
 }
 
 const HOME = process.env.RELAY_HOME ?? join(homedir(), ".harness");
@@ -54,7 +61,13 @@ export function loadConfig(): HarnessConfig {
     if (typeof file.staleDays === "number") cfg.staleDays = file.staleDays;
     if (file.gateway?.embeddingModel) cfg.gateway.embeddingModel = file.gateway.embeddingModel;
     if (typeof file.gateway?.embeddingDim === "number") cfg.gateway.embeddingDim = file.gateway.embeddingDim;
+    if (file.capture?.gateCommand) cfg.captureGate = file.capture.gateCommand;
+    if (file.relay?.repo) cfg.relayRepo = file.relay.repo;
+    if (file.relay?.ref) cfg.relayRef = file.relay.ref;
   }
+  if (process.env.RELAY_CAPTURE_GATE) cfg.captureGate = process.env.RELAY_CAPTURE_GATE;
+  if (process.env.RELAY_REPO) cfg.relayRepo = process.env.RELAY_REPO;
+  if (process.env.RELAY_REF) cfg.relayRef = process.env.RELAY_REF;
   if (process.env.DATABASE_URL) cfg.databaseUrl = process.env.DATABASE_URL;
   if (process.env.AI_GATEWAY_API_KEY) cfg.gateway.apiKey = process.env.AI_GATEWAY_API_KEY;
   return cfg;

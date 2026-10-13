@@ -12,3 +12,7 @@ export { classifyChunk } from "./onboard/classify.ts";
 export { Ledger, costEquiv, type LedgerEntry, type LedgerSummaryRow } from "./ledger/ledger.ts";
 export * from "./lanes/index.ts";
 export * from "./state/project.ts";
+export * from "./brief/index.ts";
+export * from "./rules/owned-section.ts";
+export * from "./hooks/index.ts";
+export * from "./memory/capture.ts";
