@@ -40,10 +40,10 @@ Do these steps in order and stop at anything that needs the user's browser.
 4. In each repository the user wants managed:
 
    ```bash
-   cd ~/code/some-repo && pnpm --dir ~/relay relay link
+   cd ~/code/some-repo && ~/relay/bin/relay link
    ```
 
-   This adds the owned section to `AGENTS.md`/`CLAUDE.md`, the `agent:*` GitHub labels, and the caller workflow.
+   This is the only per-repo step: it registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), writes `relay.md`, and adds the owned section to `AGENTS.md`/`CLAUDE.md`, the `agent:*` GitHub labels, and the caller workflow. Re-running it is safe; `--refresh` rewrites the summary.
 
 5. Optional, for runners: follow `docs/RUNNERS.md` to register a self-hosted GitHub Actions runner on a machine that holds the logins.
 

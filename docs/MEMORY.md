@@ -104,6 +104,25 @@ source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`
 
 ## The rules file and the owned section
 
+`relay link` is the one per-repo step and runs the whole pipeline, printing a line per stage:
+
+1. owned sections in `AGENTS.md`/`CLAUDE.md` (below), so a created `AGENTS.md` is hashed in the same run;
+2. register the project and hash every text file (`scanFiles`; `relay.md` itself is skipped);
+3. digest the files whose hash changed (`digestProject`: Sonnet lane, no tools, 8 files per call, at most
+   `--max-files` = 400 per run); an entry under 10 words is dropped and re-requested once with a stricter prompt;
+4. write the project summary (`summarizeProject`) when it is missing, when files were digested, or on `--refresh`.
+   The summary comes back through `--json-schema` as `{summary}`, must be 150-700 words and carry the headings
+   Purpose, Stack and layout, Commands, Conventions and Gotchas; a rejected answer is re-requested once, a second
+   rejection fails the stage (the old summary is kept) and link exits non-zero;
+5. render `relay.md` from the real summary (rewritten whenever its content changed);
+6. caller workflows and GitHub labels (`--no-workflows`, `--no-labels`);
+7. one cost line read back from the ledger: calls, tokens in/out, cost equivalent.
+
+`--no-digest` skips steps 3 and 4. A second run with nothing changed makes zero model calls. The utility calls run
+`claude -p` with no tools, no skills, no instruction files or auto-memory, in a scratch directory
+(`lanes/claude.ts`), so the model only sees the prompt. `RELAY_FAKE_LANES=1` makes the lane return canned JSON
+for tests.
+
 Each linked repo gets a generated `relay.md` (`renderRulesFile`, ≤2K tokens): a header that says how relay works in
 this repo (labels, `relay/<lane>-<issue>` branches, cross-model review) and tells the model to use the memory
 tools, the hard rules from preferences, the top current decisions, and as many whole paragraphs of the project
@@ -132,8 +151,12 @@ Rules for the owned section (`packages/core/src/rules/owned-section.ts`):
   If the text inside the markers no longer matches that hash (you edited it), or markers exist that relay never
   wrote, `relay link` refuses to overwrite and says so; `relay link --force` takes the section over.
 - If you delete the markers, relay stops writing to that file (`checkOwnedSection` reports it).
-- `relay link --refresh` re-renders `relay.md` and the caller workflows. The post-merge job that extracts decisions
-  and opens a `relay/rules-<date>` PR is not built yet; until it is, run `relay link --refresh` after memory changes.
+- `relay link` re-renders `relay.md` whenever memory changed; `--refresh` also rewrites the project summary and the
+  caller workflows. The post-merge job that extracts decisions and opens a `relay/rules-<date>` PR is not built yet;
+  until it is, run `relay link` after memory changes.
+- `relay brief` budgets the project summary first, so a linked project's brief always carries it when one exists;
+  when the project has no summary it says so and points at `relay link --refresh`. In `--hook` mode errors are never
+  printed; they go to `~/.harness/cache/hooks.log`.
 
 ## Consolidation
 
@@ -146,7 +169,7 @@ exact-match merges only. (Not built yet; capture already dedupes exact matches a
 
 ```text
 pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
-pnpm relay link [--repo owner/name] [--refresh] [--force]        # register the cwd repo: relay.md, owned sections, workflows, labels
+pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels
 pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
 pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now
 pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]

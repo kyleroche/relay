@@ -1,9 +1,9 @@
 /** Shared helpers for the relay CLI commands: logging, repo discovery, project resolution, harness opening. */
 import { execFileSync } from "node:child_process";
-import { existsSync, statSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, openHarness, readRulesState, type OpenHarness } from "@relay/core";
+import { migrate, openHarness, readRulesState, relayHome, type OpenHarness } from "@relay/core";
 
 export const log = (m: string): void => console.error(`[relay] ${m}`);
 
@@ -87,12 +87,25 @@ export async function openReady(): Promise<OpenHarness> {
 
 export const humanActor = (): string => `human:${process.env.RELAY_ACTOR ?? process.env.USER ?? "local"}`;
 
-/** In hook mode nothing may break the session: swallow errors, print nothing, exit 0. */
+/** Where hook-mode errors go instead of the session's stderr. */
+export const hooksLogPath = (): string => join(relayHome(), "cache", "hooks.log");
+
+/** Append one line to ~/.harness/cache/hooks.log; never throws (a hook must not fail because logging did). */
+export function logHookError(context: string, e: unknown): void {
+  try {
+    mkdirSync(dirname(hooksLogPath()), { recursive: true });
+    appendFileSync(hooksLogPath(), `${new Date().toISOString()} ${context}: ${e instanceof Error ? e.message : String(e)}\n`);
+  } catch {
+    /* unwritable home: stay silent */
+  }
+}
+
+/** In hook mode nothing may break the session: swallow errors, print nothing, exit 0; the error goes to hooks.log. */
 export async function hookSafe(hook: boolean, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (e) {
     if (!hook) throw e;
-    log(`hook: ${e instanceof Error ? e.message : String(e)}`);
+    logHookError(`relay ${process.argv.slice(2).join(" ")}`, e);
   }
 }
