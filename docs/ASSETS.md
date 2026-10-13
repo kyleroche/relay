@@ -202,7 +202,8 @@ deflate), so a bundle is never unpacked to disk.
   (`listVersions`), approve / reject with note (`reviewAsset` through a server action), keyboard `a` / `r`
   (Cmd/Ctrl+Enter submits the note), who made it and from which task, a publish button once approved. View URLs come
   from `store.getSignedUrl` (Blob) or the app's own streaming route after `verifyLocalSignedUrl` (local). The web
-  app's reviews are attributed to `RELAY_REVIEWER` (default `human:web`) until sign-in lands.
+  app's reviews are attributed to the signed-in GitHub user, `human:<login>` (docs/SECURITY.md); in mock mode to
+  `RELAY_REVIEWER`, default `human:demo`.
 - The feed home shows the pending count in its header and a "Needs review" strip above the events whenever any
   exist. Pending reviews also reach the front end (Grok Bot, iMessage) with a signed link; replying through Woodhouse
   calls the review route.
@@ -218,7 +219,7 @@ deflate), so a bundle is never unpacked to disk.
 | `RELAY_HOME` | base folder; assets live in `$RELAY_HOME/assets/` |
 | `CRON_SECRET` | what the retention cron must present to `/api/cron/assets-expire` |
 | `GITHUB_APP_TOKEN` / `GITHUB_TOKEN` | enables the GitHub comments and reopen on rejection |
-| `RELAY_REVIEWER` | actor the web app's reviews are attributed to (default `human:web`) |
+| `RELAY_REVIEWER` | mock mode only: actor the demo's reviews are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
 
 ## Not in scope
 

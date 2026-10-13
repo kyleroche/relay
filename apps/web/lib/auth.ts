@@ -20,7 +20,8 @@ export interface Grant {
   scopes: Scope[];
   /** Attribution for writes made with this token. */
   actor: string;
-  source: "shared" | "env" | "db";
+  /** `session` is the signed-in browser viewer (lib/api.ts `sessionGrant`), never a token. */
+  source: "shared" | "env" | "db" | "session";
 }
 
 function same(a: string, b: string): boolean {

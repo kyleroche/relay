@@ -90,6 +90,66 @@ attach.
 
 ## Signing in to the web app
 
-The web app uses GitHub OAuth only. Sign-in is allowed for the GitHub logins listed in `RELAY_ALLOWED_USERS` (comma-separated), the same identities runners trust as issue senders. A successful sign-in mints a signed session cookie scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they authenticate with scoped bearer tokens from `relay token create`. Public read of the feed is off in production; the info page, the docs, the methodology, and the install skill stay public.
+The web app uses GitHub OAuth only, with no third-party auth library. Sign-in is allowed for the GitHub logins listed
+in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities runners trust as issue senders. An
+empty list means nobody can sign in, and the sign-in page says so. A successful sign-in mints a signed session cookie
+scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they authenticate
+with scoped bearer tokens from `relay token create`. Public read of the feed is off in production; the info page, the
+docs, the methodology, and the install skill stay public.
 
-Needed in the environment: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `RELAY_SESSION_SECRET`, `RELAY_ALLOWED_USERS`.
+Needed in the environment: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `RELAY_SESSION_SECRET`,
+`RELAY_ALLOWED_USERS`. `docs/HOSTING.md` has the OAuth app setup.
+
+### The flow
+
+| Route | What it does |
+|---|---|
+| `GET /auth/github/start?next=/path` | Stores a random `state` (and the same-site `next` path) in a 10-minute `HttpOnly` cookie and redirects to GitHub's authorize page with scope `read:user` and `allow_signup=false`. |
+| `GET /auth/github/callback?code=&state=` | Checks `state` against the cookie, exchanges the code, reads `/user`, checks the login against `RELAY_ALLOWED_USERS`, mints a new session, and redirects to `next`. Failures redirect to `/sign-in?error=<code>` (`denied`, `no-allowlist`, `unconfigured`, `state`, `exchange`, `user`, `github`); the GitHub login is never put in a URL. |
+| `POST /auth/sign-out` | Clears the cookie and redirects to `/sign-in`. A plain form post, so it works without JavaScript. |
+| `GET /sign-in` | One button, "Continue with GitHub", the allowlist hint, a setup hint when the environment is incomplete, and a note that agents use tokens. A signed-in viewer is redirected to `next`. |
+
+The GitHub access token is used once, to read `/user`, and dropped; relay never stores it.
+
+### The session
+
+The cookie is `relay_session`: `HttpOnly; Secure; SameSite=Lax; Path=/`, 30 days. Its value is a JWT signed with HS256
+over `RELAY_SESSION_SECRET` (`jose`), issuer `relay`, carrying `{login, name, avatar_url, iat, exp}`. Every sign-in
+mints a fresh token (new `iat` and `exp`); nothing is refreshed and there is no server-side session store, so signing
+out is clearing the cookie and revoking everyone is rotating `RELAY_SESSION_SECRET`. `SameSite=Lax` means the cookie
+is not sent on cross-site `POST`/`PUT`, which is what keeps the cookie-authenticated writes below free of CSRF.
+
+Server code reads the viewer through `apps/web/lib/session.ts`: `getSession()` (null when anonymous) and
+`requireSession()` (redirects to `/sign-in?next=`). Writes made in the browser, such as approving or rejecting an
+asset, are attributed to `human:<login>`. A signed-in browser calling `/api/v1/*` without a bearer gets every scope
+under that actor; API clients still use tokens.
+
+### Public and protected routes
+
+`apps/web/proxy.ts` runs on every request and classifies the path with `classifyRoute` (`apps/web/lib/access.ts`,
+covered by `apps/web/test/access.test.ts`). Protected pages redirect to `/sign-in?next=<path>`; protected API paths
+answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` challenge.
+
+| Public without a session | Why |
+|---|---|
+| `/info`, `/docs`, `/docs/*`, `/api/markdown` | the public overview and the docs, HTML and Markdown |
+| `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/*`, `/server.json`, `/robots.txt`, `/sitemap.xml`, `/manifest*`, `/skills/*` | the agent-readiness surface |
+| `/sign-in`, `/auth/*` | the sign-in flow itself |
+| `/api/v1/info` | the API's own description |
+| `/api/v1/*` with an `Authorization: Bearer` header | the token's scopes decide (`apps/web/lib/auth.ts`) |
+| `/api/v1/*` `GET` without a bearer when `RELAY_PUBLIC_READ=1` | anonymous read, limited to the public read scopes (`feed:read`, `memory:read`); off by default outside mock mode |
+| `/mcp` | its own bearer rules, and the public read tools when `RELAY_PUBLIC_READ=1` |
+| `/api/webhooks/*`, `/api/cron/*` | authenticated by `GITHUB_WEBHOOK_SECRET`, `VERCEL_WEBHOOK_SECRET`, `CRON_SECRET` |
+| `/api/assets/stream`, `/api/assets/bundle/*`, `/api/assets/upload` | the signed URL is the authentication |
+| `/_next/*`, `/icon.svg`, `/opengraph-image` | static output |
+
+| Session required | |
+|---|---|
+| `/` (the feed), `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*` | the app pages |
+| `/api/feed`, `/api/meters` | the pages' internal polling routes |
+| `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |
+| anything not listed as public | protected by default |
+
+In mock mode (`RELAY_DATA=mock`, or no `DATABASE_URL` with `RELAY_DATA` unset) there is no sign-in: every request
+runs as the fake viewer `human:demo`, the header says "demo mode", and `RELAY_REVIEWER` may rename that actor. The
+fake session never reaches `/api/v1`: anonymous API callers in mock mode get only what `RELAY_PUBLIC_READ` allows.

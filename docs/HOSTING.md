@@ -47,7 +47,11 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `CRON_SECRET` | `openssl rand -hex 32` | Vercel sends it as a bearer to `/api/cron/assets-expire` (the daily retention sweep in `apps/web/vercel.json`) |
 | `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | asset comments on issues and PRs; reopen on rejection; reading `RELAY_ALLOWED_SENDERS` for usage comments |
 | `RELAY_ALLOWED_SENDERS` | optional, comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone) |
-| `RELAY_REVIEWER` | optional actor, e.g. `human:kyle` | who the web app's approve/reject clicks are attributed to until sign-in lands |
+| `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
+| `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
+| `RELAY_SESSION_SECRET` | `openssl rand -hex 32` | signs the `relay_session` cookie (HS256); rotating it signs everyone out |
+| `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
+| `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
 | `RELAY_PLAN_METERS` | optional JSON | plan meters for the header until a vendor route exists: `[{"id","label","subscription","percentUsed","resetsAt"}]` |
 
 Tokens for API clients come from the CLI: `pnpm relay token create --name ci --scopes feed:read,assets:write` stores a
@@ -70,7 +74,31 @@ Locally, `RELAY_DATA=db` with no `DATABASE_URL` runs the app on the same embedde
 app share one database on one machine. Do not run the CLI and the dev server against one PGlite file at the same
 time; PGlite holds a single-process lock.
 
-## 4. GitHub webhook (organization level)
+## 4. GitHub OAuth app (sign-in)
+
+The web app signs people in with GitHub and nothing else (`docs/SECURITY.md`, "Signing in to the web app"). It needs
+one OAuth app, owned by you or your organization:
+
+1. GitHub → Settings → Developer settings → OAuth Apps → **New OAuth App** (or Organization → Settings → Developer
+   settings → OAuth Apps).
+2. Application name: `relay` (anything). Homepage URL: `https://<site>`. **Authorization callback URL:
+   `https://<site>/auth/github/callback`**, where `<site>` is the host in `RELAY_PUBLIC_URL`. Leave device flow off.
+3. Register, then **Generate a new client secret**. Put the client id in `GITHUB_OAUTH_CLIENT_ID` and the secret in
+   `GITHUB_OAUTH_CLIENT_SECRET`.
+4. Generate `RELAY_SESSION_SECRET` (`openssl rand -hex 32`) and set `RELAY_ALLOWED_USERS` to the GitHub logins that
+   may sign in. Redeploy.
+
+The app asks for the `read:user` scope only and keeps nothing from GitHub but the login, display name and avatar URL
+in the session cookie. Preview deployments need their own OAuth app (GitHub allows one callback URL per app) or
+Vercel's deployment protection in front of them; for a local dev server, make a second app with callback
+`http://localhost:3000/auth/github/callback` and put its values in `apps/web/.env.local`. `GITHUB_SERVER_URL` and
+`GITHUB_API_URL` point the flow at a GitHub Enterprise Server; unset they are github.com.
+
+Routes the proxy leaves public (info, docs, the well-known files, OpenAPI, llms.txt, the install skill, `/mcp`, the
+webhooks, the cron, signed asset URLs, and `/api/v1` with a bearer) and the ones that need a session are tabled in
+`docs/SECURITY.md`. Mock mode has no sign-in: it runs as the fake viewer `human:demo`.
+
+## 5. GitHub webhook (organization level)
 
 One webhook on the organization feeds every repo relay manages. Organization → Settings → Webhooks → Add webhook:
 
@@ -86,7 +114,7 @@ header (`events.dedupe_key`), so GitHub's redeliveries are safe to use when debu
 If you cannot create org webhooks, add the same webhook to each linked repo; `relay link` prints the URL and
 events to use.
 
-## 5. Vercel webhook
+## 6. Vercel webhook
 
 For the projects whose previews you want in the feed (the repos the lanes work on, deployed on Vercel):
 
@@ -96,20 +124,22 @@ For the projects whose previews you want in the feed (the repos the lanes work o
 
 Each `deployment.succeeded` for a `relay/` branch becomes a `preview.ready` event linked to the PR.
 
-## 6. Custom domain
+## 7. Custom domain
 
 Vercel → Project → Settings → Domains → Add `relay.example.com`, then create the DNS record Vercel shows (a CNAME
 to `cname.vercel-dns.com`, or Vercel nameservers for the whole zone). Certificates are issued automatically. After
-the domain resolves, set `RELAY_PUBLIC_URL` to it and update the two webhook URLs above.
+the domain resolves, set `RELAY_PUBLIC_URL` to it, update the two webhook URLs above, and the OAuth app's callback URL.
 
-Keep the app private: enable Vercel Authentication (Deployment Protection) for previews, and put the production
-URL behind the app's own login or Vercel's password protection. The feed shows your repos' issue titles and spend.
+The app pages are behind the GitHub sign-in (step 4) in production, since the feed shows your repos' issue titles and
+spend; the info page, the docs and the agent-readiness files stay public. Enable Vercel Authentication (Deployment
+Protection) for previews, which have no OAuth app of their own.
 
-## 7. Checklist
+## 8. Checklist
 
 - [ ] Project imported with root directory `apps/web`
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview
-- [ ] Six variables from `.env.example` set
+- [ ] Variables from `.env.example` set, including the four sign-in ones
+- [ ] GitHub OAuth app created with callback `https://<site>/auth/github/callback`; your login in `RELAY_ALLOWED_USERS`; signing in works
 - [ ] GitHub org webhook created, recent deliveries return 200
 - [ ] Vercel webhook created for the projects that deploy previews
 - [ ] Custom domain resolves and `RELAY_PUBLIC_URL` matches it

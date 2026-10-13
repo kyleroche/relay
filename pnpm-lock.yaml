@@ -41,6 +41,9 @@ importers:
       geist:
         specifier: ^1.4.2
         version: 1.7.2(next@16.4.0(@types/node@24.13.6)(react-dom@19.3.0(react@19.3.0))(react@19.3.0))
+      jose:
+        specifier: ^6.2.0
+        version: 6.2.12
       lucide-react:
         specifier: ^1.56.0
         version: 1.56.0(@types/react@19.3.0)(react@19.3.0)
@@ -93,6 +96,9 @@ importers:
       typescript:
         specifier: ^5.9.0
         version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@24.13.6)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15)
 
   packages/cli:
     dependencies:
