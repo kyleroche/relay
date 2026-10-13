@@ -1,12 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { openDb, migrate, repo, approxTokens, type Db } from "@relay/core";
-import { createRelayServer, capText, RESULT_TOKENS } from "../src/server.ts";
+import { openDb, migrate, repo, approxTokens, LocalStore, verifyLocalUploadUrl, type Db, type TokenScope } from "@relay/core";
+import { createRelayServer, capText, grantedScopes, RESULT_TOKENS, TOOL_SCOPES, type RelayServerOptions } from "../src/server.ts";
 import { createMcpHandler } from "../src/http.ts";
 
 let db: Db;
+let home: string;
+let store: LocalStore;
 beforeAll(async () => {
+  home = mkdtempSync(join(tmpdir(), "relay-mcp-"));
+  delete process.env.RELAY_ASSET_SIGNING_KEY;
+  store = new LocalStore(join(home, "assets"));
   db = await openDb({ file: ":memory:" });
   await migrate(db);
   await repo.upsertProject(db, { slug: "demo", repo: "acme/demo", path: "/tmp/demo", stack: "ts" });
@@ -14,10 +22,11 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await db.close();
+  rmSync(home, { recursive: true, force: true });
 });
 
-async function connect(canWrite: boolean) {
-  const server = createRelayServer(db, { canWrite, actor: "human:test", invalidateCache: false });
+async function connect(opts: Partial<RelayServerOptions> & { canWrite: boolean }) {
+  const server = createRelayServer(db, { actor: "human:test", invalidateCache: false, assets: { store }, ...opts });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();
   await server.connect(serverT);
   const client = new Client({ name: "test", version: "0" });
@@ -26,18 +35,36 @@ async function connect(canWrite: boolean) {
 }
 
 const textOf = (r: Awaited<ReturnType<Client["callTool"]>>): string => (r.content as Array<{ type: string; text?: string }>).map((c) => c.text ?? "").join("\n");
+const jsonOf = <T>(r: Awaited<ReturnType<Client["callTool"]>>): T => JSON.parse(textOf(r)) as T;
 
 describe("relay mcp tools", () => {
-  it("lists the seven tools", async () => {
-    const { client, server } = await connect(true);
+  it("lists one tool set, matching TOOL_SCOPES", async () => {
+    const { client, server } = await connect({ canWrite: true });
     const tools = (await client.listTools()).tools.map((t) => t.name).sort();
-    expect(tools).toEqual(["relay_brief", "relay_decide", "relay_feed", "relay_guidance", "relay_prefer", "relay_project", "relay_recall"]);
+    expect(tools).toEqual([...TOOL_SCOPES.map((t) => t.name)].sort());
+    expect(tools).toEqual([
+      "relay_asset_finalize",
+      "relay_asset_get",
+      "relay_asset_list",
+      "relay_asset_request_upload",
+      "relay_brief",
+      "relay_decide",
+      "relay_feed",
+      "relay_get_feed",
+      "relay_get_info",
+      "relay_get_methodology",
+      "relay_get_project",
+      "relay_guidance",
+      "relay_prefer",
+      "relay_project",
+      "relay_recall",
+    ]);
     await client.close();
     await server.close();
   });
 
   it("decide, prefer, recall, brief, project and feed round-trip", async () => {
-    const { client, server } = await connect(true);
+    const { client, server } = await connect({ canWrite: true });
     const d = await client.callTool({ name: "relay_decide", arguments: { text: "We use vitest for tests because it runs PGlite in-process", project: "demo", source: "human" } });
     expect(d.isError).toBeFalsy();
     expect(textOf(d)).toMatch(/recorded decision #\d+/);
@@ -75,15 +102,100 @@ describe("relay mcp tools", () => {
     await server.close();
   });
 
+  it("public read tools answer from the database and sanitise events", async () => {
+    const { client, server } = await connect({ canWrite: false });
+    const info = jsonOf<{ name: string; data_mode: string; projects: Array<{ slug: string }>; tools: unknown[] }>(await client.callTool({ name: "relay_get_info", arguments: {} }));
+    expect(info.name).toBe("relay");
+    expect(info.data_mode).toBe("db");
+    expect(info.projects.map((p) => p.slug)).toContain("demo");
+    expect(info.tools.length).toBe(TOOL_SCOPES.length);
+
+    expect(textOf(await client.callTool({ name: "relay_get_methodology", arguments: {} }))).toContain("Tasks move, credentials never do");
+
+    const feed = jsonOf<{ events: Array<Record<string, unknown>>; count: number }>(await client.callTool({ name: "relay_get_feed", arguments: { project: "demo", limit: 5 } }));
+    expect(feed.count).toBeGreaterThan(0);
+    expect(feed.events[0]).not.toHaveProperty("payload");
+    expect(feed.events[0]).not.toHaveProperty("dedupe_key");
+    const onlyPrefs = jsonOf<{ events: Array<{ kind: string }> }>(await client.callTool({ name: "relay_get_feed", arguments: { kind: "preference.set" } }));
+    expect(onlyPrefs.events.every((e) => e.kind === "preference.set")).toBe(true);
+
+    const proj = jsonOf<{ slug: string; decisions: unknown[]; events: unknown[] }>(await client.callTool({ name: "relay_get_project", arguments: { slug: "demo" } }));
+    expect(proj.slug).toBe("demo");
+    expect(proj.decisions.length).toBe(1);
+    expect((await client.callTool({ name: "relay_get_project", arguments: { slug: "nope" } })).isError).toBe(true);
+    await client.close();
+    await server.close();
+  });
+
+  it("site hooks replace the database answers", async () => {
+    const { client, server } = await connect({ canWrite: false, site: { info: () => ({ name: "relay", from: "site" }), methodology: () => "site rules" } });
+    expect(jsonOf<{ from: string }>(await client.callTool({ name: "relay_get_info", arguments: {} })).from).toBe("site");
+    expect(textOf(await client.callTool({ name: "relay_get_methodology", arguments: {} }))).toBe("site rules");
+    await client.close();
+    await server.close();
+  });
+
   it("refuses writes on a read-only connection but still reads", async () => {
-    const { client, server } = await connect(false);
+    const { client, server } = await connect({ canWrite: false });
     const d = await client.callTool({ name: "relay_decide", arguments: { text: "We never do this because read-only", project: "demo" } });
     expect(d.isError).toBe(true);
     expect(textOf(d)).toMatch(/read-only/);
     const r = textOf(await client.callTool({ name: "relay_recall", arguments: { query: "vitest", project: "demo" } }));
     expect(r).toContain("vitest");
+    // asset reads are not part of the public read scopes
+    const a = await client.callTool({ name: "relay_asset_list", arguments: {} });
+    expect(a.isError).toBe(true);
+    expect(textOf(a)).toMatch(/assets:read/);
     await client.close();
     await server.close();
+  });
+
+  it("asset tools: request upload, PUT, finalize, get, list", async () => {
+    const { client, server } = await connect({ canWrite: false, scopes: ["assets:read", "assets:write"] });
+    const req = jsonOf<{ id: string; key: string; upload_url: string; method: string; headers: Record<string, string>; then: { tool: string } }>(
+      await client.callTool({ name: "relay_asset_request_upload", arguments: { project: "demo", filename: "sketch.svg" } }),
+    );
+    expect(req.method).toBe("PUT");
+    expect(req.headers["content-type"]).toBe("image/svg+xml");
+    expect(req.key).toBe(`demo/${req.id}/sketch.svg`);
+    expect(req.then.tool).toBe("relay_asset_finalize");
+    const v = verifyLocalUploadUrl(req.upload_url, store);
+    expect(v.ok).toBe(true);
+    // the "client" uploads straight to the store, as a CLI on this machine would
+    await store.put(req.key, Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), { contentType: "image/svg+xml" });
+
+    const fin = jsonOf<{ id: string; kind: string; status: string; url: string; storage_key?: string }>(
+      await client.callTool({ name: "relay_asset_finalize", arguments: { key: req.key, project: "demo", title: "Sketch", issue: 4, tags: ["ux"] } }),
+    );
+    expect(fin.id).toBe(req.id);
+    expect(fin.kind).toBe("image");
+    expect(fin.status).toBe("pending");
+    expect(fin.url.startsWith("file://")).toBe(true);
+    expect(fin).not.toHaveProperty("storage_key");
+
+    const got = jsonOf<{ id: string; title: string; url: string; versions: Array<{ version: number }> }>(await client.callTool({ name: "relay_asset_get", arguments: { id: req.id } }));
+    expect(got.title).toBe("Sketch");
+    expect(got.versions.map((x) => x.version)).toEqual([1]);
+
+    const list = jsonOf<{ assets: Array<{ id: string }>; count: number }>(await client.callTool({ name: "relay_asset_list", arguments: { project: "demo", status: "pending" } }));
+    expect(list.assets.map((a) => a.id)).toContain(req.id);
+
+    const twice = await client.callTool({ name: "relay_asset_finalize", arguments: { key: "demo/nope", project: "demo" } });
+    expect(twice.isError).toBe(true);
+    const unknownProject = await client.callTool({ name: "relay_asset_request_upload", arguments: { project: "ghost", filename: "x.png" } });
+    expect(unknownProject.isError).toBe(true);
+    // write scope does not include memory
+    expect((await client.callTool({ name: "relay_recall", arguments: { query: "x" } })).isError).toBe(true);
+    await client.close();
+    await server.close();
+  });
+
+  it("grants scopes as documented", () => {
+    const all = grantedScopes({ canWrite: true });
+    expect(all.size).toBe(6);
+    expect([...grantedScopes({ canWrite: false })].sort()).toEqual(["feed:read", "memory:read"]);
+    expect([...grantedScopes({ canWrite: false, scopes: [] })]).toEqual([]);
+    expect([...grantedScopes({ canWrite: false, scopes: ["assets:write" as TokenScope], publicRead: true })].sort()).toEqual(["assets:write", "feed:read", "memory:read"]);
   });
 
   it("caps results at RESULT_TOKENS on a line boundary", () => {
@@ -97,12 +209,13 @@ describe("relay mcp tools", () => {
 
 describe("http handler", () => {
   const rpc = (body: unknown, token?: string) =>
-    new Request("http://relay.test/api/memory", {
+    new Request("http://relay.test/mcp", {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(token ? { authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     });
   const call = (name: string, args: Record<string, unknown>, id = 1) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+  type Result = { result: { content: Array<{ text: string }>; isError?: boolean } };
 
   it("401s without a token unless publicRead, and gates writes on the bearer", async () => {
     const closed = createMcpHandler(db, { token: "s3cret" });
@@ -111,20 +224,36 @@ describe("http handler", () => {
     const open = createMcpHandler(db, { token: "s3cret", publicRead: true });
     const anonRead = await open(rpc(call("relay_recall", { query: "vitest", project: "demo" })));
     expect(anonRead.status).toBe(200);
-    const j1 = (await anonRead.json()) as { result: { content: Array<{ text: string }>; isError?: boolean } };
-    expect(j1.result.content[0]!.text).toContain("vitest");
+    expect(((await anonRead.json()) as Result).result.content[0]!.text).toContain("vitest");
 
     const anonWrite = await open(rpc(call("relay_decide", { text: "We try to write anonymously because testing", project: "demo" })));
-    const j2 = (await anonWrite.json()) as { result: { isError?: boolean } };
-    expect(j2.result.isError).toBe(true);
+    expect(((await anonWrite.json()) as Result).result.isError).toBe(true);
 
     const wrongToken = await open(rpc(call("relay_decide", { text: "We try with a wrong token because testing", project: "demo" }), "nope"));
-    expect(((await wrongToken.json()) as { result: { isError?: boolean } }).result.isError).toBe(true);
+    expect(((await wrongToken.json()) as Result).result.isError).toBe(true);
 
     const authedWrite = await open(rpc(call("relay_decide", { text: "We write over HTTP with a token because it is allowed", project: "demo" }), "s3cret"));
     expect(authedWrite.status).toBe(200);
-    const j3 = (await authedWrite.json()) as { result: { content: Array<{ text: string }>; isError?: boolean } };
+    const j3 = (await authedWrite.json()) as Result;
     expect(j3.result.isError).toBeFalsy();
     expect(j3.result.content[0]!.text).toMatch(/recorded decision/);
+  });
+
+  it("authorize resolves scoped tokens from the tokens table", async () => {
+    const { token } = await repo.createToken(db, { name: "feed-only", scopes: ["feed:read"], createdBy: "human:test" });
+    const handler = createMcpHandler(db, {
+      authorize: async (bearer) => {
+        const row = await repo.findToken(db, bearer);
+        return row ? { scopes: row.scopes, actor: `token:${row.name}` } : undefined;
+      },
+    });
+    expect((await handler(rpc(call("relay_get_feed", { limit: 1 })))).status).toBe(401);
+    expect((await handler(rpc(call("relay_get_feed", { limit: 1 }), "rly_unknown"))).status).toBe(401);
+    const ok = await handler(rpc(call("relay_get_feed", { limit: 1 }), token));
+    expect(ok.status).toBe(200);
+    expect(((await ok.json()) as Result).result.isError).toBeFalsy();
+    const denied = (await (await handler(rpc(call("relay_recall", { query: "x" }), token))).json()) as Result;
+    expect(denied.result.isError).toBe(true);
+    expect(denied.result.content[0]!.text).toMatch(/memory:read/);
   });
 });

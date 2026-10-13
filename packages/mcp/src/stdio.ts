@@ -4,7 +4,7 @@
  * which is the trust boundary. Logs go to stderr only; stdout is the protocol.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { briefEmbedder, migrate, openHarness } from "@relay/core";
+import { briefEmbedder, migrate, openAssetStore, openHarness } from "@relay/core";
 import { createRelayServer } from "./server.ts";
 
 export async function main(): Promise<void> {
@@ -12,7 +12,8 @@ export async function main(): Promise<void> {
   await migrate(h.db);
   const embed = briefEmbedder(h);
   const actor = `agent:${process.env.RELAY_MCP_CLIENT ?? "mcp"}`;
-  const server = createRelayServer(h.db, { canWrite: true, actor, ...(embed ? { embed } : {}) });
+  // Local store by default: signed file:// URLs the CLI on this machine can read and write directly.
+  const server = createRelayServer(h.db, { canWrite: true, actor, assets: { store: openAssetStore() }, ...(embed ? { embed } : {}) });
   const transport = new StdioServerTransport();
   // server.close() closes the transport, which fires server.onclose; the guard keeps the two paths from re-entering.
   let closing = false;
