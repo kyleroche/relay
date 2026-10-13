@@ -19,7 +19,9 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged) | `human:<login>` | repo, issue, pr, url | PR title |
 | `preview.ready` | Vercel webhook `deployment.succeeded` for a `relay/` branch | `bot:vercel` | repo, pr, url (preview URL) | project and branch |
 | `preview.failed` | Vercel webhook `deployment.error` | `bot:vercel` | repo, pr, url | project and branch |
-| `decision.captured` | session-end hook or post-merge job (`packages/core/memory`) | `agent:<cli>` or `human:<login>` | project, payload.decision_id | the decision text |
+| `decision.captured` | session-end hook (`relay capture`), `relay decide`, the `relay_decide` tool, or the post-merge job | `agent:<cli>` or `human:<login>` | project, payload.decision_id, payload.source, payload.superseded | the decision text |
+| `preference.set` | `relay prefer` or the `relay_prefer` tool | `human:<login>` or `agent:<cli>` | project (project scope only), payload.key/value/scope/scope_id | `key = value (scope: id)` |
+| `project.linked` | `relay link` | `human:<login>` | project, repo, payload.path | repo and path |
 | `memory.consolidated` | nightly job | `bot:relay` | project, payload.counts | merged and superseded counts |
 | `onboard.refreshed` | `relay onboard <model>` | `human:<login>` | model, payload.sources | model and chunk count |
 | `runner.offline` | GitHub webhook `workflow_job` (queued) with no matching runner for longer than a threshold, or a failed keep-alive | `bot:relay` | lane, payload.runner | which label has nobody serving it |

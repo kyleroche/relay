@@ -44,6 +44,23 @@ relay never asks for a token. Log in to each tool you own, on each machine that 
 
 `relay doctor` tells you which ones it found. Machines without a login simply do not get that lane's label.
 
+## Memory in daily use
+
+Once `relay setup --yes` has run, every Claude Code, Codex or Grok Build session that starts inside a linked repo
+begins with that project's brief (decisions, preferences, summary; ≤2.5K tokens, cached), each prompt in Claude Code
+and Grok Build is prefixed with the decisions that match it (≤1K tokens), and the session's durable decisions are
+extracted when it ends. The same memory is one `relay_recall` / `relay_decide` tool call away through the `relay`
+MCP server. By hand:
+
+```bash
+pnpm relay decide "We use vitest because it runs PGlite in-process"
+pnpm relay prefer commit_style "imperative, one topic" --scope project
+pnpm relay recall "which test runner"
+pnpm relay memory history
+```
+
+See [docs/MEMORY.md](docs/MEMORY.md) for the data model, the brief compiler and the hooks.
+
 ## How it fits together
 
 Issues are tasks. Labels pick the lane. Self-hosted runners on your machines run the vendor CLI in a fresh worktree and open a PR. Postgres holds memory and the event feed. A small web app shows the feed, projects, and usage. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle.
