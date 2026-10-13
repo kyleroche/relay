@@ -87,3 +87,9 @@ These are refused in code review regardless of who asks or why:
 Security issues in relay itself: open a private security advisory on the repository rather than a public issue.
 Include the workflow run id if a runner was involved; the Actions log never contains credentials, so it is safe to
 attach.
+
+## Signing in to the web app
+
+The web app uses GitHub OAuth only. Sign-in is allowed for the GitHub logins listed in `RELAY_ALLOWED_USERS` (comma-separated), the same identities runners trust as issue senders. A successful sign-in mints a signed session cookie scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they authenticate with scoped bearer tokens from `relay token create`. Public read of the feed is off in production; the info page, the docs, the methodology, and the install skill stay public.
+
+Needed in the environment: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `RELAY_SESSION_SECRET`, `RELAY_ALLOWED_USERS`.
