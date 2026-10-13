@@ -14,14 +14,18 @@ export async function main(): Promise<void> {
   const actor = `agent:${process.env.RELAY_MCP_CLIENT ?? "mcp"}`;
   const server = createRelayServer(h.db, { canWrite: true, actor, ...(embed ? { embed } : {}) });
   const transport = new StdioServerTransport();
-  const shutdown = async () => {
-    await server.close().catch(() => {});
+  // server.close() closes the transport, which fires server.onclose; the guard keeps the two paths from re-entering.
+  let closing = false;
+  const finish = async () => {
+    if (closing) return;
+    closing = true;
     await h.close().catch(() => {});
     process.exit(0);
   };
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
-  transport.onclose = () => void shutdown();
+  server.server.onclose = () => void finish();
+  const onSignal = () => void server.close().catch(() => finish());
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   await server.connect(transport);
   console.error(`[relay-mcp] serving on stdio (${h.db.driver})`);
 }
