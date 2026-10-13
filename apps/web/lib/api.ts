@@ -4,7 +4,8 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { bearerOf, resolveGrant, SCOPES, type Grant, type Scope } from "@/lib/auth";
-import { publicReadEnabled, SITE_URL } from "@/lib/data";
+import { dataMode, publicReadEnabled, SITE_URL } from "@/lib/data";
+import { SESSION_COOKIE, sessionActor, verifySession } from "@/lib/session-token";
 
 export { SCOPES, type Scope };
 export const RATE_LIMIT = { policyName: "default", limit: 60, windowSeconds: 60 } as const;
@@ -73,10 +74,25 @@ export function problem(
 
 export const bearer = bearerOf;
 
-/** Who is calling: the token's grant, or the anonymous public-read grant, or nothing. */
+/**
+ * The signed-in browser viewer, when the request carries a valid `relay_session` cookie and no bearer. The person
+ * who can click approve on /assets gets the same scopes here, attributed as `human:<login>`. Only in db mode: mock
+ * mode's fake session must not turn anonymous API callers into writers.
+ */
+export async function sessionGrant(req: Request): Promise<Grant | undefined> {
+  if (dataMode() !== "db") return undefined;
+  const cookie = req.headers.get("cookie") ?? "";
+  const m = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookie);
+  const session = await verifySession(m?.[1], process.env.RELAY_SESSION_SECRET);
+  return session ? { scopes: [...SCOPES], actor: sessionActor(session), source: "session" } : undefined;
+}
+
+/** Who is calling: the token's grant, the session's, the anonymous public-read grant, or nothing. */
 export async function callerGrant(req: Request): Promise<Grant | undefined> {
   const token = bearer(req);
   if (token) return resolveGrant(token);
+  const session = await sessionGrant(req);
+  if (session) return session;
   return publicReadEnabled() ? { scopes: PUBLIC_SCOPES, actor: "anon:web", source: "env" } : undefined;
 }
 
@@ -86,7 +102,10 @@ export async function requireScope(req: Request, scope: Scope, instance: string,
   const token = bearer(req);
   const challenge = `Bearer realm="relay", scope="${scope}", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"`;
   const headers = { "WWW-Authenticate": challenge, ...(rate ? rateHeaders(rate) : {}) };
-  if (!token) return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope.`, instance, {}, headers);
+  if (!token) {
+    if (await sessionGrant(req)) return null;
+    return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope, or a signed-in session.`, instance, {}, headers);
+  }
   const grant = await resolveGrant(token);
   if (!grant) return problem(401, "Unauthorized", "Unknown token.", instance, {}, headers);
   if (!grant.scopes.includes(scope)) return problem(403, "Forbidden", `Token lacks the ${scope} scope.`, instance, { scopes: grant.scopes }, headers);

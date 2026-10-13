@@ -31,8 +31,7 @@ const nextConfig: NextConfig = {
     "/usage": migrations,
     "/workers": migrations,
   },
-  // TODO(auth): proxy.ts holds content negotiation today; session checks for app pages go
-  // there too, leaving /info, /docs, /api/webhooks/*, the well-known files and llms.txt public.
+  // proxy.ts holds the sign-in gate (lib/access.ts says what is public) and the Accept negotiation for /info and /docs.
 };
 
 export default nextConfig;

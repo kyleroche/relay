@@ -39,9 +39,8 @@ export const viewport: Viewport = {
   ],
 };
 
-// TODO(auth): sign-in goes here. The layout will read the session, pass the viewer into
-// the data layer, and show a sign-in button in the header. /info, /docs and the
-// well-known files stay public.
+// Sign-in: proxy.ts gates the protected routes before this renders; SiteHeader reads the
+// session (lib/session.ts) for the viewer menu and the plan meters.
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
   const tz = await viewerTimeZone();

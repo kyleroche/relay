@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 
 /**
  * Internal: live polling for the feed page (unsanitized, same shape as the page).
- * The public, documented API is /api/v1/feed. TODO(auth): require a session here.
+ * The public, documented API is /api/v1/feed. proxy.ts requires a session for this route (lib/access.ts).
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;

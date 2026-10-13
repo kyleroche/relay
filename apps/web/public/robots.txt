@@ -6,6 +6,8 @@ Allow: /
 Disallow: /api/feed
 Disallow: /api/meters
 Disallow: /api/markdown
+Disallow: /auth/
+Disallow: /sign-in
 
 User-agent: GPTBot
 Allow: /
