@@ -1,0 +1,66 @@
+# relay review caller: installed into a repo by `relay link` as .github/workflows/relay-review.yml.
+# When a lane opens a PR from a `relay/<lane>-<issue>` branch, a different lane reviews it and comments.
+# `relay link` replaces __RELAY_REPO__ (owner/relay) and __RELAY_REF__ before writing.
+#
+# The reviewer is chosen per author lane so the review always comes from a different model:
+#   claude -> codex, codex -> claude, grok -> claude. Override with the repo or org variables
+#   RELAY_REVIEWER_FOR_CLAUDE / RELAY_REVIEWER_FOR_CODEX / RELAY_REVIEWER_FOR_GROK (values: claude|codex|grok).
+#   RELAY_REVIEW_MODEL_<LANE> optionally pins the reviewer's model.
+name: relay review
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions: {}
+
+jobs:
+  lane:
+    # Only branches a lane pushed, and only from this repository (never a fork).
+    if: >-
+      startsWith(github.event.pull_request.head.ref, 'relay/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      lane: ${{ steps.map.outputs.lane }}
+      issue: ${{ steps.map.outputs.issue }}
+      model: ${{ steps.map.outputs.model }}
+    steps:
+      - id: map
+        env:
+          HEAD: ${{ github.event.pull_request.head.ref }}
+          FOR_CLAUDE: ${{ vars.RELAY_REVIEWER_FOR_CLAUDE || 'codex' }}
+          FOR_CODEX: ${{ vars.RELAY_REVIEWER_FOR_CODEX || 'claude' }}
+          FOR_GROK: ${{ vars.RELAY_REVIEWER_FOR_GROK || 'claude' }}
+          MODEL_CLAUDE: ${{ vars.RELAY_REVIEW_MODEL_CLAUDE }}
+          MODEL_CODEX: ${{ vars.RELAY_REVIEW_MODEL_CODEX }}
+          MODEL_GROK: ${{ vars.RELAY_REVIEW_MODEL_GROK }}
+        run: |
+          # relay/<lane>-<issue>: the author lane and the issue number come from the branch name
+          rest="${HEAD#relay/}"; author="${rest%-*}"; issue="${rest##*-}"
+          lane=""
+          case "$author" in
+            claude) lane="$FOR_CLAUDE" ;;
+            codex)  lane="$FOR_CODEX" ;;
+            grok)   lane="$FOR_GROK" ;;
+          esac
+          case "$lane" in claude|codex|grok) ;; *) lane="" ;; esac
+          if [ "$lane" = "$author" ]; then echo "::warning::reviewer lane equals author lane ($author); skipping"; lane=""; fi
+          case "$issue" in ''|*[!0-9]*) lane=""; issue=0 ;; esac
+          model=""
+          case "$lane" in claude) model="$MODEL_CLAUDE" ;; codex) model="$MODEL_CODEX" ;; grok) model="$MODEL_GROK" ;; esac
+          echo "lane=$lane" >> "$GITHUB_OUTPUT"
+          echo "issue=$issue" >> "$GITHUB_OUTPUT"
+          echo "model=$model" >> "$GITHUB_OUTPUT"
+
+  review:
+    needs: lane
+    if: needs.lane.outputs.lane != ''
+    uses: __RELAY_REPO__/.github/workflows/relay-run.yml@__RELAY_REF__
+    with:
+      lane: ${{ needs.lane.outputs.lane }}
+      issue: ${{ fromJSON(needs.lane.outputs.issue) }}
+      model: ${{ needs.lane.outputs.model }}
+      mode: review
+      pr: ${{ github.event.pull_request.number }}
+      max_minutes: 30
