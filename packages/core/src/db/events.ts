@@ -106,8 +106,13 @@ export interface ListEventsOpts {
   project?: string;
   kind?: string;
   actor?: string;
+  lane?: string;
   /** ISO timestamp; only events at or after it. */
   since?: string;
+  /** ISO timestamp; only events strictly older than it (paging backwards). */
+  before?: string;
+  /** ISO timestamp; only events strictly newer than it (live polling). */
+  after?: string;
   limit?: number;
 }
 
@@ -121,7 +126,10 @@ export async function listEvents(db: Db, opts: ListEventsOpts = {}): Promise<Eve
   if (opts.project) add("project = ?", opts.project);
   if (opts.kind) add(opts.kind.endsWith(".") ? "kind LIKE ?" : "kind = ?", opts.kind.endsWith(".") ? opts.kind + "%" : opts.kind);
   if (opts.actor) add("actor = ?", opts.actor);
+  if (opts.lane) add("lane = ?", opts.lane);
   if (opts.since) add("ts >= ?::timestamptz", opts.since);
+  if (opts.before) add("ts < ?::timestamptz", opts.before);
+  if (opts.after) add("ts > ?::timestamptz", opts.after);
   params.push(opts.limit ?? 100);
   const r = await db.query(`SELECT ${cols} FROM events ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY ts DESC, id DESC LIMIT $${params.length}`, params);
   return r.map(toEvent);
@@ -143,5 +151,35 @@ export async function usageSummary(db: Db, sinceIso: string): Promise<UsageSumma
     cache_read: num(x.cache_read),
     cost_equiv: num(x.cost_equiv),
     avg_ctx: num(x.avg_ctx),
+  }));
+}
+
+export interface UsageDayRow {
+  /** YYYY-MM-DD in UTC. */
+  day: string;
+  subscription: string;
+  calls: number;
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cost_equiv: number;
+}
+
+/** step.usage totals per UTC day and subscription since an ISO timestamp, oldest first (the usage page's series). */
+export async function usageDaily(db: Db, sinceIso: string): Promise<UsageDayRow[]> {
+  const r = await db.query(
+    `SELECT to_char(date_trunc('day', ts AT TIME ZONE 'UTC'), 'YYYY-MM-DD') AS day, coalesce(subscription, 'unknown') AS subscription,
+            count(*) AS calls, sum(tokens_in) AS tokens_in, sum(tokens_out) AS tokens_out, sum(cache_read) AS cache_read, sum(cost_equiv) AS cost_equiv
+     FROM ledger WHERE ts >= $1::timestamptz GROUP BY 1, 2 ORDER BY 1, 2`,
+    [sinceIso],
+  );
+  return r.map((x) => ({
+    day: x.day as string,
+    subscription: x.subscription as string,
+    calls: num(x.calls),
+    tokens_in: num(x.tokens_in),
+    tokens_out: num(x.tokens_out),
+    cache_read: num(x.cache_read),
+    cost_equiv: num(x.cost_equiv),
   }));
 }

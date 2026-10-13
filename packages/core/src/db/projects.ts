@@ -112,3 +112,44 @@ export async function setFileSummaries(db: Db, slug: string, items: Array<{ path
     [slug, items.map((i) => i.path), items.map((i) => i.summary), items.map((i) => i.tokens), items.map((i) => i.sha256)],
   );
 }
+
+export interface ProjectStats {
+  slug: string;
+  /** ts of the newest event for the project. */
+  last_activity: string | null;
+  /** Issues with an issue.opened and no later issue.closed. */
+  open_issues: number;
+  /** Current (not superseded) decisions. */
+  decisions: number;
+  /** File digests with a current summary, and all file digests. */
+  digested: number;
+  total: number;
+  /** Lanes that appeared on the project's events, sorted. */
+  lanes: string[];
+}
+
+/** Aggregates the web app's project list shows, for every project in one round trip. */
+export async function projectStats(db: Db): Promise<ProjectStats[]> {
+  const r = await db.query(
+    `SELECT p.slug,
+            (SELECT max(ts) FROM events e WHERE e.project = p.slug) AS last_activity,
+            (SELECT count(*) FROM (
+               SELECT issue FROM events e WHERE e.project = p.slug AND e.issue IS NOT NULL AND e.kind IN ('issue.opened', 'issue.closed')
+               GROUP BY issue HAVING bool_or(kind = 'issue.opened') AND max(ts) FILTER (WHERE kind = 'issue.closed') IS NULL
+             ) o) AS open_issues,
+            (SELECT count(*) FROM decisions d WHERE d.project = p.slug AND d.valid_to IS NULL) AS decisions,
+            (SELECT count(*) FROM file_digests f WHERE f.project = p.slug AND f.summary IS NOT NULL AND f.summary_sha = f.sha256) AS digested,
+            (SELECT count(*) FROM file_digests f WHERE f.project = p.slug) AS total,
+            (SELECT coalesce(array_agg(DISTINCT lane ORDER BY lane), '{}') FROM events e WHERE e.project = p.slug AND e.lane IS NOT NULL) AS lanes
+     FROM projects p ORDER BY p.slug`,
+  );
+  return r.map((x) => ({
+    slug: x.slug as string,
+    last_activity: iso(x.last_activity),
+    open_issues: num(x.open_issues),
+    decisions: num(x.decisions),
+    digested: num(x.digested),
+    total: num(x.total),
+    lanes: Array.isArray(x.lanes) ? (x.lanes as string[]) : [],
+  }));
+}
