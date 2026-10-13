@@ -6,7 +6,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { hookCommand, hookPaths, onPath, planFile, type HookContext, type InstallPlan, type Installer } from "./types.ts";
+import { hookCommand, hookPaths, binOnPath, planFile, type HookContext, type InstallPlan, type Installer } from "./types.ts";
 
 export const TOML_BEGIN = "# relay:begin (managed by `relay setup`; edits inside this block are overwritten)";
 export const TOML_END = "# relay:end";
@@ -47,7 +47,7 @@ export function spliceTomlBlock(text: string, block: string | undefined): string
 
 export const codexInstaller: Installer = {
   cli: "codex",
-  detect: (ctx) => existsSync(join(ctx.userHome, ".codex")) || onPath("codex"),
+  detect: (ctx) => existsSync(join(ctx.userHome, ".codex")) || binOnPath("codex"),
   plan(ctx): InstallPlan {
     const path = join(ctx.userHome, ".codex", "config.toml");
     const current = existsSync(path) ? readFileSync(path, "utf8") : "";

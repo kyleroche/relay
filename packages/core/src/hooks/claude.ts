@@ -8,7 +8,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { HOOK_MARKER, hookCommand, hookPaths, onPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
+import { HOOK_MARKER, hookCommand, hookPaths, binOnPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
 
 type HookEntry = { matcher?: string; hooks: Array<{ type: "command"; command: string; timeout?: number }> };
 
@@ -56,7 +56,7 @@ function claudeJsonWith(ctx: HookContext, remove: boolean): string {
 
 export const claudeInstaller: Installer = {
   cli: "claude",
-  detect: (ctx) => existsSync(join(ctx.userHome, ".claude")) || onPath("claude"),
+  detect: (ctx) => existsSync(join(ctx.userHome, ".claude")) || binOnPath("claude"),
   plan(ctx): InstallPlan {
     const p = hookPaths(ctx);
     return {

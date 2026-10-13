@@ -70,7 +70,7 @@ export function applyPlan(plan: InstallPlan): string[] {
   return written;
 }
 
-export function onPath(bin: string): boolean {
+export function binOnPath(bin: string): boolean {
   for (const dir of (process.env.PATH ?? "").split(delimiter)) {
     if (!dir) continue;
     try {

@@ -5,7 +5,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { hookCommand, hookPaths, onPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
+import { hookCommand, hookPaths, binOnPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
 
 export function relayGrokHooks(ctx: HookContext): Record<string, unknown> {
   const p = hookPaths(ctx);
@@ -30,7 +30,7 @@ function settingsWith(ctx: HookContext, remove: boolean): string {
 
 export const grokInstaller: Installer = {
   cli: "grok",
-  detect: (ctx) => existsSync(join(ctx.userHome, ".grok")) || onPath("grok"),
+  detect: (ctx) => existsSync(join(ctx.userHome, ".grok")) || binOnPath("grok"),
   plan(ctx): InstallPlan {
     const p = hookPaths(ctx);
     return {
