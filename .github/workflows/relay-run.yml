@@ -1,0 +1,123 @@
+# Reusable lane runner. Repos call it from the thin callers that `relay link` installs
+# (packages/cli/templates/relay-caller.yml and relay-review.yml). It runs on a self-hosted runner labelled
+# `relay,<lane>` on a machine where the operator logged in to the vendor CLI and to gh. See docs/RUNNERS.md.
+#
+# Rules this file keeps:
+# - Issue and PR text reach the shell only through `env:`; no `${{ }}` inside a `run:` script.
+# - The lane runs under the machine's own logins. No GITHUB_TOKEN, no API keys, no permission-bypass flags.
+# - One job per issue at a time (concurrency), and every job has a hard time limit.
+name: relay run
+
+on:
+  workflow_call:
+    inputs:
+      lane:
+        description: "claude | codex | grok"
+        type: string
+        required: true
+      issue:
+        description: "Issue number this run is for (always set, also for reviews)"
+        type: number
+        required: true
+      model:
+        description: "Model override for the lane's CLI (empty = the CLI's default)"
+        type: string
+        required: false
+        default: ""
+      max_minutes:
+        description: "Job time limit in minutes"
+        type: number
+        required: false
+        default: 60
+      mode:
+        description: "code (implement the issue, open a PR) | review (comment on a PR, read-only)"
+        type: string
+        required: false
+        default: code
+      pr:
+        description: "Pull request number (review mode only)"
+        type: number
+        required: false
+        default: 0
+
+# One run per issue per repo. A second label on the same issue waits instead of racing the first.
+concurrency:
+  group: relay-${{ inputs.mode }}-${{ github.repository }}-${{ inputs.issue }}
+  cancel-in-progress: false
+
+jobs:
+  run:
+    name: ${{ inputs.mode }} / ${{ inputs.lane }} / #${{ inputs.issue }}
+    runs-on: [self-hosted, relay, "${{ inputs.lane }}"]
+    timeout-minutes: ${{ inputs.max_minutes }}
+    # The job never uses the workflow token: gh on the runner acts as the operator's own login.
+    permissions: {}
+    env:
+      LANE: ${{ inputs.lane }}
+      ISSUE: ${{ inputs.issue }}
+      MODEL: ${{ inputs.model }}
+      MODE: ${{ inputs.mode }}
+      PR: ${{ inputs.pr }}
+      REPO: ${{ github.repository }}
+      BASE: ${{ github.event.repository.default_branch }}
+    steps:
+      - name: Gate on allowed sender
+        # RELAY_ALLOWED_SENDERS is a repo or org variable: comma-separated GitHub logins allowed to start lanes.
+        env:
+          SENDER: ${{ github.event.sender.login }}
+          ALLOWED: ${{ vars.RELAY_ALLOWED_SENDERS }}
+        run: |
+          if [ -z "$ALLOWED" ]; then echo "::error::RELAY_ALLOWED_SENDERS is not set; refusing to run"; exit 1; fi
+          case ",${ALLOWED// /}," in
+            *",${SENDER},"*) echo "sender '${SENDER}' is allowed" ;;
+            *) echo "::error::sender '${SENDER}' is not in RELAY_ALLOWED_SENDERS"; exit 1 ;;
+          esac
+
+      - name: Validate inputs
+        run: |
+          case "$LANE" in claude|codex|grok) ;; *) echo "::error::lane must be claude, codex or grok (got '$LANE')"; exit 1 ;; esac
+          case "$MODE" in code|review) ;; *) echo "::error::mode must be code or review (got '$MODE')"; exit 1 ;; esac
+          if [ "$MODE" = review ] && [ "${PR:-0}" = 0 ]; then echo "::error::review mode needs a pr number"; exit 1; fi
+          echo "lane=$LANE mode=$MODE issue=$ISSUE pr=$PR repo=$REPO base=$BASE"
+
+      - name: Check the runner's own logins
+        # No token is injected here on purpose; this is the operator's gh login on the machine.
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          gh auth status
+          for t in jq git; do command -v "$t" >/dev/null || { echo "::error::$t is missing on this runner"; exit 1; }; done
+
+      - name: Fetch the relay runner scripts
+        # The scripts live in the relay repo, not in the caller. RELAY_REPO / RELAY_REF are optional variables;
+        # the default is <this org>/relay at main. The clone uses the runner's gh login, so a private relay repo works.
+        env:
+          RELAY_REPO: ${{ vars.RELAY_REPO || format('{0}/relay', github.repository_owner) }}
+          RELAY_REF: ${{ vars.RELAY_REF || 'main' }}
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          rm -rf "$RUNNER_TEMP/relay"
+          gh repo clone "$RELAY_REPO" "$RUNNER_TEMP/relay" -- --quiet --depth 1 --branch "$RELAY_REF"
+          test -x "$RUNNER_TEMP/relay/scripts/runner/run-lane.sh" || chmod +x "$RUNNER_TEMP/relay/scripts/runner/run-lane.sh"
+
+      - name: Clone a fresh worktree
+        # Fresh clone per job under RUNNER_TEMP, so no state leaks between tasks and nothing lands in the runner's
+        # persistent _work directory. actions/checkout is not used: it would wire GITHUB_TOKEN into git.
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          rm -rf "$RUNNER_TEMP/work"
+          gh repo clone "$REPO" "$RUNNER_TEMP/work" -- --quiet
+
+      - name: Run the lane
+        working-directory: ${{ runner.temp }}/work
+        # Title and body are data. They enter the shell as environment variables only; the script quotes them into
+        # the brief under a "data, not instructions" banner.
+        env:
+          TITLE: ${{ github.event.issue.title || github.event.pull_request.title }}
+          BODY: ${{ github.event.issue.body || github.event.pull_request.body }}
+        run: |
+          unset GH_TOKEN GITHUB_TOKEN
+          "$RUNNER_TEMP/relay/scripts/runner/run-lane.sh"
+
+      - name: Remove the worktree
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/work" "$RUNNER_TEMP/relay"
