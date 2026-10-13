@@ -29,6 +29,9 @@ importers:
       '@relay/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@relay/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1

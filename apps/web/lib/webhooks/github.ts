@@ -1,8 +1,11 @@
 /**
  * Normalize GitHub webhook payloads into event rows. Kinds emitted here are documented in
  * lib/events.ts. Returns null for deliveries that are not events of record (ping, edits, syncs).
+ * `issue_comment` deliveries carrying the runner's usage block go through `githubEvents`, which
+ * may yield two rows (step.usage and, in review mode, pr.review).
  */
 import type { Lane, NewEvent } from "@/lib/types";
+import { parseUsageComment, senderTrusted, usageEvents } from "./usage.ts";
 
 type Json = Record<string, unknown>;
 
@@ -38,6 +41,35 @@ function linkedIssue(pr: Json): number | null {
   const branch = get<string>(pr, "head.ref") ?? "";
   const b = /^relay\/(\d+)-/.exec(branch);
   return b?.[1] ? Number(b[1]) : null;
+}
+
+/** Every row a delivery produces. Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`. */
+export async function githubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
+  if (eventName === "issue_comment") {
+    const action = get<string>(payload, "action");
+    if (action !== "created" && action !== "edited") return [];
+    const comment = get<Json>(payload, "comment");
+    const issue = get<Json>(payload, "issue");
+    if (!comment || !issue || !get(issue, "pull_request")) return [];
+    const block = parseUsageComment(get<string>(comment, "body") ?? "");
+    if (!block) return [];
+    const repo = get<string>(payload, "repository.full_name") ?? null;
+    const login = get<string>(comment, "user.login") ?? "unknown";
+    const trusted = await senderTrusted(repo, login);
+    return usageEvents(block, {
+      repo,
+      project: get<string>(payload, "repository.name") ?? null,
+      pr: get<number>(issue, "number") ?? null,
+      url: get<string>(comment, "html_url") ?? null,
+      commentId: get<number | string>(comment, "id") ?? deliveryId,
+      sender: login,
+      body: get<string>(comment, "body") ?? "",
+      trusted,
+      ...(get<string>(comment, "created_at") ? { ts: get<string>(comment, "created_at") as string } : {}),
+    });
+  }
+  const one = normalizeGitHub(eventName, payload, deliveryId);
+  return one ? [one] : [];
 }
 
 export function normalizeGitHub(eventName: string, payload: Json, deliveryId: string): NewEvent | null {

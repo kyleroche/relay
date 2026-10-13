@@ -66,8 +66,14 @@ How the GitHub webhook handler parses it, on `issue_comment` (created or edited)
 6. In review mode (`"mode":"review"`), also write a `pr.reviewed` row with the text above the marker as the summary.
 
 Only comments by logins in the repo's `RELAY_ALLOWED_SENDERS` variable (which includes the runner's gh account) are
-trusted for usage; the handler reads that variable through the GitHub API once per hour and caches it. A usage
-block posted by anyone else is recorded as `payload.untrusted = true` and excluded from the ledger.
+trusted for usage; the handler reads that variable through the GitHub API (with `GITHUB_TOKEN`) once per hour and
+caches it, or takes the comma-separated `RELAY_ALLOWED_SENDERS` environment variable when set. With neither
+configured every sender is trusted. A usage block posted by anyone else is recorded as `payload.untrusted = true`
+with its usage columns zeroed (the reported numbers stay in `payload.reported`), so the `ledger` view, which is a
+plain `kind = 'step.usage'` filter, never counts it.
+
+The parser lives in `apps/web/lib/webhooks/usage.ts`; the handler for every GitHub delivery is
+`githubEvents` in `apps/web/lib/webhooks/github.ts`, which returns zero, one or two rows per delivery.
 
 ## Reading the feed
 

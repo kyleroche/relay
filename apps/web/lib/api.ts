@@ -3,13 +3,15 @@
  * documents, bearer scopes. Route handlers wrap themselves in `api()`.
  */
 import { NextResponse, type NextRequest } from "next/server";
+import { bearerOf, resolveGrant, SCOPES, type Grant, type Scope } from "@/lib/auth";
 import { publicReadEnabled, SITE_URL } from "@/lib/data";
 
+export { SCOPES, type Scope };
 export const RATE_LIMIT = { policyName: "default", limit: 60, windowSeconds: 60 } as const;
-
-export type Scope = "feed:read" | "memory:read" | "memory:write";
-export const SCOPES: Scope[] = ["feed:read", "memory:read", "memory:write"];
 export const PROBLEM_TYPE = `${SITE_URL}/docs/api#errors`;
+
+/** Scopes an anonymous caller holds when the deployment allows public read. */
+export const PUBLIC_SCOPES: Scope[] = ["feed:read", "memory:read"];
 
 // Per-instance sliding window. Good for one region and a demo; move to a shared store
 // (Upstash/Redis) before running several instances. Keyed by client IP.
@@ -69,34 +71,25 @@ export function problem(
   );
 }
 
-/** Tokens from RELAY_API_TOKENS="token:scope,scope;token2:scope". Minted by the CLI, never here. */
-function tokenScopes(token: string): Scope[] | null {
-  const raw = process.env.RELAY_API_TOKENS;
-  if (!raw) return null;
-  for (const entry of raw.split(";")) {
-    const [t, scopes] = entry.split(":");
-    if (t?.trim() === token) return (scopes ?? "").split(",").map((s) => s.trim()).filter((s): s is Scope => SCOPES.includes(s as Scope));
-  }
-  return null;
-}
+export const bearer = bearerOf;
 
-export function bearer(req: Request): string | null {
-  const h = req.headers.get("authorization");
-  if (!h) return null;
-  const m = /^Bearer\s+(.+)$/i.exec(h);
-  return m?.[1]?.trim() ?? null;
+/** Who is calling: the token's grant, or the anonymous public-read grant, or nothing. */
+export async function callerGrant(req: Request): Promise<Grant | undefined> {
+  const token = bearer(req);
+  if (token) return resolveGrant(token);
+  return publicReadEnabled() ? { scopes: PUBLIC_SCOPES, actor: "anon:web", source: "env" } : undefined;
 }
 
 /** Null when allowed; otherwise the 401/403 problem to return. Read scopes pass when public read is on. */
-export function requireScope(req: Request, scope: Scope, instance: string, rate?: RateState): NextResponse | null {
-  if (scope !== "memory:write" && publicReadEnabled()) return null;
+export async function requireScope(req: Request, scope: Scope, instance: string, rate?: RateState): Promise<NextResponse | null> {
+  if (PUBLIC_SCOPES.includes(scope) && publicReadEnabled()) return null;
   const token = bearer(req);
   const challenge = `Bearer realm="relay", scope="${scope}", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"`;
   const headers = { "WWW-Authenticate": challenge, ...(rate ? rateHeaders(rate) : {}) };
   if (!token) return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope.`, instance, {}, headers);
-  const granted = tokenScopes(token);
-  if (!granted) return problem(401, "Unauthorized", "Unknown token.", instance, {}, headers);
-  if (!granted.includes(scope)) return problem(403, "Forbidden", `Token lacks the ${scope} scope.`, instance, { scopes: granted }, headers);
+  const grant = await resolveGrant(token);
+  if (!grant) return problem(401, "Unauthorized", "Unknown token.", instance, {}, headers);
+  if (!grant.scopes.includes(scope)) return problem(403, "Forbidden", `Token lacks the ${scope} scope.`, instance, { scopes: grant.scopes }, headers);
   return null;
 }
 
@@ -114,7 +107,7 @@ export function api<C>(handler: Handler<C>, opts: { scope?: Scope } = {}) {
       });
     }
     if (opts.scope) {
-      const denied = requireScope(req, opts.scope, instance, rate);
+      const denied = await requireScope(req, opts.scope, instance, rate);
       if (denied) return denied;
     }
     try {

@@ -195,4 +195,73 @@ export const mockSource: DataSource = {
   async writeEvent(event) {
     return appendEvent(event);
   },
+
+  async getAssets(opts = {}) {
+    let rows = dataset().assets;
+    if (opts.project) rows = rows.filter((a) => a.project === opts.project);
+    if (opts.status) rows = rows.filter((a) => a.status === opts.status);
+    if (opts.kind) rows = rows.filter((a) => a.kind === opts.kind);
+    if (opts.issue !== undefined) rows = rows.filter((a) => a.issue === opts.issue);
+    if (opts.pr !== undefined) rows = rows.filter((a) => a.pr === opts.pr);
+    // pending first, then newest first: the same order the database adapter returns
+    return [...rows].sort((a, b) => Number(b.status === "pending") - Number(a.status === "pending") || b.created_at.localeCompare(a.created_at)).slice(0, Math.min(opts.limit ?? 100, 500));
+  },
+
+  async getAsset(id) {
+    const ds = dataset();
+    const asset = ds.assets.find((a) => a.id === id);
+    if (!asset) return null;
+    // the version chain: walk to the root, then collect every row whose parent is in the chain
+    const byId = new Map(ds.assets.map((a) => [a.id, a]));
+    let root = asset;
+    while (root.parent_id && byId.has(root.parent_id)) root = byId.get(root.parent_id)!;
+    const chain = [root];
+    for (let i = 0; i < chain.length; i++) for (const a of ds.assets) if (a.parent_id === chain[i]!.id) chain.push(a);
+    const repo = MOCK_PROJECTS.find((p) => p.slug === asset.project)?.repo;
+    const task_url = repo ? (asset.pr ? `https://github.com/${repo}/pull/${asset.pr}` : asset.issue ? `https://github.com/${repo}/issues/${asset.issue}` : null) : null;
+    return {
+      asset,
+      versions: chain.sort((a, b) => a.version - b.version).map((v) => ({ id: v.id, version: v.version, status: v.status, created_at: v.created_at, created_by: v.created_by, thumb_url: v.thumb_url })),
+      task_url,
+    };
+  },
+
+  async reviewAsset(id, review) {
+    const ds = dataset();
+    const a = ds.assets.find((x) => x.id === id);
+    if (!a) return null;
+    const now = new Date().toISOString();
+    a.status = review.decision;
+    a.reviewed_by = review.by;
+    a.reviewed_at = now;
+    a.review_note = review.note ?? null;
+    a.expires_at = review.decision === "rejected" ? new Date(Date.now() + 30 * D).toISOString() : null;
+    appendEvent({
+      kind: "asset.reviewed",
+      actor: review.by,
+      project: a.project,
+      repo: MOCK_PROJECTS.find((p) => p.slug === a.project)?.repo ?? null,
+      issue: a.issue,
+      pr: a.pr,
+      summary: `${review.decision}: ${a.title}${review.note ? ` — ${review.note}` : ""}`,
+      url: `/assets/${a.id}`,
+      payload: { asset_id: a.id, decision: review.decision, note: review.note ?? null, version: a.version },
+    });
+    if (review.decision === "rejected" && review.note) {
+      ds.decisions.push({ id: 1000 + ds.decisions.length, project: a.project ?? "", text: `Rejected "${a.title}" (v${a.version}): ${review.note}`, source: "review", source_ref: a.id, valid_from: now });
+    }
+    return a;
+  },
+
+  async publishAsset(id, by) {
+    const ds = dataset();
+    const a = ds.assets.find((x) => x.id === id);
+    if (!a) return null;
+    // Mock mode has no Blob store; pretend the copy happened so the flow can be demoed end to end.
+    a.status = "published";
+    a.public_url = `https://public.example-blob.vercel-storage.com/${a.project}/${a.id}/${encodeURIComponent(a.title.toLowerCase().replace(/\s+/g, "-"))}`;
+    a.expires_at = null;
+    appendEvent({ kind: "asset.published", actor: by, project: a.project, issue: a.issue, pr: a.pr, url: a.public_url, summary: `published: ${a.title}`, payload: { asset_id: a.id, public_url: a.public_url, version: a.version } });
+    return a;
+  },
 };

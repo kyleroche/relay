@@ -1,15 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { problem } from "@/lib/api";
 import { writeEvent } from "@/lib/data";
-import { normalizeGitHub } from "@/lib/webhooks/github";
+import { githubEvents } from "@/lib/webhooks/github";
 import { verifyGitHub } from "@/lib/webhooks/verify";
 
 export const dynamic = "force-dynamic";
 
 /**
  * GitHub webhook ingest. Configure the repo (or org) webhook with content type application/json,
- * secret = GITHUB_WEBHOOK_SECRET, events: issues, pull_request, pull_request_review,
- * workflow_run, deployment_status. Replays are idempotent via the delivery id.
+ * secret = GITHUB_WEBHOOK_SECRET, events: issues, issue_comment, pull_request, pull_request_review,
+ * workflow_run, deployment_status. Replays are idempotent via the delivery id (and the comment id for
+ * usage rows). Writes go through the data layer, which in db mode is @relay/core's repo.writeEvent.
  */
 export async function POST(req: NextRequest) {
   const secret = process.env.GITHUB_WEBHOOK_SECRET;
@@ -29,11 +30,15 @@ export async function POST(req: NextRequest) {
     return problem(400, "Bad Request", "Body is not JSON.", "/api/webhooks/github");
   }
 
-  const event = normalizeGitHub(eventName, payload, delivery);
-  if (!event) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });
+  const events = await githubEvents(eventName, payload, delivery);
+  if (!events.length) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });
 
-  const row = await writeEvent(event);
-  return NextResponse.json({ ok: true, id: row?.id ?? null, kind: event.kind }, { status: 201 });
+  const written = [];
+  for (const event of events) {
+    const row = await writeEvent(event);
+    written.push({ id: row?.id ?? null, kind: event.kind, deduped: row === null });
+  }
+  return NextResponse.json({ ok: true, events: written }, { status: 201 });
 }
 
 export function GET() {

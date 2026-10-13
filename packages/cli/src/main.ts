@@ -16,10 +16,12 @@ import { registerDecide } from "./commands/decide.ts";
 import { registerPrefer } from "./commands/prefer.ts";
 import { registerCapture } from "./commands/capture.ts";
 import { registerMemory } from "./commands/memory.ts";
+import { registerToken } from "./commands/token.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version("0.0.1");
 registerAssetCommands(program);
+registerToken(program);
 
 // ---------- memory layer: setup, link, brief, recall, decide, prefer, capture, memory (packages/cli/src/commands) ----------
 for (const register of [registerSetup, registerLink, registerBrief, registerRecall, registerDecide, registerPrefer, registerCapture, registerMemory]) register(program);

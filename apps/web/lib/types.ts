@@ -136,6 +136,76 @@ export interface Worker {
   current: { project: string; issue: number; startedAt: string } | null;
 }
 
+export type AssetKind = "image" | "video" | "audio" | "pdf" | "html" | "file";
+export type AssetStatus = "pending" | "approved" | "rejected" | "superseded" | "published";
+export const ASSET_KINDS: AssetKind[] = ["image", "video", "audio", "pdf", "html", "file"];
+export const ASSET_STATUSES: AssetStatus[] = ["pending", "approved", "rejected", "superseded", "published"];
+
+/** One row of the `assets` table (docs/ASSETS.md) with short-lived view URLs resolved for this response. */
+export interface Asset {
+  id: string;
+  project: string | null;
+  issue: number | null;
+  pr: number | null;
+  title: string;
+  description: string | null;
+  kind: AssetKind;
+  mime: string;
+  size: number;
+  sha256: string;
+  width: number | null;
+  height: number | null;
+  duration_ms: number | null;
+  version: number;
+  parent_id: string | null;
+  status: AssetStatus;
+  created_by: string;
+  created_at: string;
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  public_url: string | null;
+  expires_at: string | null;
+  tags: string[];
+  /** Signed view URL for the bytes (expires), or null when the store cannot serve them. */
+  url: string | null;
+  /** Signed URL for the thumbnail or poster, or null. */
+  thumb_url: string | null;
+  /** For kind=html: the URL of the bundle's index entry, served in a sandboxed iframe. */
+  bundle_url: string | null;
+}
+
+export interface AssetVersion {
+  id: string;
+  version: number;
+  status: AssetStatus;
+  created_at: string;
+  created_by: string;
+  thumb_url: string | null;
+}
+
+export interface AssetDetail {
+  asset: Asset;
+  versions: AssetVersion[];
+  /** The GitHub URL of the issue or PR the asset belongs to, when the project has a repo. */
+  task_url: string | null;
+}
+
+export interface AssetListOptions {
+  project?: string;
+  status?: AssetStatus;
+  kind?: AssetKind;
+  issue?: number;
+  pr?: number;
+  limit?: number;
+}
+
+export interface AssetReview {
+  decision: "approved" | "rejected";
+  by: string;
+  note?: string | null;
+}
+
 /** The contract both adapters implement. `lib/data.ts` picks one. */
 export interface DataSource {
   getFeed(opts?: FeedOptions): Promise<FeedEvent[]>;
@@ -145,4 +215,9 @@ export interface DataSource {
   getWorkers(): Promise<Worker[]>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
+  getAssets(opts?: AssetListOptions): Promise<Asset[]>;
+  getAsset(id: string): Promise<AssetDetail | null>;
+  reviewAsset(id: string, review: AssetReview): Promise<Asset | null>;
+  /** Copies the bytes to the public store and records the URL; null when unknown, throws when the store cannot publish. */
+  publishAsset(id: string, by: string): Promise<Asset | null>;
 }
