@@ -28,8 +28,14 @@ export const EVENT_KINDS = {
   "preview.failed": { group: "deploy", source: "vercel", label: "Preview failed", description: "A deployment errored." },
   // Memory
   "decision.captured": { group: "memory", source: "lane", label: "Decision", description: "A durable decision extracted from a session or a merged PR." },
+  "preference.set": { group: "memory", source: "cli", label: "Preference", description: "A preference was set at global, project, lane or model scope." },
+  "project.linked": { group: "memory", source: "cli", label: "Project linked", description: "relay link registered a repository." },
   "memory.consolidated": { group: "memory", source: "nightly", label: "Memory consolidated", description: "Nightly digest: superseded decisions closed, rules file regenerated." },
   "onboard.refreshed": { group: "memory", source: "cli", label: "Vendor docs refreshed", description: "Official guidance and skills for a model were re-ingested." },
+  // Assets (docs/ASSETS.md)
+  "asset.uploaded": { group: "asset", source: "api", label: "Asset uploaded", description: "A new asset or version landed in the library and awaits review." },
+  "asset.reviewed": { group: "asset", source: "web", label: "Asset reviewed", description: "A human approved or rejected an asset; a rejection note becomes a decision." },
+  "asset.published": { group: "asset", source: "api", label: "Asset published", description: "An approved asset was copied to the public store; url is permanent." },
 } as const;
 
 export type EventKind = keyof typeof EVENT_KINDS;

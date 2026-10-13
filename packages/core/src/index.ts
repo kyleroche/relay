@@ -4,6 +4,7 @@ export * from "./harness.ts";
 export { openDb, DbError, DEFAULT_PGLITE_FILE, type Db, type OpenDbOptions } from "./db/client.ts";
 export { migrate, currentVersion, loadMigrations, MIGRATIONS_DIR, type Migration } from "./db/migrate.ts";
 export * as repo from "./db/repo.ts";
+export { TOKEN_SCOPES, TOKEN_PREFIX, isTokenScope, hashToken, type TokenScope, type TokenRow } from "./db/tokens.ts";
 export * from "./onboard/index.ts";
 export * from "./onboard/registry.ts";
 export { isOfficial, extractDoc, fetchPage } from "./onboard/html.ts";

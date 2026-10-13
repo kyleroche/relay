@@ -7,6 +7,9 @@
  */
 import type { EventKind } from "./events.ts";
 import type {
+  Asset,
+  AssetKind,
+  AssetStatus,
   Decision,
   FeedEvent,
   Lane,
@@ -183,7 +186,192 @@ interface Dataset {
   decisions: Decision[];
   models: ModelInfo[];
   workers: Worker[];
+  assets: Asset[];
   nextId: number;
+}
+
+/**
+ * Mock assets. Bytes are generated on request by /api/assets/mock/<id> (SVG for images, a one-page PDF, an HTML
+ * page, CSV); the video has a poster but no playable source, which is also what the viewer shows when a store
+ * cannot serve bytes. Ids are fixed so links survive a reload.
+ */
+interface MockAssetSeed {
+  id: string;
+  project: string;
+  issue?: number;
+  pr?: number;
+  title: string;
+  description: string;
+  kind: AssetKind;
+  mime: string;
+  size: number;
+  width?: number;
+  height?: number;
+  duration_ms?: number;
+  version?: number;
+  parent_id?: string;
+  status: AssetStatus;
+  created_by: string;
+  hoursAgo: number;
+  reviewed_by?: string;
+  review_note?: string;
+  tags: string[];
+}
+
+export const MOCK_ASSET_SEEDS: MockAssetSeed[] = [
+  {
+    id: "01K7A0MOCKASSET0000000001A",
+    project: "atlas-site",
+    issue: 118,
+    title: "Pricing page hero mockup",
+    description: "Second pass after the copy refresh: shorter headline, plan cards aligned to the 8px grid, dark variant included.",
+    kind: "image",
+    mime: "image/png",
+    size: 412_338,
+    width: 1600,
+    height: 1000,
+    version: 2,
+    parent_id: "01K7A0MOCKASSET0000000001B",
+    status: "pending",
+    created_by: "bot:grok",
+    hoursAgo: 1.4,
+    tags: ["ux", "pricing"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000001B",
+    project: "atlas-site",
+    issue: 118,
+    title: "Pricing page hero mockup",
+    description: "First pass of the pricing hero.",
+    kind: "image",
+    mime: "image/png",
+    size: 398_120,
+    width: 1600,
+    height: 1000,
+    version: 1,
+    status: "superseded",
+    created_by: "bot:grok",
+    hoursAgo: 27,
+    tags: ["ux", "pricing"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000002A",
+    project: "studio-app",
+    issue: 73,
+    title: "Onboarding flow walkthrough",
+    description: "Screen recording of the new three-step onboarding on iPad, exported from the simulator.",
+    kind: "video",
+    mime: "video/mp4",
+    size: 18_422_911,
+    width: 1668,
+    height: 2388,
+    duration_ms: 42_600,
+    status: "pending",
+    created_by: "runner:studio",
+    hoursAgo: 3.2,
+    tags: ["onboarding"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000003A",
+    project: "atlas-site",
+    pr: 97,
+    title: "Changelog page render",
+    description: "Static render of /changelog from the preview build, for a look at the MDX collection layout before merge.",
+    kind: "html",
+    mime: "text/html",
+    size: 61_204,
+    status: "pending",
+    created_by: "agent:codex",
+    hoursAgo: 5.6,
+    tags: ["changelog"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000004A",
+    project: "ledger-api",
+    pr: 141,
+    title: "Idempotency design note",
+    description: "Two pages on the Idempotency-Key storage shape and the replay window, written for the review lane.",
+    kind: "pdf",
+    mime: "application/pdf",
+    size: 88_410,
+    status: "approved",
+    created_by: "agent:claude",
+    hoursAgo: 30,
+    reviewed_by: "human:maya",
+    tags: ["design"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000005A",
+    project: "atlas-site",
+    issue: 102,
+    title: "Dark mode palette",
+    description: "Proposed dark surfaces and accent ramp.",
+    kind: "image",
+    mime: "image/png",
+    size: 120_033,
+    width: 1200,
+    height: 800,
+    status: "rejected",
+    created_by: "bot:grok",
+    hoursAgo: 52,
+    reviewed_by: "human:maya",
+    review_note: "Accent is too saturated against zinc-950; keep one hue and lower chroma to match the light theme.",
+    tags: ["ux", "theme"],
+  },
+  {
+    id: "01K7A0MOCKASSET0000000006A",
+    project: "ledger-api",
+    issue: 133,
+    title: "Reconciliation sample export",
+    description: "CSV produced by the nightly reconciliation job on the staging ledger, 200 rows.",
+    kind: "file",
+    mime: "text/csv",
+    size: 14_902,
+    status: "approved",
+    created_by: "runner:loft",
+    hoursAgo: 70,
+    reviewed_by: "human:maya",
+    tags: ["reconciliation"],
+  },
+];
+
+function mockAssets(now: number): Asset[] {
+  const H = 3_600_000;
+  return MOCK_ASSET_SEEDS.map((s) => {
+    const created = new Date(now - s.hoursAgo * H).toISOString();
+    const reviewed = s.reviewed_by ? new Date(now - (s.hoursAgo - 2) * H).toISOString() : null;
+    const base = `/api/assets/mock/${s.id}`;
+    const hasBytes = s.kind !== "video";
+    return {
+      id: s.id,
+      project: s.project,
+      issue: s.issue ?? null,
+      pr: s.pr ?? null,
+      title: s.title,
+      description: s.description,
+      kind: s.kind,
+      mime: s.mime,
+      size: s.size,
+      sha256: `${s.id.toLowerCase().replace(/[^0-9a-f]/g, "0")}${"0".repeat(64)}`.slice(0, 64),
+      width: s.width ?? null,
+      height: s.height ?? null,
+      duration_ms: s.duration_ms ?? null,
+      version: s.version ?? 1,
+      parent_id: s.parent_id ?? null,
+      status: s.status,
+      created_by: s.created_by,
+      created_at: created,
+      reviewed_by: s.reviewed_by ?? null,
+      reviewed_at: reviewed,
+      review_note: s.review_note ?? null,
+      public_url: null,
+      expires_at: s.status === "rejected" || s.status === "superseded" ? new Date(now + 30 * 24 * H).toISOString() : null,
+      tags: s.tags,
+      url: hasBytes ? base : null,
+      thumb_url: s.kind === "image" || s.kind === "video" ? `${base}?thumb=1` : null,
+      bundle_url: s.kind === "html" ? base : null,
+    };
+  });
 }
 
 function build(now: number): Dataset {
@@ -556,6 +744,45 @@ function build(now: number): Dataset {
     payload: { guidance_count: 96, skill_count: 3 },
   });
 
+  // Assets and the events their lifecycle wrote.
+  const assets = mockAssets(now);
+  for (const a of assets) {
+    const repo = MOCK_PROJECTS.find((p) => p.slug === a.project)?.repo ?? null;
+    push({
+      ts: a.created_at,
+      kind: "asset.uploaded",
+      actor: a.created_by,
+      project: a.project,
+      repo,
+      issue: a.issue,
+      pr: a.pr,
+      lane: null,
+      model: null,
+      subscription: null,
+      summary: a.version > 1 ? `${a.title} (v${a.version})` : a.title,
+      url: `/assets/${a.id}`,
+      payload: { asset_id: a.id, kind: a.kind, mime: a.mime, size: a.size, version: a.version, parent_id: a.parent_id, sha256: a.sha256 },
+    });
+    if (a.reviewed_by && a.reviewed_at) {
+      const verb = a.status === "rejected" ? "rejected" : "approved";
+      push({
+        ts: a.reviewed_at,
+        kind: "asset.reviewed",
+        actor: a.reviewed_by,
+        project: a.project,
+        repo,
+        issue: a.issue,
+        pr: a.pr,
+        lane: null,
+        model: null,
+        subscription: null,
+        summary: `${verb}: ${a.title}${a.review_note ? ` — ${a.review_note}` : ""}`,
+        url: `/assets/${a.id}`,
+        payload: { asset_id: a.id, decision: a.status, note: a.review_note, version: a.version },
+      });
+    }
+  }
+
   events.sort((a, b) => a.ts.localeCompare(b.ts));
   const withIds: FeedEvent[] = events.map((e, i) => ({ ...e, id: i + 1 }));
 
@@ -628,7 +855,7 @@ function build(now: number): Dataset {
     },
   ];
 
-  return { now, events: withIds, decisions, models, workers, nextId: withIds.length + 1 };
+  return { now, events: withIds, decisions, models, workers, assets, nextId: withIds.length + 1 };
 }
 
 declare global {

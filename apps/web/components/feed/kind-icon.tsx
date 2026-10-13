@@ -3,17 +3,22 @@ import {
   Check,
   CircleCheck,
   CircleDot,
+  ClipboardCheck,
   Cpu,
   Eye,
   GitMerge,
   GitPullRequest,
   GitPullRequestClosed,
   Globe,
+  Image,
   Layers,
   Lightbulb,
+  Link2,
   Play,
+  SlidersHorizontal,
   Tag,
   TriangleAlert,
+  Upload,
   Workflow,
   type LucideIcon,
 } from "lucide-react";
@@ -36,8 +41,13 @@ const ICONS: Record<string, LucideIcon> = {
   "preview.ready": Globe,
   "preview.failed": TriangleAlert,
   "decision.captured": Lightbulb,
+  "preference.set": SlidersHorizontal,
+  "project.linked": Link2,
   "memory.consolidated": Layers,
   "onboard.refreshed": BookOpen,
+  "asset.uploaded": Image,
+  "asset.reviewed": ClipboardCheck,
+  "asset.published": Upload,
 };
 
 const TONE: Record<string, string> = {
@@ -46,6 +56,7 @@ const TONE: Record<string, string> = {
   "pr.merged": "text-ok",
   "preview.ready": "text-ok",
   "issue.closed": "text-ok",
+  "asset.uploaded": "text-warn",
 };
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {

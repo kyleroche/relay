@@ -1,2 +1,16 @@
-export { createRelayServer, capText, RESULT_TOKENS, BRIEF_TOKENS, type RelayServerOptions } from "./server.ts";
-export { createMcpHandler, tokenMatches, type McpHandler, type McpHandlerOptions } from "./http.ts";
+export {
+  createRelayServer,
+  capText,
+  grantedScopes,
+  RESULT_TOKENS,
+  BRIEF_TOKENS,
+  SERVER_VERSION,
+  ALL_SCOPES,
+  PUBLIC_READ_SCOPES,
+  TOOL_SCOPES,
+  METHODOLOGY,
+  type RelayServerOptions,
+  type SiteHooks,
+  type AssetHooks,
+} from "./server.ts";
+export { createMcpHandler, resolveGrant, bearerOf, tokenMatches, type Grant, type McpHandler, type McpHandlerOptions } from "./http.ts";

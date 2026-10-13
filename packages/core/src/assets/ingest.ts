@@ -195,27 +195,54 @@ export async function ingestFile(db: Db, store: AssetStore, input: IngestInput):
   await store.put(storageKey, bytes, { contentType: probe.mime });
   log(`stored ${storageKey} (${probe.mime}, ${probe.size} bytes)`);
 
-  let thumbKey: string | null = null;
+  const thumbKey = await storeThumbnail(store, prefix, probe, bytes, filename, { pathForTools: input.path, thumbSize: input.thumbSize, log });
+  try {
+    return await recordRow(db, { id, input, probe, storageKey, thumbKey, filename });
+  } catch (e) {
+    // the row failed: do not leave orphan bytes behind
+    await store.delete(storageKey).catch(() => {});
+    if (thumbKey) await store.delete(thumbKey).catch(() => {});
+    throw e;
+  }
+}
+
+/** Render and store the thumbnail (image via sharp, video poster via ffmpeg). Never throws; null when there is none. */
+async function storeThumbnail(
+  store: AssetStore,
+  prefix: string,
+  probe: Probe,
+  bytes: Buffer,
+  filename: string,
+  opts: { pathForTools?: string | undefined; thumbSize?: number | undefined; log: Log },
+): Promise<string | null> {
   try {
     let thumb: { bytes: Buffer; mime: string; ext: string } | undefined;
-    if (probe.kind === "image" && probe.mime !== "image/svg+xml") thumb = await imageThumbnail(bytes, input.thumbSize ?? MAX_THUMB);
+    if (probe.kind === "image" && probe.mime !== "image/svg+xml") thumb = await imageThumbnail(bytes, opts.thumbSize ?? MAX_THUMB);
     else if (probe.kind === "video") {
-      const tmp = input.path ? undefined : tempFile(bytes, filename);
+      const tmp = opts.pathForTools ? undefined : tempFile(bytes, filename);
       try {
-        thumb = await videoPoster(input.path ?? tmp!.file, input.thumbSize ?? MAX_THUMB);
+        thumb = await videoPoster(opts.pathForTools ?? tmp!.file, opts.thumbSize ?? MAX_THUMB);
       } finally {
         if (tmp) rmSync(tmp.dir, { recursive: true, force: true });
       }
     }
     if (thumb) {
-      thumbKey = `${prefix}/thumb.${thumb.ext}`;
+      const thumbKey = `${prefix}/thumb.${thumb.ext}`;
       await store.put(thumbKey, thumb.bytes, { contentType: thumb.mime });
-    } else if (probe.kind === "image" || probe.kind === "video") log(`no thumbnail (${probe.kind === "image" ? "sharp not installed" : "ffmpeg not on PATH"} or unsupported input)`);
+      return thumbKey;
+    }
+    if (probe.kind === "image" || probe.kind === "video") opts.log(`no thumbnail (${probe.kind === "image" ? "sharp not installed" : "ffmpeg not on PATH"} or unsupported input)`);
   } catch (e) {
-    log(`thumbnail skipped: ${e instanceof Error ? e.message : String(e)}`);
-    thumbKey = null;
+    opts.log(`thumbnail skipped: ${e instanceof Error ? e.message : String(e)}`);
   }
+  return null;
+}
 
+type RowInput = Pick<IngestInput, "project" | "issue" | "pr" | "title" | "description" | "replaces" | "createdBy" | "tags">;
+
+/** Insert the row: a new version when `replaces` is set, else version 1. */
+function recordRow(db: Db, a: { id: string; input: RowInput; probe: Probe; storageKey: string; thumbKey: string | null; filename: string }): Promise<AssetRow> {
+  const { id, input, probe, storageKey, thumbKey, filename } = a;
   // undefined (not null) for the optional fields so a new version inherits them from its parent
   const row = {
     id,
@@ -235,11 +262,53 @@ export async function ingestFile(db: Db, store: AssetStore, input: IngestInput):
     createdBy: input.createdBy,
     tags: input.tags,
   };
+  return input.replaces ? newVersion(db, input.replaces, { ...row, title: input.title }) : createAsset(db, { ...row, title: input.title ?? filename });
+}
+
+/** The storage key a presigned upload must use for a new asset: `<project>/<id>/<safe filename>`. */
+export function uploadKeyFor(project: string | null, id: string, filename: string): string {
+  return `${project ?? "_"}/${id}/${safeFilename(filename)}`;
+}
+
+/** `{ project, id, filename }` from a key `uploadKeyFor` produced, or undefined when the shape is wrong. */
+export function parseUploadKey(key: string): { project: string | null; id: string; filename: string } | undefined {
+  const parts = key.split("/");
+  if (parts.length !== 3 || parts.some((p) => !p)) return undefined;
+  const [project, id, filename] = parts as [string, string, string];
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(id)) return undefined;
+  return { project: project === "_" ? null : project, id, filename };
+}
+
+export interface FinalizeInput extends RowInput {
+  /** The key the client uploaded to (from `uploadKeyFor`); the row id and filename come from it. */
+  key: string;
+  thumbSize?: number;
+  log?: Log;
+}
+
+/**
+ * Finish a presigned upload: the bytes are already at `key` in the store. Read them back, probe, thumbnail, then
+ * insert the row with the id the key carries. A missing or empty object throws `IngestError` and the row is not
+ * created; a failed row insert removes the uploaded bytes so nothing is orphaned.
+ */
+export async function finalizeFromKey(db: Db, store: AssetStore, input: FinalizeInput): Promise<AssetRow> {
+  const log = input.log ?? (() => {});
+  const parsed = parseUploadKey(input.key);
+  if (!parsed) throw new IngestError(`not an upload key: ${input.key}`);
+  if ((input.project ?? null) !== parsed.project) throw new IngestError(`key belongs to project '${parsed.project ?? "_"}', not '${input.project ?? "_"}'`);
+  if (!(await store.exists(input.key))) throw new IngestError(`nothing was uploaded to ${input.key}`);
+  const bytes = await store.read(input.key);
+  if (!bytes.length) {
+    await store.delete(input.key).catch(() => {});
+    throw new IngestError("uploaded file is empty");
+  }
+  const probe = await probeBytes(bytes, parsed.filename);
+  const prefix = `${parsed.project ?? "_"}/${parsed.id}`;
+  const thumbKey = await storeThumbnail(store, prefix, probe, bytes, parsed.filename, { thumbSize: input.thumbSize, log });
   try {
-    return input.replaces ? await newVersion(db, input.replaces, { ...row, title: input.title }) : await createAsset(db, { ...row, title: input.title ?? filename });
+    return await recordRow(db, { id: parsed.id, input, probe, storageKey: input.key, thumbKey, filename: parsed.filename });
   } catch (e) {
-    // the row failed: do not leave orphan bytes behind
-    await store.delete(storageKey).catch(() => {});
+    await store.delete(input.key).catch(() => {});
     if (thumbKey) await store.delete(thumbKey).catch(() => {});
     throw e;
   }

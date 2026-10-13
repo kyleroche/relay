@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Feed } from "@/components/feed/feed";
+import { NeedsReview } from "@/components/feed/needs-review";
 import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
-import { getFeed, getProjects } from "@/lib/data";
+import { getAssets, getFeed, getProjects } from "@/lib/data";
 import { viewerTimeZone } from "@/lib/tz-server";
 
 export const metadata: Metadata = {
@@ -28,12 +29,14 @@ export default async function FeedPage({ searchParams }: { searchParams: Promise
     actor: one(sp.actor),
     kind: one(sp.kind),
   };
-  const [events, projects, allRecent, tz] = await Promise.all([
+  const [events, projects, allRecent, pending, tz] = await Promise.all([
     getFeed({ ...filters, limit: 150 }),
     getProjects(),
     getFeed({ limit: 300 }),
+    getAssets({ status: "pending", limit: 50 }),
     viewerTimeZone(),
   ]);
+  const now = Date.now();
   const actors = [...new Set(allRecent.map((e) => e.actor))].sort();
   const today = new Date().toISOString().slice(0, 10);
   const todayCount = allRecent.filter((e) => e.ts.slice(0, 10) === today).length;
@@ -63,9 +66,26 @@ export default async function FeedPage({ searchParams }: { searchParams: Promise
               <dt className="text-xs text-muted-foreground">Cost equivalent</dt>
               <dd className="font-mono tabular-nums">${todayCost.toFixed(2)}</dd>
             </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Needs review</dt>
+              <dd className="font-mono tabular-nums">
+                {pending.length > 0 ? (
+                  <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
+                    {pending.length} asset{pending.length === 1 ? "" : "s"}
+                  </Link>
+                ) : (
+                  "0"
+                )}
+              </dd>
+            </div>
           </dl>
         </div>
       </section>
+      {!filters.project && !filters.lane && !filters.actor && !filters.kind && (
+        <div className="mb-4">
+          <NeedsReview assets={pending} now={now} />
+        </div>
+      )}
       <Feed events={events} projects={projects.map((p) => p.slug)} actors={actors} filters={filters} tz={tz} />
     </>
   );

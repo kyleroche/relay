@@ -3,6 +3,7 @@
  * PNG/JPEG/GIF/WebP headers, and zip central-directory listing (to validate HTML bundles). No native deps.
  */
 import { extname } from "node:path";
+import { inflateRawSync } from "node:zlib";
 import type { AssetKind } from "../db/assets.ts";
 
 const EXT_MIME: Record<string, string> = {
@@ -178,6 +179,72 @@ export function htmlBundleIndex(names: string[]): string | undefined {
     const [top] = [...tops];
     const idx = `${top}/index.html`;
     if (names.includes(idx)) return idx;
+  }
+  return undefined;
+}
+
+const ENTRY_MIME: Record<string, string> = {
+  ".css": "text/css",
+  ".js": "text/javascript",
+  ".mjs": "text/javascript",
+  ".map": "application/json",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
+  ".ttf": "font/ttf",
+  ".ico": "image/x-icon",
+  ".xml": "application/xml",
+  ".wasm": "application/wasm",
+};
+
+/** Content type for an HTML bundle entry by extension; octet-stream when unknown. */
+export function mimeForEntry(name: string): string {
+  const ext = extname(name).toLowerCase();
+  return ENTRY_MIME[ext] ?? EXT_MIME[ext] ?? "application/octet-stream";
+}
+
+/**
+ * The bytes of one entry in a zip (stored or deflate), located through the central directory so a local header's
+ * data descriptor never matters. Undefined when the entry is missing. Throws on zip64 or an unknown method.
+ */
+export function readZipEntry(b: Buffer, name: string): Buffer | undefined {
+  const EOCD = 0x06054b50;
+  const CEN = 0x02014b50;
+  const LOC = 0x04034b50;
+  const minEocd = 22;
+  if (b.length < minEocd) throw new Error("not a zip: too small");
+  let eocd = -1;
+  for (let i = b.length - minEocd; i >= Math.max(0, b.length - minEocd - 0xffff); i--) {
+    if (b.readUInt32LE(i) === EOCD) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error("not a zip: no end-of-central-directory record");
+  const count = b.readUInt16LE(eocd + 10);
+  let off = b.readUInt32LE(eocd + 16);
+  if (count === 0xffff || off === 0xffffffff) throw new Error("zip64 archives are not supported");
+  for (let n = 0; n < count; n++) {
+    if (off + 46 > b.length || b.readUInt32LE(off) !== CEN) throw new Error("corrupt zip central directory");
+    const method = b.readUInt16LE(off + 10);
+    const csize = b.readUInt32LE(off + 20);
+    const usize = b.readUInt32LE(off + 24);
+    const nameLen = b.readUInt16LE(off + 28);
+    const extraLen = b.readUInt16LE(off + 30);
+    const commentLen = b.readUInt16LE(off + 32);
+    const localOff = b.readUInt32LE(off + 42);
+    const entryName = b.subarray(off + 46, off + 46 + nameLen).toString("utf8");
+    off += 46 + nameLen + extraLen + commentLen;
+    if (entryName !== name) continue;
+    if (localOff + 30 > b.length || b.readUInt32LE(localOff) !== LOC) throw new Error("corrupt zip local header");
+    const start = localOff + 30 + b.readUInt16LE(localOff + 26) + b.readUInt16LE(localOff + 28);
+    const data = b.subarray(start, start + csize);
+    if (method === 0) return Buffer.from(data);
+    if (method === 8) {
+      const out = inflateRawSync(data);
+      if (out.length !== usize) throw new Error("zip entry size mismatch");
+      return out;
+    }
+    throw new Error(`unsupported zip compression method ${method}`);
   }
   return undefined;
 }

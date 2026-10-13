@@ -26,10 +26,21 @@ Scopes are named and granted per token:
 | Scope | Grants |
 |---|---|
 | \`feed:read\` | GET /api/v1/feed, /api/v1/projects, relay_get_feed, relay_get_project |
-| \`memory:read\` | reading decisions and guidance through MCP |
-| \`memory:write\` | capturing decisions through MCP |
+| \`memory:read\` | relay_recall, relay_brief, relay_guidance, relay_feed, relay_project |
+| \`memory:write\` | relay_decide, relay_prefer |
+| \`assets:read\` | GET /api/v1/assets, GET /api/v1/assets/{id}, relay_asset_list, relay_asset_get |
+| \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
+| \`assets:review\` | PUT /api/v1/assets/{id}/review |
 
-Tokens are created with \`pnpm relay token create --scopes feed:read\` on a machine that holds the database connection; the web app never mints tokens. The bearer scheme and scopes are also published at [\`/.well-known/oauth-protected-resource\`](/.well-known/oauth-protected-resource) (RFC 9728).
+Tokens are created with the CLI on a machine that holds the database connection; the web app never mints them, it only checks them:
+
+\`\`\`bash
+pnpm relay token create --name ci-runner --scopes feed:read,assets:write   # prints the token once
+pnpm relay token ls
+pnpm relay token revoke ci-runner
+\`\`\`
+
+Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope. The bearer scheme and scopes are also published at [\`/.well-known/oauth-protected-resource\`](/.well-known/oauth-protected-resource) (RFC 9728).
 
 ## Rate limits
 
@@ -84,20 +95,62 @@ curl -s "${SITE_URL}/api/v1/feed?kind=step.usage&limit=5" | jq '.events[] | {ts,
 
 \`operationId: getProject\`. One project with its current decisions, models and recent events.
 
+### Assets
+
+The asset library ([docs/ASSETS.md](/docs/assets)): media agents produce, stored privately, versioned, reviewed. Every view URL is signed and expires after an hour. Uploads need a database and a store (\`RELAY_DATA=db\`); the demo deployment answers \`501\` to uploads and serves mock assets.
+
+| Operation | Scope | Does |
+|---|---|---|
+| \`GET /api/v1/assets\` (\`listAssets\`) | \`assets:read\` | pending first, then newest; filter by \`project\`, \`status\`, \`kind\`, \`issue\`, \`pr\` |
+| \`POST /api/v1/assets\` (\`createAsset\`) | \`assets:write\` | multipart \`file\` + metadata ingests in one call; JSON \`{"presign": true, "project", "filename"}\` reserves an id and returns a one-time upload URL |
+| \`POST /api/v1/assets/{id}/finalize\` (\`finalizeAsset\`) | \`assets:write\` | after the presigned PUT: probe, thumbnail, create the row |
+| \`GET /api/v1/assets/{id}\` (\`getAsset\`) | \`assets:read\` | metadata, the version chain, signed \`url\`, \`thumb_url\`, \`bundle_url\` |
+| \`PUT /api/v1/assets/{id}/review\` (\`reviewAsset\`) | \`assets:review\` | \`{"decision": "approved" \\| "rejected", "note"}\`; a rejection note becomes a project decision and, with a GitHub token, reopens the issue |
+| \`POST /api/v1/assets/{id}/publish\` (\`publishAsset\`) | \`assets:write\` | copy to the public Blob store and record a permanent URL (\`501\` without one) |
+
+One-call upload:
+
+\`\`\`bash
+curl -X POST ${SITE_URL}/api/v1/assets -H "Authorization: Bearer $TOKEN" \\
+  -F file=@render.png -F project=atlas-site -F issue=118 -F title="Pricing hero" -F tags=ux,pricing
+\`\`\`
+
+Presigned upload (bytes go straight to storage, never through the app or a model):
+
+\`\`\`bash
+curl -s -X POST ${SITE_URL}/api/v1/assets -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
+  -d '{"presign":true,"project":"atlas-site","filename":"walkthrough.mp4","issue":73}' > presign.json
+curl -X PUT "$(jq -r .upload_url presign.json)" -H "content-type: video/mp4" --data-binary @walkthrough.mp4
+curl -X POST "$(jq -r .finalize_url presign.json)" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
+  -d "$(jq .finalize_body presign.json)"
+\`\`\`
+
+Review:
+
+\`\`\`bash
+curl -X PUT ${SITE_URL}/api/v1/assets/<id>/review -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
+  -d '{"decision":"rejected","note":"Keep one accent hue; lower the chroma to match the light theme."}'
+\`\`\`
+
 ## MCP server
 
-\`${SITE_URL}/mcp\` speaks the MCP Streamable HTTP transport (POST JSON-RPC; stateless). Registry metadata is at [\`/server.json\`](/server.json) and the server card at [\`/.well-known/mcp/server-card.json\`](/.well-known/mcp/server-card.json).
+\`${SITE_URL}/mcp\` speaks the MCP Streamable HTTP transport (POST JSON-RPC; stateless). It is the same server the CLIs talk to over stdio (\`relay-mcp\`): one tool set, gated by the scopes your token carries. Registry metadata is at [\`/server.json\`](/server.json) and the server card at [\`/.well-known/mcp/server-card.json\`](/.well-known/mcp/server-card.json).
 
-Public read-only tools:
+| Tool | Scope | What it does |
+|---|---|---|
+| \`relay_get_info\` | public | the same document as GET /api/v1/info |
+| \`relay_get_methodology\` | public | the five rules and a task's life, as text |
+| \`relay_get_feed\` | \`feed:read\` | events, with the same filters as the API |
+| \`relay_get_project\` | \`feed:read\` | one project with decisions, models and recent events |
+| \`relay_recall\` | \`memory:read\` | decisions and preferences relevant to a query |
+| \`relay_brief\` | \`memory:read\` | the compiled brief for a project and intent |
+| \`relay_guidance\` | \`memory:read\` | official vendor guidance for a model |
+| \`relay_feed\`, \`relay_project\` | \`memory:read\` | compact text forms for a CLI session |
+| \`relay_decide\`, \`relay_prefer\` | \`memory:write\` | record a decision; set a preference |
+| \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
+| \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
 
-| Tool | What it returns |
-|---|---|
-| \`relay_get_info\` | the same document as GET /api/v1/info |
-| \`relay_get_feed\` | events, with the same filters as the API |
-| \`relay_get_project\` | one project with decisions and models |
-| \`relay_get_methodology\` | the five rules and a task's life, as text |
-
-Token-gated memory tools (\`relay_capture_decision\`, \`relay_recall\`) answer \`401\` without a bearer token carrying \`memory:write\` or \`memory:read\`.
+With public read enabled (the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token; everything else returns an error naming the missing scope.
 
 Claude Code:
 

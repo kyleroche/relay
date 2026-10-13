@@ -36,10 +36,39 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `AI_GATEWAY_API_KEY` | Vercel → AI Gateway → API keys | embeddings for memory search; the optional overflow lane |
 | `GITHUB_WEBHOOK_SECRET` | you generate it (`openssl rand -hex 32`) | verifies `X-Hub-Signature-256` on the GitHub webhook |
 | `VERCEL_WEBHOOK_SECRET` | shown once when the Vercel webhook is created | verifies `x-vercel-signature` on the Vercel webhook |
-| `RELAY_PUBLIC_URL` | the deployed URL, e.g. `https://relay.example.com` | absolute links in the feed, webhook self-checks |
-| `RELAY_MEMORY_TOKEN` | you generate it | bearer token for the HTTP memory server (`/api/memory`) |
+| `RELAY_PUBLIC_URL` | the deployed URL, e.g. `https://relay.example.com` | absolute links in the feed, signed asset URLs, GitHub comments |
+| `RELAY_MEMORY_TOKEN` | you generate it | one shared bearer token that grants every scope at `/mcp` and `/api/v1` |
+| `RELAY_API_TOKENS` | optional, `token:scope,scope;token2:scope` | static scoped tokens for deployments without the `tokens` table |
+| `RELAY_DATA` | `db` or `mock` | data mode; unset means `db` when `DATABASE_URL` is set, else `mock` |
+| `RELAY_PUBLIC_READ` | `1` or `0` | whether `/api/v1` reads and the public MCP tools answer without a token (default: on in mock mode only) |
+| `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob (private store) | asset bytes; unset means a local folder, which does not survive on Vercel |
+| `BLOB_PUBLIC_READ_WRITE_TOKEN` | a second, public Blob store | `relay asset publish` and `POST /assets/{id}/publish` |
+| `RELAY_ASSET_SIGNING_KEY` | `openssl rand -hex 32` | signs local view/upload URLs and HTML bundle URLs |
+| `CRON_SECRET` | `openssl rand -hex 32` | Vercel sends it as a bearer to `/api/cron/assets-expire` (the daily retention sweep in `apps/web/vercel.json`) |
+| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | asset comments on issues and PRs; reopen on rejection; reading `RELAY_ALLOWED_SENDERS` for usage comments |
+| `RELAY_ALLOWED_SENDERS` | optional, comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone) |
+| `RELAY_REVIEWER` | optional actor, e.g. `human:kyle` | who the web app's approve/reject clicks are attributed to until sign-in lands |
+| `RELAY_PLAN_METERS` | optional JSON | plan meters for the header until a vendor route exists: `[{"id","label","subscription","percentUsed","resetsAt"}]` |
+
+Tokens for API clients come from the CLI: `pnpm relay token create --name ci --scopes feed:read,assets:write` stores a
+hash in the `tokens` table and prints the token once. The app checks the `tokens` table when it runs on a database,
+then `RELAY_API_TOKENS`, then `RELAY_MEMORY_TOKEN`.
 
 Secrets are values, never files: nothing in the repo contains one, and `.env.example` stays names-only.
+
+### Monorepo root directory
+
+The app lives in `apps/web` of a pnpm workspace. Vercel builds it with **Root Directory** set to `apps/web` (step 1
+above) and the workspace packages resolve because `next.config.ts` sets `outputFileTracingRoot` to the repo root and
+transpiles `@relay/core` and `@relay/mcp` from source. `apps/web/vercel.json` holds the cron schedule and applies
+because it sits in that root directory; a `vercel.json` at the repository root would be ignored for this project. The
+SQL migrations under `packages/core/src/db/migrations` are traced into the function bundle so the schema applies on
+first request (`apps/web/lib/db.ts`).
+
+Locally, `RELAY_DATA=db` with no `DATABASE_URL` runs the app on the same embedded PGlite file the CLI uses
+(`$RELAY_HOME/relay.pglite`, override with `RELAY_PGLITE_FILE`), so `pnpm relay init`, `relay asset put` and the web
+app share one database on one machine. Do not run the CLI and the dev server against one PGlite file at the same
+time; PGlite holds a single-process lock.
 
 ## 4. GitHub webhook (organization level)
 

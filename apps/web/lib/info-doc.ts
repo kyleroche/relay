@@ -28,6 +28,8 @@ export function infoDocument() {
       mcp: `${SITE_URL}/mcp`,
       mcp_server_card: `${SITE_URL}/.well-known/mcp/server-card.json`,
       mcp_registry: `${SITE_URL}/server.json`,
+      assets: `${SITE_URL}/assets`,
+      assets_api: `${SITE_URL}/api/v1/assets`,
       agent_skills: `${SITE_URL}/.well-known/agent-skills/index.json`,
       ai_catalog: `${SITE_URL}/.well-known/ai-catalog.json`,
       protected_resource: `${SITE_URL}/.well-known/oauth-protected-resource`,

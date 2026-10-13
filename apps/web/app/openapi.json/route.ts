@@ -3,6 +3,7 @@ import { RATE_LIMIT, SCOPES } from "@/lib/api";
 import { SITE_URL } from "@/lib/data";
 import { EVENT_KIND_LIST } from "@/lib/events";
 import { APP_VERSION } from "@/lib/info-doc";
+import { ASSET_KINDS, ASSET_STATUSES } from "@/lib/types";
 
 const problemSchema = {
   type: "object",
@@ -53,7 +54,7 @@ export function GET() {
     info: {
       title: "relay API",
       version: APP_VERSION,
-      summary: "Read model over relay's event feed, projects and plan usage.",
+      summary: "Read model over relay's event feed, projects and plan usage, plus the asset library's upload and review loop.",
       description: `The same data as the site, as JSON. Rate limited to ${RATE_LIMIT.limit} requests per ${RATE_LIMIT.windowSeconds} seconds per client; every response carries RateLimit-Policy and RateLimit headers and 429 includes Retry-After. Errors are RFC 9457 application/problem+json. Versioning and deprecation policy: ${SITE_URL}/docs/versioning (RFC 9745 Deprecation and Sunset headers when an operation is retired).`,
       license: { name: "Apache-2.0", identifier: "Apache-2.0" },
       contact: { name: "relay", url: `${SITE_URL}/info` },
@@ -65,6 +66,7 @@ export function GET() {
       { name: "info", description: "What this deployment is." },
       { name: "feed", description: "The append-only event feed." },
       { name: "projects", description: "Linked repositories, decisions and models." },
+      { name: "assets", description: "The asset library: media agents produce, versioned, with an approve-or-reject review loop (docs/ASSETS.md)." },
     ],
     security: [{}, { bearer: ["feed:read"] }],
     paths: {
@@ -117,6 +119,107 @@ export function GET() {
           responses: { "200": response("The project.", "#/components/schemas/ProjectDetail"), "404": problemResponse("No such project."), ...commonErrors },
         },
       },
+      "/assets": {
+        get: {
+          operationId: "listAssets",
+          tags: ["assets"],
+          summary: "List assets, pending first",
+          description: "Pending assets come first, then newest first. View URLs are signed and expire after an hour.",
+          security: [{ bearer: ["assets:read"] }],
+          parameters: [
+            { name: "project", in: "query", schema: { type: "string" } },
+            { name: "status", in: "query", schema: { type: "string", enum: ASSET_STATUSES } },
+            { name: "kind", in: "query", schema: { type: "string", enum: ASSET_KINDS } },
+            { name: "issue", in: "query", schema: { type: "integer" } },
+            { name: "pr", in: "query", schema: { type: "integer" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+          ],
+          responses: { "200": response("A page of assets.", "#/components/schemas/AssetList"), "400": problemResponse("Invalid parameter."), ...commonErrors },
+        },
+        post: {
+          operationId: "createAsset",
+          tags: ["assets"],
+          summary: "Upload an asset, or reserve a presigned upload",
+          description:
+            "Two bodies. multipart/form-data with a `file` part and the metadata fields ingests the bytes here and returns the asset (201). application/json with `presign: true` returns an asset id and a one-time upload URL: PUT the bytes to `upload_url` with the returned content-type header, then POST `finalize_body` to `/assets/{id}/finalize`. Uploads need a database and an asset store; mock deployments answer 501.",
+          security: [{ bearer: ["assets:write"] }],
+          requestBody: {
+            required: true,
+            content: {
+              "multipart/form-data": { schema: { $ref: "#/components/schemas/AssetUploadForm" } },
+              "application/json": { schema: { $ref: "#/components/schemas/PresignRequest" } },
+            },
+          },
+          responses: {
+            "201": {
+              description: "The asset (multipart) or the presigned upload (JSON).",
+              headers: rateLimitHeaders,
+              content: { "application/json": { schema: { oneOf: [{ $ref: "#/components/schemas/Asset" }, { $ref: "#/components/schemas/PresignResponse" }] } } },
+            },
+            "400": problemResponse("Bad body or metadata."),
+            "404": problemResponse("No such project."),
+            "501": problemResponse("No asset store in this deployment."),
+            ...commonErrors,
+          },
+        },
+      },
+      "/assets/{id}": {
+        get: {
+          operationId: "getAsset",
+          tags: ["assets"],
+          summary: "One asset with its version chain and signed view URLs",
+          security: [{ bearer: ["assets:read"] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: { "200": response("The asset.", "#/components/schemas/AssetDetail"), "404": problemResponse("No such asset."), ...commonErrors },
+        },
+      },
+      "/assets/{id}/finalize": {
+        post: {
+          operationId: "finalizeAsset",
+          tags: ["assets"],
+          summary: "Finish a presigned upload",
+          description: "Probes the uploaded object (mime, dimensions, duration), renders a thumbnail when a helper is available, and creates the row under the reserved id. A second call answers 409.",
+          security: [{ bearer: ["assets:write"] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/FinalizeRequest" } } } },
+          responses: {
+            "201": response("The asset.", "#/components/schemas/Asset"),
+            "400": problemResponse("Bad key or metadata."),
+            "404": problemResponse("Nothing was uploaded to the key."),
+            "409": problemResponse("Already finalized."),
+            "501": problemResponse("No asset store in this deployment."),
+            ...commonErrors,
+          },
+        },
+      },
+      "/assets/{id}/review": {
+        put: {
+          operationId: "reviewAsset",
+          tags: ["assets"],
+          summary: "Approve or reject",
+          description:
+            "Writes asset.reviewed. A rejection needs a note; the note becomes a project decision (source `review`) so the next attempt's brief carries it. With a GitHub token configured the decision is also commented on the task, and a rejection reopens the issue.",
+          security: [{ bearer: ["assets:review"] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ReviewRequest" } } } },
+          responses: { "200": response("The reviewed asset.", "#/components/schemas/Asset"), "400": problemResponse("Bad decision or missing note."), "404": problemResponse("No such asset."), ...commonErrors },
+        },
+      },
+      "/assets/{id}/publish": {
+        post: {
+          operationId: "publishAsset",
+          tags: ["assets"],
+          summary: "Copy to the public store and record a permanent URL",
+          security: [{ bearer: ["assets:write"] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+          responses: {
+            "200": response("The published asset; public_url is set.", "#/components/schemas/Asset"),
+            "404": problemResponse("No such asset."),
+            "501": problemResponse("This deployment has no public store (BLOB_PUBLIC_READ_WRITE_TOKEN)."),
+            ...commonErrors,
+          },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -126,8 +229,11 @@ export function GET() {
           description: `Bearer token minted with the relay CLI. Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read. Protected-resource metadata: ${SITE_URL}/.well-known/oauth-protected-resource`,
           "x-scopes": {
             "feed:read": "Read the feed and projects.",
-            "memory:read": "Read decisions and guidance through MCP.",
-            "memory:write": "Capture decisions through MCP.",
+            "memory:read": "Read decisions, preferences, briefs and guidance through MCP.",
+            "memory:write": "Record decisions and preferences through MCP.",
+            "assets:read": "List and view assets (signed URLs).",
+            "assets:write": "Upload, finalize and publish assets.",
+            "assets:review": "Approve or reject assets.",
           },
         },
       },
@@ -240,6 +346,112 @@ export function GET() {
               },
             },
           ],
+        },
+        Asset: {
+          type: "object",
+          required: ["id", "title", "kind", "mime", "size", "version", "status", "created_by", "created_at"],
+          properties: {
+            id: { type: "string", description: "ULID." },
+            project: { type: ["string", "null"] },
+            issue: { type: ["integer", "null"] },
+            pr: { type: ["integer", "null"] },
+            title: { type: "string" },
+            description: { type: ["string", "null"] },
+            kind: { type: "string", enum: ASSET_KINDS },
+            mime: { type: "string" },
+            size: { type: "integer" },
+            sha256: { type: "string" },
+            width: { type: ["integer", "null"] },
+            height: { type: ["integer", "null"] },
+            duration_ms: { type: ["integer", "null"] },
+            version: { type: "integer" },
+            parent_id: { type: ["string", "null"], description: "The version this one replaced." },
+            status: { type: "string", enum: ASSET_STATUSES },
+            created_by: { type: "string", description: "Actor, e.g. bot:grok, runner:mini, token:ci." },
+            created_at: { type: "string", format: "date-time" },
+            reviewed_by: { type: ["string", "null"] },
+            reviewed_at: { type: ["string", "null"], format: "date-time" },
+            review_note: { type: ["string", "null"] },
+            public_url: { type: ["string", "null"], format: "uri", description: "Set only after publish." },
+            expires_at: { type: ["string", "null"], format: "date-time", description: "Retention deadline for rejected and superseded versions." },
+            tags: { type: "array", items: { type: "string" } },
+            url: { type: ["string", "null"], format: "uri", description: "Signed view URL for the bytes; expires after about an hour." },
+            thumb_url: { type: ["string", "null"], format: "uri" },
+            bundle_url: { type: ["string", "null"], format: "uri", description: "kind=html only: the index entry, to show in a sandboxed iframe." },
+          },
+        },
+        AssetVersion: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+            version: { type: "integer" },
+            status: { type: "string", enum: ASSET_STATUSES },
+            created_at: { type: "string", format: "date-time" },
+            created_by: { type: "string" },
+            thumb_url: { type: ["string", "null"], format: "uri" },
+          },
+        },
+        AssetDetail: {
+          allOf: [
+            { $ref: "#/components/schemas/Asset" },
+            {
+              type: "object",
+              properties: {
+                versions: { type: "array", items: { $ref: "#/components/schemas/AssetVersion" } },
+                task_url: { type: ["string", "null"], format: "uri", description: "The GitHub issue or PR." },
+              },
+            },
+          ],
+        },
+        AssetList: { type: "object", required: ["assets", "count"], properties: { assets: { type: "array", items: { $ref: "#/components/schemas/Asset" } }, count: { type: "integer" } } },
+        AssetMetadata: {
+          type: "object",
+          required: ["project"],
+          properties: {
+            project: { type: "string", description: "Project slug; must exist." },
+            issue: { type: "integer" },
+            pr: { type: "integer" },
+            title: { type: "string", description: "Defaults to the file name, or the replaced version's title." },
+            description: { type: "string" },
+            replaces: { type: "string", description: "Asset id this upload supersedes; the new row becomes the next version." },
+            tags: { type: "array", items: { type: "string" }, description: "In multipart form, a comma-separated string." },
+            by: { type: "string", description: "Creator actor; defaults to the token's name." },
+          },
+        },
+        AssetUploadForm: { allOf: [{ $ref: "#/components/schemas/AssetMetadata" }, { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" } } }] },
+        PresignRequest: {
+          allOf: [
+            { $ref: "#/components/schemas/AssetMetadata" },
+            {
+              type: "object",
+              required: ["presign", "filename"],
+              properties: { presign: { type: "boolean", const: true }, filename: { type: "string" }, content_type: { type: "string", description: "Sniffed from the filename when omitted." } },
+            },
+          ],
+        },
+        PresignResponse: {
+          type: "object",
+          required: ["id", "key", "upload_url", "method", "expires_at", "finalize_url", "finalize_body"],
+          properties: {
+            id: { type: "string" },
+            key: { type: "string", description: "Storage key: <project>/<id>/<filename>." },
+            upload_url: { type: "string", format: "uri", description: "PUT the bytes here (Vercel Blob presigned URL, or this app's /api/assets/upload for the local store)." },
+            method: { type: "string", const: "PUT" },
+            headers: { type: "object", additionalProperties: { type: "string" } },
+            expires_at: { type: "string", format: "date-time" },
+            finalize_url: { type: "string", format: "uri" },
+            finalize_body: { $ref: "#/components/schemas/FinalizeRequest" },
+          },
+        },
+        FinalizeRequest: { allOf: [{ $ref: "#/components/schemas/AssetMetadata" }, { type: "object", required: ["key"], properties: { key: { type: "string" } } }] },
+        ReviewRequest: {
+          type: "object",
+          required: ["decision"],
+          properties: {
+            decision: { type: "string", enum: ["approved", "rejected"] },
+            note: { type: "string", description: "Required for a rejection." },
+            by: { type: "string", description: "Reviewer actor; defaults to the token's name." },
+          },
         },
       },
     },

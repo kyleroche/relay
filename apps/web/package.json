@@ -13,6 +13,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@relay/core": "workspace:*",
+    "@relay/mcp": "workspace:*",
     "class-variance-authority": "^0.7.1",
     "marked": "^18.1.1",
     "clsx": "^2.1.1",

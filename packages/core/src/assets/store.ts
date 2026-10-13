@@ -10,7 +10,7 @@
  */
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { rm, stat, writeFile } from "node:fs/promises";
+import { readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
 import { Readable } from "node:stream";
@@ -27,6 +27,14 @@ export interface AssetStore {
   put(key: string, data: Buffer | Readable, opts: PutOptions): Promise<void>;
   /** A URL that grants read access to `key` for `ttlSeconds`. */
   getSignedUrl(key: string, ttlSeconds: number): Promise<string>;
+  /**
+   * A URL a client may PUT bytes to for `ttlSeconds`, so uploads never pass through the app or a model. Blob: a
+   * presigned `put`. Local: a `file://` URL carrying an upload token (`verifyLocalUploadUrl`), which the web app
+   * rewrites to its own upload route.
+   */
+  getUploadUrl(key: string, ttlSeconds: number, opts: PutOptions): Promise<string>;
+  /** The whole object. Used to finalize presigned uploads and to serve HTML bundle entries. */
+  read(key: string): Promise<Buffer>;
   delete(key: string): Promise<void>;
   exists(key: string): Promise<boolean>;
   /**
@@ -55,6 +63,7 @@ export function assertSafeKey(key: string): void {
 // ---------- local ----------
 
 const SIGNING_KEY_FILE = ".signing-key";
+const UPLOAD_PREFIX = "upload/";
 
 /**
  * Local signed URL: `file:///<root>/<key>?exp=<unix seconds>&sig=<base64url HMAC-SHA256(secret, "<key>\n<exp>")>`.
@@ -132,6 +141,31 @@ export class LocalStore implements AssetStore {
     return url.toString();
   }
 
+  /** Upload tokens sign `upload/<key>` so a view token can never be replayed as a write. */
+  async getUploadUrl(key: string, ttlSeconds: number, _opts: PutOptions): Promise<string> {
+    const p = this.pathFor(key);
+    const exp = Math.floor(Date.now() / 1000) + Math.max(1, Math.floor(ttlSeconds));
+    const url = pathToFileURL(p);
+    url.searchParams.set("exp", String(exp));
+    url.searchParams.set("sig", this.sign(`${UPLOAD_PREFIX}${key}`, exp));
+    url.searchParams.set("op", "put");
+    return url.toString();
+  }
+
+  /** True when `sig` is an upload token for `key` that has not expired. */
+  verifyUpload(key: string, exp: number, sig: string, now: number = Date.now()): boolean {
+    try {
+      assertSafeKey(key);
+    } catch {
+      return false;
+    }
+    return this.verify(`${UPLOAD_PREFIX}${key}`, exp, sig, now);
+  }
+
+  async read(key: string): Promise<Buffer> {
+    return readFile(this.pathFor(key));
+  }
+
   async delete(key: string): Promise<void> {
     await rm(this.pathFor(key), { force: true });
     // Drop the now-empty asset folder so the tree does not fill with husks; ignore when siblings remain.
@@ -182,6 +216,31 @@ export function verifyLocalSignedUrl(url: string, store: LocalStore = new LocalS
   return { ok: true, key, path, exp };
 }
 
+/** Parse and verify a LocalStore upload URL (from `getUploadUrl`). Same shape as `verifyLocalSignedUrl`. */
+export function verifyLocalUploadUrl(url: string, store: LocalStore = new LocalStore(), now: number = Date.now()): VerifiedLocalUrl | { ok: false; reason: string } {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return { ok: false, reason: "not a url" };
+  }
+  if (u.protocol !== "file:") return { ok: false, reason: "not a file url" };
+  if (u.searchParams.get("op") !== "put") return { ok: false, reason: "not an upload url" };
+  const exp = Number(u.searchParams.get("exp"));
+  const sig = u.searchParams.get("sig") ?? "";
+  u.search = "";
+  let path: string;
+  let key: string;
+  try {
+    path = fileURLToPath(u);
+    key = store.keyFor(path);
+  } catch {
+    return { ok: false, reason: "path outside asset root" };
+  }
+  if (!store.verifyUpload(key, exp, sig, now)) return { ok: false, reason: exp * 1000 < now ? "expired" : "bad signature" };
+  return { ok: true, key, path, exp };
+}
+
 // ---------- Vercel Blob ----------
 
 /**
@@ -219,6 +278,32 @@ export class BlobStore implements AssetStore {
     const signed = await issueSignedToken({ pathname: key, operations: ["get"], validUntil, token: this.token });
     const { presignedUrl } = await presignUrl(signed, { operation: "get", pathname: key, access: "private", validUntil });
     return presignedUrl;
+  }
+
+  /** Presigned `put`: the client PUTs the bytes straight to Blob; the app only sees the key afterwards. */
+  async getUploadUrl(key: string, ttlSeconds: number, opts: PutOptions): Promise<string> {
+    assertSafeKey(key);
+    const { issueSignedToken, presignUrl } = await this.sdk();
+    const validUntil = Date.now() + Math.max(1, Math.floor(ttlSeconds)) * 1000;
+    const signed = await issueSignedToken({ pathname: key, operations: ["put"], validUntil, token: this.token });
+    const { presignedUrl } = await presignUrl(signed, {
+      operation: "put",
+      pathname: key,
+      access: "private",
+      validUntil,
+      allowedContentTypes: [opts.contentType],
+      addRandomSuffix: false,
+      allowOverwrite: true,
+    });
+    return presignedUrl;
+  }
+
+  async read(key: string): Promise<Buffer> {
+    assertSafeKey(key);
+    const { get } = await this.sdk();
+    const r = await get(key, { access: "private", token: this.token });
+    if (!r || r.statusCode !== 200) throw new Error(`asset bytes missing in the private store: ${key}`);
+    return Buffer.from(await new Response(r.stream).arrayBuffer());
   }
 
   async delete(key: string): Promise<void> {
