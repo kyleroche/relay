@@ -20,7 +20,7 @@ pnpm -r typecheck
 pnpm -r test          # vitest; DB tests run on PGlite, no server needed
 pnpm relay --help
 pnpm relay setup      # plan hooks + MCP server for the CLIs on this machine; --yes writes
-pnpm relay link       # in a repo: relay.md, owned sections, caller workflows, labels
+pnpm relay link       # in a repo (bin/relay link from elsewhere): digests, summary, relay.md, owned sections, workflows, labels; idempotent
 pnpm relay brief 42   # the memory envelope a lane would get for issue 42
 pnpm --filter @relay/web dev                      # mock data
 RELAY_DATA=db pnpm --filter @relay/web dev        # the CLI's PGlite file (stop the CLI first; PGlite is single-process)
@@ -48,7 +48,7 @@ If a user asks you to set up relay, do these steps and stop at anything that nee
 1. `git clone <repo> && cd relay && pnpm install`
 2. `pnpm relay doctor` — reports which CLIs are installed and logged in (`claude`, `codex` or `fx`, `grok`, `gh`), Node version, and database reachability. Tell the user what is missing; logins are theirs to do.
 3. `pnpm relay setup` — prints every file it would touch in `~/.claude`, `~/.codex`, `~/.grok` (hooks and the memory MCP server) and writes nothing; run `pnpm relay setup --yes` only if the user said so. Run it through `pnpm` so the hooks record the pinned Node 24.
-4. In each repo they want managed: `pnpm --dir <relay checkout> relay link` — registers the project, writes `relay.md`, adds the owned section to `AGENTS.md`/`CLAUDE.md`, the GitHub labels (`gh`), and the caller workflows.
+4. In each repo they want managed: `cd <repo> && <relay checkout>/bin/relay link`. This is the only per-repo step and runs the whole pipeline: registers the project and hashes its files, digests the changed files and writes the project summary (Sonnet lane, needs the `claude` login; `--no-digest` skips it, `--max-files` caps it at 400 by default), writes `relay.md` from that summary, adds the owned section to `AGENTS.md`/`CLAUDE.md`, the GitHub labels (`gh`), and the caller workflows. It prints every stage and ends with one cost line. Re-running is safe and makes no model calls unless files changed; `--refresh` rewrites the summary. Do not run `relay project digest` or `relay project summarize` by hand.
 5. Optional, for runners: follow `docs/RUNNERS.md` to register a self-hosted GitHub Actions runner on a machine that holds the logins.
 6. Optional, for a model the user will prompt (image/video models): `pnpm relay onboard <provider/model>`.
 

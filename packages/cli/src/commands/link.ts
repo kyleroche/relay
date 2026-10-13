@@ -1,13 +1,15 @@
 /**
- * `relay link`: register the cwd repo as a project, write relay.md and the owned sections, install the caller
- * workflows, and create the lane labels. Re-runnable; --refresh re-renders relay.md and the workflows, --force
- * overwrites a locally edited owned section.
+ * `relay link`: the one per-repo step. It installs the owned sections in AGENTS.md/CLAUDE.md, registers the cwd repo
+ * as a project and hashes its files, digests the files whose content changed (Sonnet lane, batches), writes the
+ * project summary, renders relay.md from that summary, and installs the caller workflows and the lane labels.
+ * Idempotent: a second run with nothing changed makes zero model calls. --refresh re-digests stale files and rewrites
+ * the summary and the workflows; --no-digest skips the model steps; --force overwrites a locally edited owned section.
  */
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { installOwnedSection, invalidateBriefCache, renderRulesFile, repo, registerProject } from "@relay/core";
+import { digestProject, emptyUsage, formatUsage, installOwnedSection, invalidateBriefCache, renderRulesFile, repo, registerProject, summarizeProject } from "@relay/core";
 import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady, RELAY_ROOT } from "./_common.ts";
 
 const TEMPLATES = join(RELAY_ROOT, "packages", "cli", "templates");
@@ -19,18 +21,32 @@ const LABELS: Array<{ name: string; color: string; description: string }> = [
   { name: "deliverable:asset", color: "7057FF", description: "relay: the result is a media asset, not code" },
 ];
 
+interface LinkOptions {
+  repo?: string;
+  project?: string;
+  refresh?: boolean;
+  force?: boolean;
+  digest: boolean;
+  maxFiles: string;
+  labels: boolean;
+  workflows: boolean;
+  cwd?: string;
+}
+
 export function registerLink(program: Command): void {
   program
     .command("link")
-    .description("Register this repo as a project: relay.md, owned sections in AGENTS.md/CLAUDE.md, caller workflows, lane labels")
+    .description("Link this repo: register it, digest changed files, write the project summary and relay.md, install the owned sections, caller workflows and lane labels")
     .option("--repo <owner/name>", "override the origin remote")
     .option("--project <slug>", "project slug (default: the repo name)")
-    .option("--refresh", "re-render relay.md and rewrite the caller workflows")
+    .option("--refresh", "re-digest stale files and rewrite the summary, relay.md and the caller workflows")
     .option("--force", "overwrite a locally edited owned section")
+    .option("--no-digest", "skip the model steps (file digests and the project summary)")
+    .option("--max-files <n>", "max files to digest in this run", "400")
     .option("--no-labels", "skip gh label creation")
     .option("--no-workflows", "skip the caller workflows")
     .option("--cwd <path>")
-    .action(async (o: { repo?: string; project?: string; refresh?: boolean; force?: boolean; labels: boolean; workflows: boolean; cwd?: string }) => {
+    .action(async (o: LinkOptions) => {
       const cwd = o.cwd ?? process.cwd();
       const root = gitRoot(cwd);
       if (!root) throw new Error(`${cwd} is not inside a git repository`);
@@ -38,23 +54,61 @@ export function registerLink(program: Command): void {
       if (!repoName) throw new Error("no origin remote; pass --repo owner/name");
       if (!/^[\w.-]+\/[\w.-]+$/.test(repoName)) throw new Error(`--repo must be owner/name (got ${repoName})`);
       const slug = o.project ?? repoName.split("/")[1]!;
+      const maxFiles = Math.max(0, Number(o.maxFiles) || 0);
+      let failed = false;
       const h = await openReady();
       try {
+        // the cost line is read back from the ledger: every step.usage event newer than the project's latest one now
+        const latest = (await repo.listEvents(h.db, { project: slug, limit: 1 }))[0]?.ts ?? "1970-01-01T00:00:00Z";
+
+        // 1. owned sections first, so a freshly created AGENTS.md is hashed and digested in the same run
+        for (const s of installOwnedSection(root, { project: slug, repo: repoName, ...(o.force ? { force: true } : {}) })) log(`sections: ${s.file} ${s.action}${s.detail ? ` (${s.detail})` : ""}`);
+
+        // 2. register + hash
         const existed = !!(await repo.getProject(h.db, slug));
-        const r = await registerProject(h, { slug, path: root }, log);
+        const r = await registerProject(h, { slug, path: root });
         await repo.upsertProject(h.db, { slug, repo: repoName });
-        log(`project ${slug} (${repoName}) ${existed ? "refreshed" : "registered"}: ${r.files} files hashed`);
+        log(`register: ${slug} (${repoName}) ${existed ? "refreshed" : "registered"}, ${r.files} files hashed${r.removed ? `, ${r.removed} removed` : ""}`);
 
-        // relay.md: regenerate when missing or on --refresh
+        // 3. digests, 4. summary
+        if (o.digest) {
+          const stale = (await repo.listFileDigests(h.db, slug, { staleOnly: true })).length;
+          let digested = 0;
+          if (!stale) log("digest: every file is current");
+          else {
+            log(`digest: ${Math.min(stale, maxFiles)} of ${stale} stale files, Sonnet lane in batches…`);
+            const d = await digestProject(h, slug, { maxFiles, log });
+            digested = d.digested;
+            const left = stale - Math.min(stale, maxFiles);
+            log(`digest: ${d.digested} files digested in ${d.calls} calls${d.retried ? `, ${d.retried} re-requested` : ""}${d.failed.length ? `, ${d.failed.length} failed` : ""}${left ? `; ${left} left for the next run (--max-files)` : ""}`);
+          }
+          const project = await repo.getProject(h.db, slug);
+          if (!o.refresh && project?.summary && !digested) log("summary: current");
+          else {
+            log(`summary: ${project?.summary ? "rewriting" : "writing"} the project brief…`);
+            try {
+              const s = await summarizeProject(h, slug, log);
+              log(`summary: ${s.tokens} tokens in ${s.calls} call${s.calls === 1 ? "" : "s"}`);
+            } catch (e) {
+              failed = true;
+              log(`summary: FAILED. ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+        } else log("digest, summary: skipped (--no-digest)");
+
+        // 5. relay.md from the real summary; rewritten whenever its content changed
+        const project = await repo.getProject(h.db, slug);
         const rulesPath = join(root, "relay.md");
-        if (!existsSync(rulesPath) || o.refresh) {
-          const rules = await renderRulesFile(h.db, slug, { repo: repoName });
+        const rules = await renderRulesFile(h.db, slug, { repo: repoName });
+        const prev = existsSync(rulesPath) ? readFileSync(rulesPath, "utf8") : undefined;
+        const noSummary = project?.summary ? "" : "; no project summary yet, run relay link --refresh once claude is logged in";
+        if (prev === rules.text) log(`relay.md: unchanged (${rules.tokens} tokens${noSummary})`);
+        else {
           writeFileSync(rulesPath, rules.text);
-          log(`wrote relay.md (${rules.tokens} tokens)`);
-        } else log("relay.md exists; --refresh re-renders it");
+          log(`relay.md: ${prev === undefined ? "written" : "updated"} (${rules.tokens} tokens${noSummary})`);
+        }
 
-        for (const s of installOwnedSection(root, { project: slug, repo: repoName, ...(o.force ? { force: true } : {}) })) log(`${s.file}: ${s.action}${s.detail ? ` (${s.detail})` : ""}`);
-
+        // 6. caller workflows
         if (o.workflows) {
           const relayRepo = h.cfg.relayRepo ?? `${repoName.split("/")[0]}/relay`;
           const relayRef = h.cfg.relayRef ?? "main";
@@ -64,31 +118,41 @@ export function registerLink(program: Command): void {
             const dest = join(dir, w);
             const content = readFileSync(join(TEMPLATES, w), "utf8").replaceAll("__RELAY_REPO__", relayRepo).replaceAll("__RELAY_REF__", relayRef);
             if (existsSync(dest) && !o.refresh) {
-              log(`${w}: exists (--refresh rewrites it)`);
+              log(`workflows: ${w} exists (--refresh rewrites it)`);
               continue;
             }
             const same = existsSync(dest) && readFileSync(dest, "utf8") === content;
             if (!same) writeFileSync(dest, content);
-            log(`${w}: ${same ? "unchanged" : "written"} (uses ${relayRepo}@${relayRef})`);
+            log(`workflows: ${w} ${same ? "unchanged" : "written"} (uses ${relayRepo}@${relayRef})`);
           }
         }
 
+        // 7. lane labels
         if (o.labels) {
           const gh = onPath("gh");
-          if (!gh) log("gh not on PATH; create labels agent:claude|codex|grok and deliverable:asset by hand");
+          if (!gh) log("labels: gh not on PATH; create agent:claude|codex|grok and deliverable:asset by hand");
           else
             for (const l of LABELS) {
               try {
                 execFileSync(gh, ["label", "create", l.name, "--repo", repoName, "--color", l.color, "--description", l.description, "--force"], { stdio: ["ignore", "ignore", "pipe"], timeout: 20_000 });
-                log(`label ${l.name}: ok`);
+                log(`labels: ${l.name} ok`);
               } catch (e) {
-                log(`label ${l.name}: failed (${(e instanceof Error ? e.message : String(e)).split("\n")[0]?.slice(0, 100)})`);
+                log(`labels: ${l.name} failed (${(e instanceof Error ? e.message : String(e)).split("\n")[0]?.slice(0, 100)})`);
               }
             }
         }
 
         invalidateBriefCache(slug);
-        await repo.writeEvent(h.db, { kind: "project.linked", actor: humanActor(), project: slug, repo: repoName, summary: `${repoName} linked at ${root}`, payload: { path: root, refresh: !!o.refresh } });
+        const usage = emptyUsage();
+        for (const e of await repo.listEvents(h.db, { project: slug, kind: "step.usage", after: latest, limit: 5000 })) {
+          usage.calls++;
+          usage.tokensIn += e.tokens_in + e.cache_read + e.cache_write;
+          usage.tokensOut += e.tokens_out;
+          usage.costEquiv += e.cost_equiv;
+        }
+        await repo.writeEvent(h.db, { kind: "project.linked", actor: humanActor(), project: slug, repo: repoName, summary: `${repoName} linked at ${root}`, payload: { path: root, refresh: !!o.refresh, digest: o.digest, calls: usage.calls } });
+        log(`cost: ${formatUsage(usage)}`);
+        if (failed) process.exitCode = 1;
       } finally {
         await h.close();
       }

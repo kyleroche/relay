@@ -31,6 +31,11 @@ pnpm relay setup      # hooks + memory server into each CLI you have
 cd ~/code/some-repo && ~/relay/bin/relay link
 ```
 
+`relay link` is the only per-repo step: it registers the repo, digests its files and writes the project summary
+(Sonnet, a few cents), renders `relay.md` from that summary, and installs the owned sections, caller workflows and
+labels. It prints each stage and one cost line, and a second run with nothing changed makes no model calls.
+`--refresh` rewrites the summary after memory changes; `--no-digest` skips the model steps.
+
 ## Link your model accounts
 
 relay never asks for a token. Log in to each tool you own, on each machine that will run work:

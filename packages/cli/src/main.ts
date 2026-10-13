@@ -306,11 +306,11 @@ project
 project
   .command("summarize")
   .argument("<slug>")
-  .description("Write the ≤2K-token project summary from README/AGENTS files and the digest index")
+  .description("Write the ≤500-word project summary from README/AGENTS files and the digest index (relay link does this for you)")
   .action(async (slug: string) => {
     const h = await openHarness();
     try {
-      console.log(await summarizeProject(h, slug, log));
+      console.log((await summarizeProject(h, slug, log)).text);
     } finally {
       await h.close();
     }
