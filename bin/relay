@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
-# relay CLI shim: runs the TypeScript CLI with the caller's working directory intact.
-# `pnpm --dir <repo> relay …` changes cwd to the relay repo, which breaks `relay link`; use this instead.
+# relay CLI shim: runs the TypeScript CLI with the caller's working directory intact and a Node >= 24.
+# (`pnpm --dir <repo> relay …` changes cwd to the relay repo, which breaks `relay link`; use this instead.)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec "$ROOT/node_modules/.bin/tsx" "$ROOT/packages/cli/src/main.ts" "$@"
+pick_node() {
+  for candidate in "${RELAY_NODE:-}" "$(command -v node || true)" /opt/homebrew/opt/node@24/bin/node /usr/local/opt/node@24/bin/node "$HOME/.local/share/fnm/aliases/default/bin/node"; do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    major="$("$candidate" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+    if [ "$major" -ge 24 ]; then echo "$candidate"; return 0; fi
+  done
+  # pnpm may have downloaded one earlier
+  latest="$(ls -d "$HOME"/Library/pnpm/nodejs/24.* 2>/dev/null | sort -V | tail -1)"
+  if [ -n "$latest" ] && [ -x "$latest/bin/node" ]; then echo "$latest/bin/node"; return 0; fi
+  echo "relay needs Node 24 or newer (see .node-version); install it with your version manager or brew install node@24" >&2
+  exit 1
+}
+NODE="$(pick_node)"
+exec "$NODE" "$ROOT/node_modules/tsx/dist/cli.mjs" "$ROOT/packages/cli/src/main.ts" "$@"

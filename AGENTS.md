@@ -15,7 +15,7 @@ relay is an open-source harness that lets one person's coding-agent subscription
 ## Commands
 
 ```bash
-pnpm install          # Node 24 is pinned via .npmrc
+pnpm install          # Node 24+ required (.node-version); bin/relay finds one itself
 pnpm -r typecheck
 pnpm -r test          # vitest; DB tests run on PGlite, no server needed
 pnpm relay --help

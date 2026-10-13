@@ -24,7 +24,7 @@ Set up relay from https://github.com/<org>/relay following its AGENTS.md "Instal
 Or by hand:
 
 ```bash
-git clone https://github.com/<org>/relay && cd relay
+git clone https://github.com/<org>/relay && cd relay   # needs Node 24+ (.node-version) and pnpm
 pnpm install
 pnpm relay doctor     # what is installed, logged in, and reachable
 pnpm relay setup      # hooks + memory server into each CLI you have
