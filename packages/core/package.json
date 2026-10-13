@@ -15,10 +15,14 @@
     "@ai-sdk/gateway": "^4.0.0",
     "@electric-sql/pglite": "^0.5.9",
     "@electric-sql/pglite-pgvector": "0.0.10",
+    "@vercel/blob": "^2.8.1",
     "ai": "^7.0.111",
     "cheerio": "^1.2.0",
     "pg": "^8.23.1",
     "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "@types/pg": "^8.23.1",

@@ -3,3 +3,4 @@ export * from "./projects.ts";
 export * from "./guidance.ts";
 export * from "./memory.ts";
 export * from "./events.ts";
+export * from "./assets.ts";
