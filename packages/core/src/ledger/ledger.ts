@@ -1,6 +1,10 @@
-import { DatabaseSync } from "node:sqlite";
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+/**
+ * The ledger is not a table of its own: every model call (lanes and embeddings alike) is a `step.usage` event in
+ * the feed, and the `ledger` view selects them back out. This class is the thin adapter lane code records through,
+ * plus the Gateway list-price table that turns token counts into a cost equivalent.
+ */
+import type { Db } from "../db/client.ts";
+import { writeEvent, usageSummary, type EventRow, type UsageSummaryRow } from "../db/events.ts";
 
 export interface LedgerEntry {
   lane: string;
@@ -19,58 +23,39 @@ export interface LedgerEntry {
   note?: string;
 }
 
-export interface LedgerSummaryRow {
-  subscription: string;
-  calls: number;
-  tokens_in: number;
-  tokens_out: number;
-  cache_read: number;
-  cost_equiv: number;
-  avg_ctx: number;
-}
+export type LedgerSummaryRow = UsageSummaryRow;
 
-/** Append-only sqlite ledger (node:sqlite, no native build). Every model call, including embeddings, lands here with a Gateway-list-price cost equivalent. */
 export class Ledger {
-  private db: DatabaseSync;
-  constructor(path: string) {
-    if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA journal_mode = WAL");
-    this.db.exec(`CREATE TABLE IF NOT EXISTS calls (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-      lane TEXT NOT NULL, model TEXT NOT NULL, provider TEXT NOT NULL, subscription TEXT NOT NULL,
-      project TEXT, task TEXT, step INTEGER,
-      tokens_in INTEGER NOT NULL, tokens_out INTEGER NOT NULL, cache_read INTEGER DEFAULT 0, cache_write INTEGER DEFAULT 0,
-      cost_equiv REAL DEFAULT 0, duration_ms INTEGER NOT NULL, note TEXT
-    ); CREATE INDEX IF NOT EXISTS calls_ts ON calls(ts); CREATE INDEX IF NOT EXISTS calls_sub ON calls(subscription, ts);`);
-  }
+  constructor(private readonly db: Db) {}
 
-  record(e: LedgerEntry): void {
-    this.db
-      .prepare(
-        `INSERT INTO calls (lane, model, provider, subscription, project, task, step, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, note)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        e.lane, e.model, e.provider, e.subscription, e.project ?? null, e.task ?? null, e.step ?? null,
-        e.tokens_in, e.tokens_out, e.cache_read ?? 0, e.cache_write ?? 0, e.cost_equiv ?? costEquiv(e), e.duration_ms, e.note ?? null,
-      );
+  /** Append one `step.usage` event. Cost defaults to the Gateway list-price equivalent for the model. */
+  async record(e: LedgerEntry): Promise<EventRow | undefined> {
+    const ctx = e.tokens_in + (e.cache_read ?? 0);
+    const payload: Record<string, unknown> = { provider: e.provider };
+    if (e.task) payload.task = e.task;
+    if (e.step !== undefined) payload.step = e.step;
+    if (e.note) payload.note = e.note;
+    return writeEvent(this.db, {
+      kind: "step.usage",
+      actor: `agent:${e.provider}`,
+      project: e.project ?? null,
+      lane: e.lane,
+      model: e.model,
+      subscription: e.subscription,
+      tokens_in: e.tokens_in,
+      tokens_out: e.tokens_out,
+      cache_read: e.cache_read ?? 0,
+      cache_write: e.cache_write ?? 0,
+      cost_equiv: e.cost_equiv ?? costEquiv(e),
+      duration_ms: e.duration_ms,
+      summary: e.note || `${e.lane} ${e.model}: ${ctx} in, ${e.tokens_out} out, ${e.duration_ms} ms`,
+      payload,
+    });
   }
 
   /** Per-subscription totals since an ISO timestamp, plus average input context per call (fresh + cache-read). */
-  summary(sinceIso: string): LedgerSummaryRow[] {
-    return this.db
-      .prepare(
-        `SELECT subscription, count(*) AS calls, sum(tokens_in) AS tokens_in, sum(tokens_out) AS tokens_out, sum(cache_read) AS cache_read,
-                sum(cost_equiv) AS cost_equiv, avg(tokens_in + cache_read) AS avg_ctx
-         FROM calls WHERE ts >= ? GROUP BY subscription ORDER BY subscription`,
-      )
-      .all(sinceIso) as unknown as LedgerSummaryRow[];
-  }
-
-  close(): void {
-    this.db.close();
+  summary(sinceIso: string): Promise<LedgerSummaryRow[]> {
+    return usageSummary(this.db, sinceIso);
   }
 }
 

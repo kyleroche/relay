@@ -15,7 +15,7 @@ export async function embedTexts(texts: string[], cfg: HarnessConfig, ledger?: L
     const t0 = Date.now();
     const r = await embedMany({ model, values });
     out.push(...r.embeddings);
-    ledger?.record({
+    await ledger?.record({
       lane: "embed",
       model: cfg.gateway.embeddingModel,
       provider: "gateway",

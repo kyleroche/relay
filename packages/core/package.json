@@ -13,13 +13,15 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@electric-sql/pglite": "^0.5.9",
+    "@electric-sql/pglite-pgvector": "0.0.10",
     "ai": "^7.0.111",
     "cheerio": "^1.2.0",
-    "falkordb": "^6.8.0",
+    "pg": "^8.23.1",
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "@types/pg": "^8.23.1",
     "domhandler": "^6.0.1"
   }
 }

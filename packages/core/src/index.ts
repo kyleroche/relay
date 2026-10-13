@@ -1,14 +1,14 @@
 export * from "./config.ts";
 export * from "./util.ts";
 export * from "./harness.ts";
-export * from "./graph/client.ts";
-export * from "./graph/schema.ts";
-export * as repo from "./graph/repo.ts";
+export { openDb, DbError, DEFAULT_PGLITE_FILE, type Db, type OpenDbOptions } from "./db/client.ts";
+export { migrate, currentVersion, loadMigrations, MIGRATIONS_DIR, type Migration } from "./db/migrate.ts";
+export * as repo from "./db/repo.ts";
 export * from "./onboard/index.ts";
 export * from "./onboard/registry.ts";
 export { isOfficial, extractDoc, fetchPage } from "./onboard/html.ts";
 export { chunkDocument } from "./onboard/chunk.ts";
 export { classifyChunk } from "./onboard/classify.ts";
-export { Ledger, costEquiv } from "./ledger/ledger.ts";
+export { Ledger, costEquiv, type LedgerEntry, type LedgerSummaryRow } from "./ledger/ledger.ts";
 export * from "./lanes/index.ts";
 export * from "./state/project.ts";

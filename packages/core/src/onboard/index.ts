@@ -1,7 +1,7 @@
 import type { HarnessConfig } from "../config.ts";
-import type { GraphClient } from "../graph/client.ts";
+import type { Db } from "../db/client.ts";
 import type { Ledger } from "../ledger/ledger.ts";
-import * as repo from "../graph/repo.ts";
+import * as repo from "../db/repo.ts";
 import { findModelSpec, findProviderSpec, providers, models } from "./registry.ts";
 import { crawlModelDocs } from "./crawl.ts";
 import { chunkDocument } from "./chunk.ts";
@@ -12,7 +12,7 @@ import { sha256, type Log, noopLog } from "../util.ts";
 
 export interface Harness {
   cfg: HarnessConfig;
-  graph: GraphClient;
+  db: Db;
   ledger?: Ledger;
 }
 
@@ -26,10 +26,10 @@ export interface OnboardReport {
   dropped: string[];
 }
 
-/** Seed Provider and Model nodes from the registry (idempotent). */
+/** Seed providers and models from the registry (idempotent). */
 export async function seedRegistry(h: Harness, log: Log = noopLog): Promise<void> {
-  for (const p of providers) await repo.upsertProvider(h.graph, { slug: p.slug, name: p.name, doc_domains: p.docDomains, skill_sources: p.skillSources });
-  for (const m of models) await repo.upsertModel(h.graph, { id: m.id, provider: m.provider, lanes: m.lanes, staleDays: h.cfg.staleDays });
+  for (const p of providers) await repo.upsertProvider(h.db, { slug: p.slug, name: p.name, doc_domains: p.docDomains, skill_sources: p.skillSources });
+  for (const m of models) await repo.upsertModel(h.db, { id: m.id, provider: m.provider, lanes: m.lanes, staleDays: h.cfg.staleDays });
   log(`seeded ${providers.length} providers, ${models.length} models`);
 }
 
@@ -42,7 +42,7 @@ export class NotOnboardedError extends Error {
 
 /** The gate. Throws unless the model's guidance is present and fresh. */
 export async function assertOnboarded(h: Harness, modelId: string): Promise<repo.ModelRow> {
-  const m = await repo.getModel(h.graph, modelId);
+  const m = await repo.getModel(h.db, modelId);
   if (!m) throw new NotOnboardedError(modelId, "unknown");
   if (!m.onboarded_at) throw new NotOnboardedError(modelId, "never");
   const ageDays = (Date.now() - Date.parse(m.onboarded_at)) / 86_400_000;
@@ -68,15 +68,15 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
   if (!spec) throw new Error(`no registry entry for ${modelId}; add it to onboard/registry.ts`);
   const pspec = findProviderSpec(spec.provider);
   if (!pspec) throw new Error(`no provider spec for ${spec.provider}`);
-  const provider = await repo.upsertProvider(h.graph, { slug: pspec.slug, name: pspec.name, doc_domains: pspec.docDomains, skill_sources: pspec.skillSources });
-  await repo.upsertModel(h.graph, { id: spec.id, provider: spec.provider, lanes: spec.lanes, staleDays: h.cfg.staleDays });
+  const provider = await repo.upsertProvider(h.db, { slug: pspec.slug, name: pspec.name, doc_domains: pspec.docDomains, skill_sources: pspec.skillSources });
+  await repo.upsertModel(h.db, { id: spec.id, provider: spec.provider, lanes: spec.lanes, staleDays: h.cfg.staleDays });
 
   // 1. official docs
   const { pages, dropped, thin } = await crawlModelDocs(spec, provider.doc_domains, log);
   // A thin fetch of a source that previously had content is treated as transient: keep its chunks, do not prune.
   const keptThin: string[] = [];
   for (const url of thin) {
-    const known = await repo.getSource(h.graph, url);
+    const known = await repo.getSource(h.db, url);
     if (known?.sha256) {
       keptThin.push(url);
       log(`thin fetch of previously good source, keeping ${known.title ?? url}`);
@@ -85,7 +85,7 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
   let changed = 0;
   const kw = spec.crawl.chunkKeywords?.map((k) => k.toLowerCase());
   for (const page of pages) {
-    const prev = await repo.touchSource(h.graph, { url: page.url, provider: spec.provider, title: page.title });
+    const prev = await repo.touchSource(h.db, { url: page.url, provider: spec.provider, title: page.title });
     if (prev === page.sha256 && !opts.force) {
       log(`unchanged: ${page.title}`);
       continue;
@@ -94,8 +94,8 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
     const chunks = chunkDocument(page.text, { sourceUrl: page.url, pageTitle: page.title })
       .filter((c) => pageRelevant || kw!.some((k) => (c.title + "\n" + c.text).toLowerCase().includes(k)))
       .map((c) => ({ ...c, kind: classifyChunk(c.title, c.text) }));
-    const n = await repo.replaceGuidance(h.graph, { modelId: spec.id, provider: spec.provider, sourceUrl: page.url, chunks });
-    await repo.finishSource(h.graph, page.etag ? { url: page.url, sha256: page.sha256, etag: page.etag } : { url: page.url, sha256: page.sha256 });
+    const n = await repo.replaceGuidance(h.db, { modelId: spec.id, provider: spec.provider, sourceUrl: page.url, chunks });
+    await repo.finishSource(h.db, page.etag ? { url: page.url, sha256: page.sha256, etag: page.etag } : { url: page.url, sha256: page.sha256 });
     changed++;
     log(`stored ${n} chunks: ${page.title}`);
   }
@@ -106,13 +106,13 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
   for (const s of spec.skills) {
     try {
       const k = await installWellKnownSkill({ ...s, provider: spec.provider, modelId: spec.id, skillsDir: h.cfg.skillsDir, docDomains: provider.doc_domains, log });
-      await repo.upsertSkill(h.graph, { name: k.name, model: spec.id, provider: spec.provider, install_path: k.installPath, version: k.version, sha256: k.sha256, source_url: k.sourceUrl });
-      const prev = await repo.touchSource(h.graph, { url: k.sourceUrl, provider: spec.provider, title: `skill:${k.name}` });
+      await repo.upsertSkill(h.db, { name: k.name, model: spec.id, provider: spec.provider, install_path: k.installPath, version: k.version, sha256: k.sha256, source_url: k.sourceUrl });
+      const prev = await repo.touchSource(h.db, { url: k.sourceUrl, provider: spec.provider, title: `skill:${k.name}` });
       const sha = sha256(k.skillMd);
       if (prev !== sha || opts.force) {
         const chunks = chunkDocument(k.skillMd, { sourceUrl: k.sourceUrl, pageTitle: `skill:${k.name}` }).map((c) => ({ ...c, kind: "skill" as const }));
-        await repo.replaceGuidance(h.graph, { modelId: spec.id, provider: spec.provider, sourceUrl: k.sourceUrl, chunks });
-        await repo.finishSource(h.graph, { url: k.sourceUrl, sha256: sha });
+        await repo.replaceGuidance(h.db, { modelId: spec.id, provider: spec.provider, sourceUrl: k.sourceUrl, chunks });
+        await repo.finishSource(h.db, { url: k.sourceUrl, sha256: sha });
         log(`stored ${chunks.length} skill chunks: ${k.name} v${k.version}`);
       }
       skills.push(`${k.name}@${k.version}`);
@@ -124,11 +124,11 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
 
   // 3. embeddings for anything not yet embedded
   let embedded = 0;
-  const pending = await repo.unembeddedGuidance(h.graph, spec.id);
+  const pending = await repo.unembeddedGuidance(h.db, spec.id);
   if (pending.length) {
     const vecs = await embedTexts(pending.map((p) => p.text), h.cfg, h.ledger, `model:${spec.id}`);
     if (vecs) {
-      await repo.setEmbeddings(h.graph, pending.map((p, i) => ({ id: p.id, vec: vecs[i]! })));
+      await repo.setEmbeddings(h.db, pending.map((p, i) => ({ id: p.id, vec: vecs[i]! })), spec.id);
       embedded = pending.length;
       log(`embedded ${embedded} chunks`);
     } else log(`no AI_GATEWAY_API_KEY: ${pending.length} chunks left un-embedded (full-text search still works)`);
@@ -136,11 +136,11 @@ export async function onboardModel(h: Harness, modelId: string, opts: { force?: 
 
   // sources that fell out of the crawl (renamed, deduped, removed) must not keep stale chunks
   const keep = [...pages.map((p) => p.url), ...skillSourceUrls, ...keptThin];
-  const pruned = await repo.pruneGuidance(h.graph, spec.id, keep);
+  const pruned = await repo.pruneGuidance(h.db, spec.id, keep);
   if (pruned) log(`pruned ${pruned} chunks from stale sources`);
 
-  const guidance = await repo.countGuidance(h.graph, spec.id);
-  await repo.markOnboarded(h.graph, spec.id, { guidance, skills: skills.length });
+  const guidance = await repo.countGuidance(h.db, spec.id);
+  await repo.markOnboarded(h.db, spec.id, { guidance, skills: skills.length });
   return { modelId: spec.id, pagesFetched: pages.length, pagesChanged: changed, guidance, embedded, skills, dropped };
 }
 
@@ -151,9 +151,9 @@ export async function retrieveGuidance(h: Harness, modelId: string, query: strin
   let hits: repo.GuidanceHit[] = [];
   if (h.cfg.gateway.apiKey) {
     const v = await embedTexts([query], h.cfg, h.ledger, "retrieve");
-    if (v) hits = await repo.vectorSearchGuidance(h.graph, modelId, v[0]!, k);
+    if (v) hits = await repo.vectorSearchGuidance(h.db, modelId, v[0]!, k);
   }
-  if (!hits.length) hits = await repo.textSearchGuidance(h.graph, modelId, query, k);
+  if (!hits.length) hits = await repo.textSearchGuidance(h.db, modelId, query, k);
   const out: repo.GuidanceHit[] = [];
   let used = 0;
   for (const hit of hits) {
