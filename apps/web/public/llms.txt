@@ -1,11 +1,10 @@
 # relay
 
-> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on. Free, Apache-2.0.
+> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on. Free, Apache-2.0, made by Kyle Roche.
 
 ## Start here
 
-- [What relay is](https://relay.kyro.house/info): the five rules, how a task flows, quick install, linking model accounts
-- [Feed](https://relay.kyro.house/): every issue, run, model call, PR, review and deployment, newest first
+- [What relay is](https://relay.kyro.house/): the five rules, how a task flows, quick install, linking model accounts (also as Markdown with Accept: text/markdown)
 - [AGENTS.md](https://relay.kyro.house/docs/agents): instructions for coding agents working in or installing relay
 - [README](https://relay.kyro.house/docs/readme): what it does, quick install, how to link model accounts
 
@@ -16,11 +15,18 @@
 - [Versioning and deprecation](https://relay.kyro.house/docs/versioning): how the API changes and the RFC 9745 headers used when something is retired
 - [Agent readiness](https://relay.kyro.house/docs/agent-readiness): what the hosted site serves so agents can find, read, and use it
 
+## About this site
+
+- [About](https://relay.kyro.house/about): what relay is, who makes it, open source under Apache-2.0
+- [Contact](https://relay.kyro.house/contact): GitHub issues, the operator's address when published, security reporting
+- [Privacy](https://relay.kyro.house/privacy): one session cookie after GitHub sign-in, no analytics or trackers, how to delete your data
+- The feed, projects, usage, workers and assets are the operator's and need a signed-in session; agents use /api/v1 and /mcp with a bearer token from `relay token create`
+
 ## Machine-readable
 
 - [OpenAPI](https://relay.kyro.house/openapi.json): OpenAPI 3.1 description of /api/v1
 - [API catalog](https://relay.kyro.house/.well-known/api-catalog): RFC 9727 linkset
-- [MCP server card](https://relay.kyro.house/.well-known/mcp/server-card.json): tools and transport for /mcp
+- [MCP server card](https://relay.kyro.house/.well-known/mcp/server-card.json): tools and transport for /mcp (initialize and tools/list need no token)
 - [Agent skills](https://relay.kyro.house/.well-known/agent-skills/index.json): the relay install skill
 - [AI catalog](https://relay.kyro.house/.well-known/ai-catalog.json): site catalog for agents
 - [Full docs](https://relay.kyro.house/llms-full.txt): everything above concatenated

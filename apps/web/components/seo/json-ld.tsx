@@ -1,4 +1,4 @@
-import { REPO_URL, SITE_URL } from "@/lib/data";
+import { AUTHOR, contactEmail, ISSUES_URL, LICENSE_URL, REPO_URL, SITE_URL } from "@/lib/site";
 
 export function softwareApplicationLd() {
   return {
@@ -11,14 +11,17 @@ export function softwareApplicationLd() {
     description:
       "An open-source harness that turns one person's coding-agent subscriptions (Claude Code, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did and what it cost.",
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
-    license: "https://www.apache.org/licenses/LICENSE-2.0",
+    license: LICENSE_URL,
     codeRepository: REPO_URL,
     softwareHelp: `${SITE_URL}/docs`,
     isAccessibleForFree: true,
+    author: { "@type": "Person", name: AUTHOR.name, url: AUTHOR.url },
   };
 }
 
+/** The project as an organization: support goes through GitHub issues, and by email when the deployment names one. */
 export function organizationLd() {
+  const email = contactEmail();
   return {
     "@context": "https://schema.org",
     "@type": "Organization",
@@ -26,6 +29,16 @@ export function organizationLd() {
     url: SITE_URL,
     logo: `${SITE_URL}/icon.svg`,
     sameAs: [REPO_URL],
+    founder: { "@type": "Person", name: AUTHOR.name, url: AUTHOR.url },
+    contactPoint: [
+      {
+        "@type": "ContactPoint",
+        contactType: "technical support",
+        url: ISSUES_URL,
+        ...(email ? { email } : {}),
+        availableLanguage: "English",
+      },
+    ],
   };
 }
 

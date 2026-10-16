@@ -2,15 +2,17 @@
  * Which requests need a signed-in viewer. One pure function, used by `proxy.ts` and covered by tests; the table in
  * docs/SECURITY.md ("Signing in to the web app") is the human-readable copy of what is below.
  *
- * Public without a session: the agent-readiness surface (info, docs, well-known files, OpenAPI, llms.txt, the install
- * skill), the sign-in flow itself, the endpoints that carry their own authentication (/mcp and /api/v1 bearer tokens,
- * webhook and cron secrets, signed asset URLs), and anonymous /api/v1 reads when the deploy enables public read.
- * The app's own pages — the feed, projects, usage, workers, the asset pages, the internal /api/feed and /api/meters
- * routes — and /api/v1 calls without a bearer need a session. Paths that are neither fall through so Next.js answers
- * 404: agents and scanners must see a real not-found, never a redirect to sign-in (docs/AGENT-READINESS.md).
+ * Public without a session: the homepage (the public landing for anonymous visitors, the feed for a signed-in one;
+ * `lib/negotiate.ts` decides which), the agent-readiness surface (info, about, contact, privacy, docs, well-known
+ * files, OpenAPI, llms.txt, the install skill), the sign-in flow itself, the endpoints that carry their own
+ * authentication (/mcp and /api/v1 bearer tokens, webhook and cron secrets, signed asset URLs), and anonymous /api/v1
+ * reads when the deploy enables public read. The app's own pages — projects, usage, workers, the asset pages, the
+ * internal /api/feed and /api/meters routes — and /api/v1 calls without a bearer need a session. Paths that are
+ * neither are `unknown`: they fall through so Next.js answers 404. Agents and scanners must see a real not-found,
+ * never a redirect to sign-in (docs/AGENT-READINESS.md).
  */
 
-export type Access = "public" | "session";
+export type Access = "public" | "session" | "unknown";
 
 export interface AccessInput {
   /** The request carries an `Authorization: Bearer` header; the route's own token rules then apply. */
@@ -21,7 +23,11 @@ export interface AccessInput {
 }
 
 const PUBLIC_EXACT = new Set([
+  "/",
   "/info",
+  "/about",
+  "/contact",
+  "/privacy",
   "/docs",
   "/sign-in",
   "/api/v1/info",
@@ -54,8 +60,8 @@ const PUBLIC_PREFIXES = [
 const PUBLIC_PATTERNS = [/^\/llms[^/]*\.txt$/, /^\/manifest[^/]*$/];
 
 /** The signed-in surface. Add a page here when you add one; anything not listed is a 404, not a redirect. */
-const SESSION_EXACT = new Set(["/", "/projects", "/usage", "/workers", "/assets", "/api/feed", "/api/meters"]);
-const SESSION_PREFIXES = ["/projects/", "/assets/"];
+const SESSION_EXACT = new Set(["/projects", "/usage", "/workers", "/assets", "/api/feed", "/api/meters"]);
+const SESSION_PREFIXES = ["/projects/", "/assets/", "/api/assets/mock/"];
 
 /** True for the paths whose denial is a problem+json 401 rather than a redirect to /sign-in. */
 export function isApiPath(pathname: string): boolean {
@@ -74,7 +80,7 @@ export function classifyRoute(pathname: string, input: AccessInput): Access {
     return "session";
   }
   if (SESSION_EXACT.has(path) || SESSION_PREFIXES.some((p) => path.startsWith(p))) return "session";
-  return "public";
+  return "unknown";
 }
 
 function normalize(pathname: string): string {

@@ -5,9 +5,13 @@ import { dataMode, publicReadEnabled } from "../lib/mode.ts";
 const anon = { hasBearer: false, publicRead: false };
 
 describe("classifyRoute", () => {
-  it("leaves the agent-readiness surface and the sign-in flow public", () => {
+  it("leaves the homepage, the trust pages, the agent-readiness surface and the sign-in flow public", () => {
     for (const p of [
+      "/",
       "/info",
+      "/about",
+      "/contact",
+      "/privacy",
       "/docs",
       "/docs/api",
       "/docs/agent-readiness",
@@ -22,7 +26,7 @@ describe("classifyRoute", () => {
       "/.well-known/ai-catalog.json",
       "/.well-known/agent-skills/index.json",
       "/.well-known/mcp/server-card.json",
-      "/.well-known/oauth-protected-resource",
+      "/.well-known/api-catalog",
       "/server.json",
       "/robots.txt",
       "/sitemap.xml",
@@ -45,9 +49,15 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/api/feed", "/api/meters", "/api/assets/mock/abc", "/anything-else"]) {
+    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
+  });
+
+  it("classifies / as public for everyone; the page itself picks the feed or the landing", () => {
+    expect(classifyRoute("/", anon)).toBe("public");
+    expect(classifyRoute("/", { hasBearer: false, publicRead: true })).toBe("public");
+    expect(classifyRoute("/", { hasBearer: true, publicRead: false })).toBe("public");
   });
 
   it("lets /api/v1 through with a bearer and gates it otherwise", () => {
@@ -63,7 +73,7 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/api/v1/feed", pub)).toBe("public");
     expect(classifyRoute("/api/v1/projects/relay", { ...pub, method: "HEAD" })).toBe("public");
     expect(classifyRoute("/api/v1/assets", { ...pub, method: "POST" })).toBe("session");
-    expect(classifyRoute("/", pub)).toBe("session");
+    expect(classifyRoute("/projects", pub)).toBe("session");
     expect(classifyRoute("/api/feed", pub)).toBe("session");
   });
 
@@ -71,10 +81,13 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/info/", anon)).toBe("public");
     expect(classifyRoute("//info", anon)).toBe("public");
     expect(classifyRoute("/docs//api", anon)).toBe("public");
-    expect(classifyRoute("/information", anon)).toBe("session");
-    expect(classifyRoute("/infoX", anon)).toBe("session");
-    expect(classifyRoute("/skillsX", anon)).toBe("session");
-    expect(classifyRoute("/mcp/other", anon)).toBe("session");
+    expect(classifyRoute("/projects/", anon)).toBe("session");
+    expect(classifyRoute("//assets", anon)).toBe("session");
+    expect(classifyRoute("/information", anon)).toBe("unknown");
+    expect(classifyRoute("/infoX", anon)).toBe("unknown");
+    expect(classifyRoute("/skillsX", anon)).toBe("unknown");
+    expect(classifyRoute("/mcp/other", anon)).toBe("unknown");
+    expect(classifyRoute("/aboutus", anon)).toBe("unknown");
   });
 
   it("names the API paths that get problem+json instead of a redirect", () => {
@@ -117,9 +130,11 @@ describe("mode flags", () => {
 });
 
 describe("unknown paths", () => {
-  it("fall through to a 404 rather than a sign-in redirect", () => {
-    expect(classifyRoute("/nope", { hasBearer: false, publicRead: false })).toBe("public");
-    expect(classifyRoute("/projects/x/does-not-matter", { hasBearer: false, publicRead: false })).toBe("session");
-    expect(classifyRoute("/usage", { hasBearer: false, publicRead: false })).toBe("session");
+  it("are neither public nor protected: they fall through to a 404 rather than a sign-in redirect", () => {
+    expect(classifyRoute("/nope", anon)).toBe("unknown");
+    expect(classifyRoute("/anything-else/deeper", anon)).toBe("unknown");
+    expect(classifyRoute("/.well-known/missing", anon)).toBe("public"); // Next still answers 404; the prefix is public
+    expect(classifyRoute("/projects/x/does-not-matter", anon)).toBe("session");
+    expect(classifyRoute("/usage", anon)).toBe("session");
   });
 });

@@ -40,7 +40,8 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `RELAY_MEMORY_TOKEN` | you generate it | one shared bearer token that grants every scope at `/mcp` and `/api/v1` |
 | `RELAY_API_TOKENS` | optional, `token:scope,scope;token2:scope` | static scoped tokens for deployments without the `tokens` table |
 | `RELAY_DATA` | `db` or `mock` | data mode; unset means `db` when `DATABASE_URL` is set, else `mock` |
-| `RELAY_PUBLIC_READ` | `1` or `0` | whether `/api/v1` reads and the public MCP tools answer without a token (default: on in mock mode only) |
+| `RELAY_PUBLIC_READ` | `1` or `0` | whether `/api/v1` reads and the MCP feed/project read tools answer without a token (default: on in mock mode only); `relay_get_info`, `relay_get_methodology`, `initialize` and `tools/list` are always public |
+| `RELAY_CONTACT_EMAIL` | optional, an address you answer | published on `/contact` and in the Organization JSON-LD `contactPoint`; unset means the site names no address and points at GitHub issues |
 | `BLOB_READ_WRITE_TOKEN` | Vercel → Storage → Blob (private store) | asset bytes; unset means a local folder, which does not survive on Vercel |
 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | a second, public Blob store | `relay asset publish` and `POST /assets/{id}/publish` |
 | `RELAY_ASSET_SIGNING_KEY` | `openssl rand -hex 32` | signs local view/upload URLs and HTML bundle URLs |

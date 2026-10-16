@@ -94,8 +94,9 @@ The web app uses GitHub OAuth only, with no third-party auth library. Sign-in is
 in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities runners trust as issue senders. An
 empty list means nobody can sign in, and the sign-in page says so. A successful sign-in mints a signed session cookie
 scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they authenticate
-with scoped bearer tokens from `relay token create`. Public read of the feed is off in production; the info page, the
-docs, the methodology, and the install skill stay public.
+with scoped bearer tokens from `relay token create`; there is no OAuth authorization server for tokens and no
+self-serve sign-up. Public read of the feed is off in production; the landing, the trust pages, the docs, the
+methodology, and the install skill stay public.
 
 Needed in the environment: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `RELAY_SESSION_SECRET`,
 `RELAY_ALLOWED_USERS`. `docs/HOSTING.md` has the OAuth app setup.
@@ -132,23 +133,24 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Public without a session | Why |
 |---|---|
-| `/info`, `/docs`, `/docs/*`, `/api/markdown` | the public overview and the docs, HTML and Markdown |
+| `/` | the public landing for an anonymous visitor; the feed for a signed-in viewer (`apps/web/lib/negotiate.ts` decides, the page renders accordingly) |
+| `/info`, `/about`, `/contact`, `/privacy`, `/docs`, `/docs/*`, `/api/markdown` | the public overview, the trust pages and the docs, HTML and Markdown |
 | `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/*`, `/server.json`, `/robots.txt`, `/sitemap.xml`, `/manifest*`, `/skills/*` | the agent-readiness surface |
 | `/sign-in`, `/auth/*` | the sign-in flow itself |
 | `/api/v1/info` | the API's own description |
 | `/api/v1/*` with an `Authorization: Bearer` header | the token's scopes decide (`apps/web/lib/auth.ts`) |
 | `/api/v1/*` `GET` without a bearer when `RELAY_PUBLIC_READ=1` | anonymous read, limited to the public read scopes (`feed:read`, `memory:read`); off by default outside mock mode |
-| `/mcp` | its own bearer rules, and the public read tools when `RELAY_PUBLIC_READ=1` |
+| `/mcp` | its own bearer rules: anyone can `initialize`, `tools/list` and call `relay_get_info` and `relay_get_methodology`; the feed and project read tools answer anonymously when `RELAY_PUBLIC_READ=1`; every other tool needs a bearer with the scope and otherwise returns a tool error naming it |
 | `/api/webhooks/*`, `/api/cron/*` | authenticated by `GITHUB_WEBHOOK_SECRET`, `VERCEL_WEBHOOK_SECRET`, `CRON_SECRET` |
 | `/api/assets/stream`, `/api/assets/bundle/*`, `/api/assets/upload` | the signed URL is the authentication |
 | `/_next/*`, `/icon.svg`, `/opengraph-image` | static output |
 
 | Session required | |
 |---|---|
-| `/` (the feed), `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*` | the app pages |
-| `/api/feed`, `/api/meters` | the pages' internal polling routes |
+| `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*` | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |
-| anything not listed as public | protected by default |
+| anything not listed | neither: Next answers 404 (Markdown when `Accept: text/markdown`), never a redirect to sign-in, so agents and scanners see a real not-found |
 
 In mock mode (`RELAY_DATA=mock`, or no `DATABASE_URL` with `RELAY_DATA` unset) there is no sign-in: every request
 runs as the fake viewer `human:demo`, the header says "demo mode", and `RELAY_REVIEWER` may rename that actor. The

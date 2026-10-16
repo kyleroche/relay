@@ -1,103 +1,95 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { classifyRoute, isApiPath } from "@/lib/access";
 import { dataMode, publicReadEnabled } from "@/lib/mode";
+import { hasMarkdownMirror, homeDecision, MARKDOWN_PATH_HEADER, negotiateFormat, type Format } from "@/lib/negotiate";
 import { SESSION_COOKIE, verifySession } from "@/lib/session-token";
 
 /**
- * Two jobs, in this order:
+ * Three jobs, in this order:
  *
- * 1. Sign-in gate. `classifyRoute` (lib/access.ts) says which paths are public; everything else needs a valid
+ * 1. The homepage. `/` is the public landing for anonymous visitors and the feed for a signed-in viewer (and for
+ *    everyone in mock mode, which has no sign-in). The landing negotiates Markdown like the other public pages; the
+ *    feed is an app page and always HTML. `homeDecision` (lib/negotiate.ts) makes the call.
+ *
+ * 2. Content negotiation for the pages with Markdown mirrors (/info, /about, /contact, /privacy, /docs, /docs/*):
+ *    text/markdown preferred over text/html -> rewrite to /api/markdown. Nothing acceptable -> 406. Every response
+ *    carries Vary: Accept. Unknown paths get the same treatment so an agent that asked for Markdown gets a Markdown
+ *    404 body from /api/markdown instead of the HTML not-found page.
+ *
+ * 3. Sign-in gate. `classifyRoute` (lib/access.ts) says which paths are public; the session pages need a valid
  *    `relay_session` cookie (lib/session-token.ts). Pages without one redirect to /sign-in?next=<path>; API paths
- *    answer 401 as problem+json. Mock mode has no sign-in: every request passes with the fake demo session that
- *    `getSession()` returns.
- *
- * 2. Content negotiation for the pages that have Markdown mirrors (/info, /docs, /docs/*): text/markdown preferred
- *    over text/html -> rewrite to /api/markdown. Nothing acceptable -> 406. Every response carries Vary: Accept.
+ *    answer 401 as problem+json. Unknown paths fall through to Next's 404.
  */
 
-const NEGOTIATED = /^\/(info|docs)(\/.*)?$/;
-
-interface Range {
-  type: string;
-  q: number;
+function markdownRewrite(req: NextRequest, vary: string): NextResponse {
+  const url = req.nextUrl.clone();
+  url.pathname = "/api/markdown";
+  url.search = "";
+  url.searchParams.set("path", req.nextUrl.pathname);
+  const headers = new Headers(req.headers);
+  headers.set(MARKDOWN_PATH_HEADER, req.nextUrl.pathname);
+  const res = NextResponse.rewrite(url, { request: { headers } });
+  res.headers.set("vary", vary);
+  return res;
 }
 
-function parseAccept(header: string): Range[] {
-  return header
-    .split(",")
-    .map((part) => {
-      const [type = "*/*", ...params] = part.trim().split(";");
-      let q = 1;
-      for (const p of params) {
-        const [k, v] = p.trim().split("=");
-        if (k === "q" && v) q = Number.parseFloat(v) || 0;
-      }
-      return { type: type.trim().toLowerCase(), q };
-    })
-    .filter((r) => r.type.length > 0);
+function notAcceptable(pathname: string, vary: string): NextResponse {
+  return new NextResponse(
+    JSON.stringify({ type: "about:blank", title: "Not Acceptable", status: 406, detail: "This resource is available as text/html or text/markdown.", instance: pathname }),
+    { status: 406, headers: { "content-type": "application/problem+json; charset=utf-8", vary } },
+  );
 }
 
-function quality(ranges: Range[], mediaType: string): number {
-  const [major] = mediaType.split("/");
-  let best = 0;
-  let specificity = -1;
-  for (const r of ranges) {
-    let s = -1;
-    if (r.type === mediaType) s = 2;
-    else if (r.type === `${major}/*`) s = 1;
-    else if (r.type === "*/*") s = 0;
-    if (s > specificity) {
-      specificity = s;
-      best = r.q;
-    }
-  }
-  return best;
-}
-
-function negotiate(req: NextRequest): NextResponse {
+/** Serve a negotiated page in the chosen format; HTML goes on to the page itself with `Vary` set. */
+function serve(req: NextRequest, format: Format, vary = "Accept"): NextResponse {
   if (req.method !== "GET" && req.method !== "HEAD") return NextResponse.next();
-  const { pathname } = req.nextUrl;
-  const ranges = parseAccept(req.headers.get("accept") ?? "*/*");
-  const md = quality(ranges, "text/markdown");
-  const html = Math.max(quality(ranges, "text/html"), quality(ranges, "application/xhtml+xml"));
-
-  if (md > 0 && md > html) {
-    const url = req.nextUrl.clone();
-    url.pathname = "/api/markdown";
-    url.search = "";
-    url.searchParams.set("path", pathname);
-    const res = NextResponse.rewrite(url);
-    res.headers.set("vary", "Accept");
-    return res;
-  }
-  if (html === 0 && md === 0) {
-    return new NextResponse(
-      JSON.stringify({ type: "about:blank", title: "Not Acceptable", status: 406, detail: "This resource is available as text/html or text/markdown.", instance: pathname }),
-      { status: 406, headers: { "content-type": "application/problem+json; charset=utf-8", vary: "Accept" } },
-    );
-  }
+  if (format === "markdown") return markdownRewrite(req, vary);
+  if (format === "none") return notAcceptable(req.nextUrl.pathname, vary);
   const res = NextResponse.next();
-  res.headers.set("vary", "Accept");
+  res.headers.set("vary", vary);
   return res;
 }
 
 /** Let the request through, telling `requireSession()` which path it is for. */
-function pass(req: NextRequest): NextResponse {
+function pass(req: NextRequest, vary?: string): NextResponse {
   const headers = new Headers(req.headers);
   headers.set("x-relay-path", `${req.nextUrl.pathname}${req.nextUrl.search}`);
-  return NextResponse.next({ request: { headers } });
+  const res = NextResponse.next({ request: { headers } });
+  if (vary) res.headers.set("vary", vary);
+  return res;
+}
+
+function readSession(req: NextRequest) {
+  return verifySession(req.cookies.get(SESSION_COOKIE)?.value, process.env.RELAY_SESSION_SECRET);
 }
 
 export default async function proxy(req: NextRequest): Promise<NextResponse> {
   const { pathname, search } = req.nextUrl;
-  if (NEGOTIATED.test(pathname)) return negotiate(req);
+  const mock = dataMode() === "mock";
+  const accept = req.headers.get("accept");
+
+  if (pathname === "/") {
+    const signedIn = mock ? true : (await readSession(req)) !== null;
+    const decision = homeDecision({ signedIn, mock, accept });
+    // the response depends on the cookie as well as on Accept
+    if (decision.view === "feed") return pass(req, "Accept, Cookie");
+    return serve(req, decision.format, "Accept, Cookie");
+  }
+  if (hasMarkdownMirror(pathname)) return serve(req, negotiateFormat(accept));
 
   const hasBearer = /^Bearer\s+\S/i.test(req.headers.get("authorization") ?? "");
   const access = classifyRoute(pathname, { hasBearer, publicRead: publicReadEnabled(), method: req.method });
+  if (access === "unknown") {
+    // Next answers 404; an agent that prefers Markdown gets the Markdown error body instead of the HTML page.
+    if ((req.method === "GET" || req.method === "HEAD") && negotiateFormat(accept) === "markdown") return markdownRewrite(req, "Accept");
+    const res = NextResponse.next();
+    res.headers.set("vary", "Accept");
+    return res;
+  }
   if (access === "public") return NextResponse.next();
-  if (dataMode() === "mock") return pass(req);
+  if (mock) return pass(req);
 
-  const session = await verifySession(req.cookies.get(SESSION_COOKIE)?.value, process.env.RELAY_SESSION_SECRET);
+  const session = await readSession(req);
   if (session) return pass(req);
 
   if (isApiPath(pathname)) {
@@ -114,7 +106,7 @@ export default async function proxy(req: NextRequest): Promise<NextResponse> {
         headers: {
           "content-type": "application/problem+json; charset=utf-8",
           "cache-control": "no-store",
-          "WWW-Authenticate": `Bearer realm="relay", resource_metadata="${req.nextUrl.origin}/.well-known/oauth-protected-resource"`,
+          "WWW-Authenticate": `Bearer realm="relay"`,
           // the readiness contract wants rate-limit headers on every API response, including refusals
           "RateLimit-Policy": '"default";q=60;w=60',
           RateLimit: '"default";r=60;t=60',

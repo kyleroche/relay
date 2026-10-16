@@ -48,7 +48,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
     <html lang="en" suppressHydrationWarning className={`${GeistSans.variable} ${GeistMono.variable}`}>
       <head>
         <link rel="ai-catalog" href="/.well-known/ai-catalog.json" />
-        <link rel="alternate" type="text/markdown" href="/info" title="relay (Markdown)" />
+        {/* Pages with a Markdown mirror add their own <link rel="alternate" type="text/markdown"> through metadata.alternates.types. */}
       </head>
       <body className="min-h-dvh flex flex-col">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
