@@ -5,8 +5,9 @@
  * Public without a session: the agent-readiness surface (info, docs, well-known files, OpenAPI, llms.txt, the install
  * skill), the sign-in flow itself, the endpoints that carry their own authentication (/mcp and /api/v1 bearer tokens,
  * webhook and cron secrets, signed asset URLs), and anonymous /api/v1 reads when the deploy enables public read.
- * Everything else — the feed, projects, usage, workers, the asset pages, the internal /api/feed and /api/meters
- * routes, and /api/v1 calls without a bearer — needs a session.
+ * The app's own pages — the feed, projects, usage, workers, the asset pages, the internal /api/feed and /api/meters
+ * routes — and /api/v1 calls without a bearer need a session. Paths that are neither fall through so Next.js answers
+ * 404: agents and scanners must see a real not-found, never a redirect to sign-in (docs/AGENT-READINESS.md).
  */
 
 export type Access = "public" | "session";
@@ -52,6 +53,10 @@ const PUBLIC_PREFIXES = [
 
 const PUBLIC_PATTERNS = [/^\/llms[^/]*\.txt$/, /^\/manifest[^/]*$/];
 
+/** The signed-in surface. Add a page here when you add one; anything not listed is a 404, not a redirect. */
+const SESSION_EXACT = new Set(["/", "/projects", "/usage", "/workers", "/assets", "/api/feed", "/api/meters"]);
+const SESSION_PREFIXES = ["/projects/", "/assets/"];
+
 /** True for the paths whose denial is a problem+json 401 rather than a redirect to /sign-in. */
 export function isApiPath(pathname: string): boolean {
   return pathname.startsWith("/api/") || pathname === "/mcp";
@@ -68,7 +73,8 @@ export function classifyRoute(pathname: string, input: AccessInput): Access {
     if (input.publicRead && (method === "GET" || method === "HEAD")) return "public";
     return "session";
   }
-  return "session";
+  if (SESSION_EXACT.has(path) || SESSION_PREFIXES.some((p) => path.startsWith(p))) return "session";
+  return "public";
 }
 
 function normalize(pathname: string): string {

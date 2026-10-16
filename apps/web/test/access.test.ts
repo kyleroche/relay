@@ -115,3 +115,11 @@ describe("mode flags", () => {
     expect(publicReadEnabled({ RELAY_PUBLIC_READ: "0" })).toBe(false);
   });
 });
+
+describe("unknown paths", () => {
+  it("fall through to a 404 rather than a sign-in redirect", () => {
+    expect(classifyRoute("/nope", { hasBearer: false, publicRead: false })).toBe("public");
+    expect(classifyRoute("/projects/x/does-not-matter", { hasBearer: false, publicRead: false })).toBe("session");
+    expect(classifyRoute("/usage", { hasBearer: false, publicRead: false })).toBe("session");
+  });
+});
