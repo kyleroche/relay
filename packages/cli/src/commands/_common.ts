@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, statSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { migrate, openHarness, readRulesState, relayHome, type OpenHarness } from "@relay/core";
+import { migrate, openHarness, readRulesState, relayHome, type OpenHarness, type OpenHarnessOptions } from "@relay/core";
 
 export const log = (m: string): void => console.error(`[relay] ${m}`);
 
@@ -78,14 +78,21 @@ export function resolveProject(opts: { cwd?: string; project?: string }): Projec
   return out;
 }
 
-/** Open the harness with the schema applied. */
-export async function openReady(): Promise<OpenHarness> {
-  const h = await openHarness();
-  await migrate(h.db);
+export const humanActor = (): string => `human:${process.env.RELAY_ACTOR ?? process.env.USER ?? "local"}`;
+
+/**
+ * Open the harness: `h.client` is the command surface (site mode talks to the hosted site, local mode to the
+ * database). The schema is applied whenever a real database was opened (always in local mode; in site mode only
+ * with `local: true`, which `relay link` uses for its digest cache).
+ */
+export async function openReady(opts: OpenHarnessOptions = {}): Promise<OpenHarness> {
+  const h = await openHarness(undefined, { actor: humanActor(), ...opts });
+  if (h.mode === "local" || opts.local) await migrate(h.db);
   return h;
 }
 
-export const humanActor = (): string => `human:${process.env.RELAY_ACTOR ?? process.env.USER ?? "local"}`;
+/** One line for command output: where this CLI's data lives. */
+export const whereNote = (h: OpenHarness): string => (h.mode === "site" ? `site ${h.client.site}` : h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`);
 
 /** Where hook-mode errors go instead of the session's stderr. */
 export const hooksLogPath = (): string => join(relayHome(), "cache", "hooks.log");

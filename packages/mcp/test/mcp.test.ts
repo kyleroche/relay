@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { openDb, migrate, repo, approxTokens, LocalStore, verifyLocalUploadUrl, type Db, type TokenScope } from "@relay/core";
+import { openDb, migrate, repo, approxTokens, LocalStore, TOKEN_SCOPES, verifyLocalUploadUrl, type Db, type TokenScope } from "@relay/core";
 import { createRelayServer, capText, grantedScopes, RESULT_TOKENS, TOOL_SCOPES, type RelayServerOptions } from "../src/server.ts";
 import { createMcpHandler } from "../src/http.ts";
 
@@ -49,6 +49,7 @@ describe("relay mcp tools", () => {
       "relay_asset_request_upload",
       "relay_brief",
       "relay_decide",
+      "relay_event_log",
       "relay_feed",
       "relay_get_feed",
       "relay_get_info",
@@ -58,6 +59,9 @@ describe("relay mcp tools", () => {
       "relay_prefer",
       "relay_project",
       "relay_recall",
+      "relay_task_create",
+      "relay_task_get",
+      "relay_task_list",
     ]);
     await client.close();
     await server.close();
@@ -192,7 +196,7 @@ describe("relay mcp tools", () => {
 
   it("grants scopes as documented", () => {
     const all = grantedScopes({ canWrite: true });
-    expect(all.size).toBe(6);
+    expect(all.size).toBe(TOKEN_SCOPES.length);
     expect([...grantedScopes({ canWrite: false })].sort()).toEqual(["feed:read", "memory:read"]);
     expect([...grantedScopes({ canWrite: false, scopes: [] })]).toEqual([]);
     expect([...grantedScopes({ canWrite: false, scopes: ["assets:write" as TokenScope], publicRead: true })].sort()).toEqual(["assets:write", "feed:read", "memory:read"]);

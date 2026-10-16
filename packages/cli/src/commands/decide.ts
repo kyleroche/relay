@@ -1,7 +1,7 @@
 /** `relay decide <text>`: add a decision as source=human (or supersede one), write the feed event, drop the brief cache. */
 import type { Command } from "commander";
-import { invalidateBriefCache, repo } from "@relay/core";
-import { humanActor, log, openReady, resolveProject } from "./_common.ts";
+import { invalidateBriefCache } from "@relay/core";
+import { log, openReady, resolveProject } from "./_common.ts";
 
 export function registerDecide(program: Command): void {
   program
@@ -23,14 +23,10 @@ export function registerDecide(program: Command): void {
         if (!o.global) {
           const r = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
           if (!r.slug) throw new Error("no project: pass --project, run relay link, or use --global");
-          if (!(await repo.getProject(h.db, r.slug))) throw new Error(`unknown project ${r.slug}; run relay link first`);
+          if (!(await h.client.getProject(r.slug))) throw new Error(`unknown project ${r.slug}; run relay link first`);
           project = r.slug;
         }
-        const actor = humanActor();
-        const row = o.supersedes
-          ? await repo.supersedeDecision(h.db, Number(o.supersedes), { text, source: o.source, ...(o.ref ? { sourceRef: o.ref } : {}) })
-          : await repo.addDecision(h.db, { project, text, source: o.source, ...(o.ref ? { sourceRef: o.ref } : {}) });
-        await repo.writeEvent(h.db, { kind: "decision.captured", actor, project, summary: text.slice(0, 200), payload: { decision_id: row.id, source: o.source, source_ref: o.ref ?? null, superseded: o.supersedes ? Number(o.supersedes) : null } });
+        const row = await h.client.decide({ project, text, source: o.source, ...(o.ref ? { sourceRef: o.ref } : {}), ...(o.supersedes ? { supersedesId: Number(o.supersedes) } : {}) });
         invalidateBriefCache(project ?? undefined);
         log(`decision #${row.id} recorded${project ? ` for ${project}` : " (global)"}${o.supersedes ? `, supersedes #${o.supersedes}` : ""}`);
         console.log(JSON.stringify(row));

@@ -5,6 +5,8 @@ import { getStore, publicUploadUrl, publicViewUrl, VIEW_TTL } from "@/lib/assets
 import { resolveGrant } from "@/lib/auth";
 import { dataMode, getFeed, getProject, publicReadEnabled } from "@/lib/data";
 import { getDb, getMemoryDb } from "@/lib/db";
+import { dispatchOne } from "@/lib/dispatch";
+import { siteGitHub } from "@/lib/integrations";
 import { infoDocument, methodologyText } from "@/lib/info-doc";
 import { sanitizeEvent } from "@/lib/sanitize";
 
@@ -27,6 +29,7 @@ async function handler(req: Request): Promise<Response> {
       return g ? { scopes: g.scopes, actor: g.actor } : undefined;
     },
     publicRead: publicReadEnabled(),
+    ...(dataMode() === "db" ? { github: siteGitHub(), afterEvent: dispatchOne } : {}),
     site: {
       info: infoDocument,
       methodology: methodologyText,

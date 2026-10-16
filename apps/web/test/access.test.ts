@@ -49,9 +49,11 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
+    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
+    // unknown paths are nobody's: they fall through to a real 404, never a sign-in redirect
+    for (const p of ["/api/assets/mock/abc", "/anything-else"]) expect(classifyRoute(p, anon), p).toBe("public");
   });
 
   it("classifies / as public for everyone; the page itself picks the feed or the landing", () => {

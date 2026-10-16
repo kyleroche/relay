@@ -10,21 +10,30 @@ import { z } from "zod";
 import {
   approxTokens,
   compileBrief,
+  EXTERNAL_KIND,
   finalizeFromKey,
   invalidateBriefCache,
+  isTaskState,
   matchingDecisions,
   mergedPreferences,
+  openTask,
   renderDecision,
   renderPreference,
   repo,
   safeFilename,
   sniffMime,
+  TASK_LANES,
+  TASK_PRIORITIES,
+  TASK_STATES,
+  TaskCreateError,
+  TOKEN_SCOPES,
   ulid,
   uploadKeyFor,
   type AssetRow,
   type AssetStore,
   type CompileBriefOptions,
   type Db,
+  type GitHubClient,
   type TokenScope,
 } from "@relay/core";
 
@@ -32,7 +41,7 @@ export const RESULT_TOKENS = 3000;
 export const BRIEF_TOKENS = 2500;
 export const SERVER_VERSION = "0.0.1";
 
-export const ALL_SCOPES: TokenScope[] = ["feed:read", "memory:read", "memory:write", "assets:read", "assets:write", "assets:review"];
+export const ALL_SCOPES: TokenScope[] = [...TOKEN_SCOPES];
 /** What an unauthenticated caller gets when the deployment allows public read. */
 export const PUBLIC_READ_SCOPES: TokenScope[] = ["feed:read", "memory:read"];
 
@@ -53,7 +62,14 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_asset_get", scope: "assets:read", description: "One asset with its version chain and short-lived signed view URLs." },
   { name: "relay_asset_request_upload", scope: "assets:write", description: "Reserve an asset id and get a one-time upload URL; PUT the bytes there, then call relay_asset_finalize." },
   { name: "relay_asset_finalize", scope: "assets:write", description: "Turn an uploaded object into an asset row (probe, thumbnail, record) after relay_asset_request_upload." },
+  { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a GitHub issue in the project's repo with the agent:<lane> label (and priority:<p>); returns task_id and issue_url. Idempotent on idempotency_key." },
+  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, running, review, done or failed, plus runner, PR and last summary." },
+  { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state." },
+  { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
 ];
+
+/** Description lookup by tool name, so new tools do not depend on their position in TOOL_SCOPES. */
+export const toolDescription = (name: string): string => TOOL_SCOPES.find((t) => t.name === name)?.description ?? name;
 
 /** The web app can swap in its richer documents and sanitised feed shapes; without these the server answers from the database. */
 export interface SiteHooks {
@@ -87,6 +103,10 @@ export interface RelayServerOptions {
   invalidateCache?: boolean;
   site?: SiteHooks;
   assets?: AssetHooks;
+  /** GitHub access for relay_task_create (env token on the web, the gh login locally). Without it the tool answers with an error. */
+  github?: GitHubClient;
+  /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
+  afterEvent?: (row: repo.EventRow) => void | Promise<void>;
 }
 
 /** Cut text at a line boundary so it stays under `max` approximate tokens; says so when it did. */
@@ -109,6 +129,13 @@ const json = (v: unknown) => text(JSON.stringify(v, null, 2));
 const fail = (s: string) => ({ content: [{ type: "text" as const, text: s }], isError: true });
 
 const SCOPES = ["global", "project", "lane", "model"] as const;
+
+/** Writes made by an external client are attributed to the token (`bot:<token name>`), never to a name it picks. */
+export function externalActor(actor: string): string {
+  if (actor.startsWith("human:")) return actor;
+  const i = actor.indexOf(":");
+  return `bot:${i < 0 ? actor : actor.slice(i + 1)}`;
+}
 const ASSET_STATUS = ["pending", "approved", "rejected", "superseded", "published"] as const;
 const ASSET_KIND = ["image", "video", "audio", "pdf", "html", "file"] as const;
 
@@ -152,6 +179,14 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       invalidateBriefCache(project ?? undefined);
     } catch {
       /* cache is best effort */
+    }
+  };
+  const emit = async (row: repo.EventRow | undefined) => {
+    if (!row || !opts.afterEvent) return;
+    try {
+      await opts.afterEvent(row);
+    } catch {
+      /* delivery problems are the dispatcher's to record */
     }
   };
   const gate = (scope: TokenScope, tool: string) =>
@@ -277,7 +312,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'; run relay link in that repo first`);
       const src = source ?? actor.replace(/^(agent|human):/, "");
       const row = supersedes_id ? await repo.supersedeDecision(db, supersedes_id, { text: t, source: src }) : await repo.addDecision(db, { project, text: t, source: src });
-      await repo.writeEvent(db, { kind: "decision.captured", actor, project, summary: t.slice(0, 200), payload: { decision_id: row.id, source: src, superseded: supersedes_id ?? null } });
+      await emit(await repo.writeEvent(db, { kind: "decision.captured", actor, project, summary: t.slice(0, 200), payload: { decision_id: row.id, source: src, superseded: supersedes_id ?? null } }));
       afterWrite(project);
       return text(`recorded decision #${row.id}${supersedes_id ? ` (supersedes #${supersedes_id})` : ""}`);
     },
@@ -300,7 +335,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (g) return g;
       if (scope !== "global" && !scope_id) return fail(`scope '${scope}' needs scope_id`);
       await repo.upsertPreference(db, { key, value, scope, scope_id: scope === "global" ? null : scope_id!, reason: reason ?? null });
-      await repo.writeEvent(db, { kind: "preference.set", actor, project: scope === "project" ? scope_id! : null, summary: `${key} = ${value} (${scope}${scope_id ? `: ${scope_id}` : ""})`, payload: { key, value, scope, scope_id: scope_id ?? null } });
+      await emit(await repo.writeEvent(db, { kind: "preference.set", actor, project: scope === "project" ? scope_id! : null, summary: `${key} = ${value} (${scope}${scope_id ? `: ${scope_id}` : ""})`, payload: { key, value, scope, scope_id: scope_id ?? null } }));
       afterWrite(scope === "project" ? scope_id : undefined);
       return text(`set ${key} = ${value} at ${scope}${scope_id ? ` ${scope_id}` : ""}`);
     },
@@ -471,6 +506,86 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       } catch (e) {
         return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
       }
+    },
+  );
+
+  // ---------- tasks and external events (docs/INTEGRATIONS.md) ----------
+
+  server.registerTool(
+    "relay_task_create",
+    {
+      title: "Open a task",
+      description: toolDescription("relay_task_create"),
+      inputSchema: {
+        project: z.string().min(1).describe("project slug (relay link registered it)"),
+        title: z.string().min(1).max(256),
+        body: z.string().max(60_000).optional().describe("issue body, markdown; the brief the lane reads"),
+        lane: z.enum(TASK_LANES).describe("which subscription implements it"),
+        priority: z.enum(TASK_PRIORITIES).optional(),
+        idempotency_key: z.string().min(1).max(200).optional().describe("repeat calls with the same key return the same task and open nothing"),
+      },
+    },
+    async (args) => {
+      const g = gate("tasks:write", "relay_task_create");
+      if (g) return g;
+      try {
+        const r = await openTask(db, opts.github, { ...args, actor: externalActor(actor) });
+        for (const e of r.events) await emit(e);
+        return json({ task_id: r.task_id, issue_url: r.issue_url, created: r.created, state: r.task.state, lane: args.lane });
+      } catch (e) {
+        return fail(`relay: ${e instanceof Error ? e.message : String(e)}${e instanceof TaskCreateError && e.status === 503 ? " (relay_task_create needs GitHub access on the server)" : ""}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_task_get",
+    { title: "Read a task", description: toolDescription("relay_task_get"), inputSchema: { task_id: z.string().min(3).describe("owner/repo#n") } },
+    async ({ task_id }) => {
+      const g = gate("tasks:read", "relay_task_get");
+      if (g) return g;
+      const t = await repo.getTask(db, task_id.trim());
+      if (!t) return fail(`relay: no task ${task_id}`);
+      return json(await repo.taskView(db, t));
+    },
+  );
+
+  server.registerTool(
+    "relay_task_list",
+    {
+      title: "List tasks",
+      description: toolDescription("relay_task_list"),
+      inputSchema: { project: z.string().optional(), state: z.enum(TASK_STATES as unknown as [string, ...string[]]).optional(), limit: z.number().int().min(1).max(200).optional() },
+    },
+    async ({ project, state, limit }) => {
+      const g = gate("tasks:read", "relay_task_list");
+      if (g) return g;
+      const rows = await repo.listTaskViews(db, { ...(project ? { project } : {}), ...(state && isTaskState(state) ? { state } : {}), limit: limit ?? 50 });
+      return json({ tasks: rows, count: rows.length });
+    },
+  );
+
+  server.registerTool(
+    "relay_event_log",
+    {
+      title: "Log an external event",
+      description: toolDescription("relay_event_log"),
+      inputSchema: {
+        kind: z.string().regex(EXTERNAL_KIND, "kind must start with 'external.'").describe("external.<something>, e.g. external.briefing"),
+        project: z.string().optional(),
+        summary: z.string().min(1).max(500),
+        url: z.string().url().optional(),
+        cost_equiv: z.number().min(0).optional().describe("USD equivalent the external step cost, if any"),
+        source: z.string().max(100).optional().describe("the external system, e.g. grok-bot; kept in payload"),
+      },
+    },
+    async ({ kind, project, summary, url, cost_equiv, source }) => {
+      const g = gate("events:write", "relay_event_log");
+      if (g) return g;
+      if (project && !(await repo.getProject(db, project))) return fail(`relay: unknown project '${project}'`);
+      const row = await repo.writeEvent(db, { kind, actor: externalActor(actor), project: project ?? null, summary, url: url ?? null, cost_equiv: cost_equiv ?? 0, payload: source ? { source } : {} });
+      await emit(row);
+      return json(row ? { id: row.id, ts: row.ts, kind: row.kind, actor: row.actor } : { deduped: true });
     },
   );
 

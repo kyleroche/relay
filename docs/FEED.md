@@ -25,6 +25,8 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `memory.consolidated` | nightly job | `bot:relay` | project, payload.counts | merged and superseded counts |
 | `onboard.refreshed` | `relay onboard <model>` | `human:<login>` | model, payload.sources | model and chunk count |
 | `runner.offline` | GitHub webhook `workflow_job` (queued) with no matching runner for longer than a threshold, or a failed keep-alive | `bot:relay` | lane, payload.runner | which label has nobody serving it |
+| `task.created` | `relay_task_create`, `POST /api/v1/tasks`, `relay task create` (alongside an `issue.opened` row for the same issue) | `bot:<token name>` or `human:<login>` | project, repo, issue, lane, url, payload.task_id/priority/idempotency_key | `<task id>: <title>` |
+| `external.*` | `relay_event_log`, `POST /api/v1/events`: an external bot's own note | always `bot:<token name>` (derived from the token, never from the client) | project, url, cost_equiv, payload.source | whatever the bot said, ≤500 chars |
 
 `subscription` is derived from the lane: `claude -> max`, `codex -> codex`, `grok -> grok`, overflow lanes `->
 gateway`. `cost_equiv` is computed at ingest from the Gateway list-price table in `packages/core/src/ledger`, so the
@@ -75,9 +77,63 @@ plain `kind = 'step.usage'` filter, never counts it.
 The parser lives in `apps/web/lib/webhooks/usage.ts`; the handler for every GitHub delivery is
 `githubEvents` in `apps/web/lib/webhooks/github.ts`, which returns zero, one or two rows per delivery.
 
+## Outbound webhooks
+
+Any row written through the web app (the GitHub and Vercel ingest, the API event writers, the MCP tools) or the stdio
+MCP server is offered to the registered webhooks (`webhooks` table, migration 005). A hook names a URL, the event kinds
+it wants (exact kinds, a prefix ending in `.`, or `*`), optionally one project, a signing secret and an optional bearer.
+Register one with `relay webhook add --url <url> --events run.finished,run.failed,pr.review,pr.merged,asset.uploaded,asset.reviewed [--project <slug>] [--bearer <key>] [--secret <s>]`
+(the secret is generated and shown once when omitted), list with `relay webhook ls`, remove with `relay webhook rm
+<id>`, and send a signed `test.ping` with `relay webhook test <id>`; the same four operations live under
+`/api/v1/webhooks` (scope `webhooks:write`). Kinds supported out of the box: `run.finished`, `run.failed`, `pr.review`,
+`pr.merged`, `asset.uploaded`, `asset.reviewed`; any kind in the table above works too.
+
+Each delivery is one `POST` with a JSON body:
+
+```json
+{"id": "<delivery id>", "kind": "pr.merged", "ts": "2026-10-16T10:12:03.000Z", "task_id": "acme/site#42", "project": "site",
+ "issue": 42, "pr": 57, "url": "https://github.com/acme/site/pull/57", "summary": "Merged #57 into main", "actor": "human:kyle",
+ "lane": "claude", "event_id": 9120}
+```
+
+`task_id`, `issue`, `pr`, `url`, `lane` and `event_id` are present when the event has them (`test.ping` has none).
+Headers:
+
+| Header | Value |
+|---|---|
+| `X-Relay-Signature` | `sha256=<hex HMAC-SHA256(secret, "<X-Relay-Timestamp>.<raw request body>")>` |
+| `X-Relay-Timestamp` | unix seconds when the attempt was made (each retry re-signs with a fresh timestamp) |
+| `X-Relay-Event` | the event kind |
+| `X-Relay-Delivery` | the delivery id, same across retries of one event, also the `id` in the body |
+| `Authorization` | `Bearer <bearer>` when the hook was created with one |
+| `Content-Type` | `application/json` |
+
+Delivery is three attempts (after 1 s and 4 s); a 4xx other than 408 or 429 stops early; a 2xx is success. Every
+attempt set is one `webhook_deliveries` row (`status`, `attempts`, `last_error`, `delivered_at`), shown by
+`GET /api/v1/webhooks/<id>`. The web app runs the fan-out with `after()` so the request that wrote the event never
+waits on a receiver; the dispatcher is `packages/core/src/webhooks/dispatch.ts`.
+
+Verify before trusting (Node):
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export function verifyRelay(req, rawBody, secret, toleranceSeconds = 300) {
+  const ts = req.headers["x-relay-timestamp"];
+  const sig = req.headers["x-relay-signature"];
+  if (!ts || !sig || Math.abs(Date.now() / 1000 - Number(ts)) > toleranceSeconds) return false;
+  const expected = "sha256=" + createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
+  return expected.length === sig.length && timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
+}
+```
+
+Use the raw request body, not a re-serialised object, and dedupe on `X-Relay-Delivery`.
+`verifyWebhookSignature` in `@relay/core` is the same check for TypeScript receivers.
+
 ## Reading the feed
 
 - Web: the feed page groups rows by issue, with the usage meter per subscription in the header.
 - CLI: `pnpm relay feed` (last 50 rows) and `pnpm relay usage --days 7` (per-subscription totals, the same query as
-  the `ledger` view).
+  the `ledger` view). In site mode both read the hosted site (`GET /api/v1/feed`, `GET /api/v1/usage`).
+- Bots: `relay_task_list` / `relay_task_get` fold a task's rows into one state (`docs/INTEGRATIONS.md`).
 - SQL: `select * from ledger where ts > now() - interval '7 days' order by ts desc`.

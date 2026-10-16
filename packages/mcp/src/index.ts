@@ -8,6 +8,8 @@ export {
   ALL_SCOPES,
   PUBLIC_READ_SCOPES,
   TOOL_SCOPES,
+  toolDescription,
+  externalActor,
   METHODOLOGY,
   type RelayServerOptions,
   type SiteHooks,

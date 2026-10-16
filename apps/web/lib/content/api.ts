@@ -31,8 +31,14 @@ Scopes are named and granted per token:
 | \`assets:read\` | GET /api/v1/assets, GET /api/v1/assets/{id}, relay_asset_list, relay_asset_get |
 | \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
 | \`assets:review\` | PUT /api/v1/assets/{id}/review |
+| \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{owner}/{repo}%23{n}, relay_task_get, relay_task_list |
+| \`tasks:write\` | POST /api/v1/tasks, relay_task_create |
+| \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
+| \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
+| \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
+| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode) |
 
-Tokens are created with the CLI on a machine that holds the database connection; the web app never mints them, it only checks them:
+Tokens are minted on the [tokens page](/tokens) while signed in (the first one for a new site), or with the CLI, locally against the database or in site mode against \`POST /api/v1/tokens\`:
 
 \`\`\`bash
 pnpm relay token create --name ci-runner --scopes feed:read,assets:write   # prints the token once
@@ -132,6 +138,28 @@ curl -X PUT ${SITE_URL}/api/v1/assets/<id>/review -H "Authorization: Bearer $TOK
   -d '{"decision":"rejected","note":"Keep one accent hue; lower the chroma to match the light theme."}'
 \`\`\`
 
+### Tasks, external events, webhooks
+
+The integration surface for an external bot ([Integrations](/docs/integrations)):
+
+| Operation | Scope | Does |
+|---|---|---|
+| \`POST /api/v1/tasks\` (\`createTask\`) | \`tasks:write\` | \`{"project","title","body","lane","priority","idempotency_key"}\`: opens the GitHub issue with \`agent:<lane>\`, records the task, writes \`issue.opened\` and \`task.created\`; 201, or 200 for a repeated key |
+| \`GET /api/v1/tasks\` (\`listTasks\`) | \`tasks:read\` | tasks newest first with derived state; \`project\`, \`state\`, \`limit\` |
+| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, running, review, done, failed), \`runner\`, \`pr_url\`, last \`summary\` |
+| \`POST /api/v1/events\` (\`logEvent\`) | \`events:write\` | \`{"kind":"external.<x>","project","summary","url","cost_equiv","source"}\`; the actor is the token's |
+| \`GET /api/v1/usage\` (\`getUsage\`) | \`feed:read\` | per-subscription totals since \`since\` |
+| \`GET /api/v1/projects/{slug}/decisions\` (\`listProjectDecisions\`) | \`memory:read\` | decision history, \`current=1\` for open ones |
+| \`PUT /api/v1/projects/{slug}\`, \`/digests\`, \`/summary\` | \`projects:write\` | what \`relay link\` uploads in site mode |
+| \`GET\`, \`POST /api/v1/webhooks\`; \`GET\`, \`DELETE /api/v1/webhooks/{id}\`; \`POST /api/v1/webhooks/{id}/test\` | \`webhooks:write\` | outbound webhooks; the signing secret is returned once on create; [payload and signature](/docs/feed#outbound-webhooks) |
+| \`GET\`, \`POST /api/v1/tokens\`; \`DELETE /api/v1/tokens/{id}\` | \`tokens:write\` | list, mint (plaintext once), revoke |
+
+\`\`\`bash
+curl -s -X POST ${SITE_URL}/api/v1/tasks -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
+  -d '{"project":"site","title":"Add dark mode to pricing","lane":"codex","priority":"high","idempotency_key":"conv-91:1"}'
+curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN" | jq '.tasks[] | {id, state, pr_url, summary}'
+\`\`\`
+
 ## MCP server
 
 \`${SITE_URL}/mcp\` speaks the MCP Streamable HTTP transport (POST JSON-RPC; stateless). It is the same server the CLIs talk to over stdio (\`relay-mcp\`): one tool set, gated by the scopes your token carries. Registry metadata is at [\`/server.json\`](/server.json) and the server card at [\`/.well-known/mcp/server-card.json\`](/.well-known/mcp/server-card.json).
@@ -149,6 +177,9 @@ curl -X PUT ${SITE_URL}/api/v1/assets/<id>/review -H "Authorization: Bearer $TOK
 | \`relay_decide\`, \`relay_prefer\` | \`memory:write\` | record a decision; set a preference |
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
+| \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
+| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, running, review, done, failed) with runner, PR and last summary |
+| \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
 
 Anyone can connect: \`initialize\` and \`tools/list\` need no token, and \`relay_get_info\` and \`relay_get_methodology\` always answer anonymously. With public read enabled (\`RELAY_PUBLIC_READ=1\`, the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token too. Every other call without the right scope returns an MCP tool error (\`isError: true\`) naming the missing scope, not an HTTP error; only a bearer token the server does not recognise gets HTTP \`401\`. Every response carries the same \`RateLimit\` headers as the API.
 
@@ -163,9 +194,12 @@ claude mcp add --transport http relay ${SITE_URL}/mcp
 The \`relay\` CLI lives in the repo (\`pnpm relay --help\`). First calls:
 
 \`\`\`bash
-pnpm relay doctor          # what is installed, logged in, reachable
-pnpm relay feed --limit 20 # the same feed, in the terminal
-pnpm relay usage --window 7d
+pnpm relay doctor          # what is installed, logged in, reachable; which mode (local or site)
+pnpm relay feed -n 20      # the same feed, in the terminal
+pnpm relay usage --days 7
 \`\`\`
+
+A machine without the database can use this site instead: mint a token on [/tokens](/tokens), then
+\`pnpm relay setup --site ${SITE_URL} --token <token>\`. From then on the memory, feed, token, task and webhook commands and the session hooks call \`/api/v1\` and \`/mcp\` here; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)).
 `;
 }

@@ -5,3 +5,5 @@ export * from "./memory.ts";
 export * from "./events.ts";
 export * from "./assets.ts";
 export * from "./tokens.ts";
+export * from "./tasks.ts";
+export * from "./webhooks.ts";

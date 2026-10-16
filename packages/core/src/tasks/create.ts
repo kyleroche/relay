@@ -1,0 +1,92 @@
+/**
+ * Opening a task: one function behind the `relay_task_create` tool, `POST /api/v1/tasks` and `relay task create`.
+ * It opens the GitHub issue with the lane label (and a priority label when asked), records the task row, and writes
+ * `issue.opened` and `task.created` to the feed. With an idempotency key a second call returns the first task and
+ * opens nothing. The issue body ends with a hidden marker so the task can be traced back from GitHub.
+ */
+import type { Db } from "../db/client.ts";
+import { writeEvent, type EventRow } from "../db/events.ts";
+import { getProject } from "../db/projects.ts";
+import { createTask, findTaskByKey, taskView, type TaskView } from "../db/tasks.ts";
+import type { GitHubClient } from "../github/client.ts";
+import { ulid } from "../util.ts";
+
+export const TASK_LANES = ["claude", "codex", "grok"] as const;
+export type TaskLane = (typeof TASK_LANES)[number];
+export const isTaskLane = (s: string): s is TaskLane => (TASK_LANES as readonly string[]).includes(s);
+export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
+export type TaskPriority = (typeof TASK_PRIORITIES)[number];
+export const isTaskPriority = (s: string): s is TaskPriority => (TASK_PRIORITIES as readonly string[]).includes(s);
+
+export interface CreateTaskInput {
+  project: string;
+  title: string;
+  body?: string;
+  lane: TaskLane;
+  priority?: TaskPriority;
+  idempotency_key?: string | null;
+  /** Who is opening the task, e.g. `bot:grok`. */
+  actor: string;
+}
+
+export interface CreateTaskResult {
+  task: TaskView;
+  task_id: string;
+  issue_url: string;
+  /** False when the idempotency key matched an earlier call. */
+  created: boolean;
+  events: EventRow[];
+}
+
+export class TaskCreateError extends Error {
+  constructor(message: string, readonly status: 400 | 404 | 503 = 400) {
+    super(message);
+    this.name = "TaskCreateError";
+  }
+}
+
+export const taskMarker = (key: string): string => `<!-- relay:task key=${key} -->`;
+
+/** Validate the input the way every surface should; returns the problem or undefined. */
+export function validateTaskInput(i: Partial<CreateTaskInput>): string | undefined {
+  if (!i.project?.trim()) return "project is required";
+  if (!i.title?.trim()) return "title is required";
+  if (i.title.length > 256) return "title must be at most 256 characters";
+  if (!i.lane || !isTaskLane(i.lane)) return `lane must be one of ${TASK_LANES.join(", ")}`;
+  if (i.priority !== undefined && !isTaskPriority(i.priority)) return `priority must be one of ${TASK_PRIORITIES.join(", ")}`;
+  if (i.idempotency_key && i.idempotency_key.length > 200) return "idempotency_key must be at most 200 characters";
+  return undefined;
+}
+
+export async function openTask(db: Db, github: GitHubClient | undefined, input: CreateTaskInput): Promise<CreateTaskResult> {
+  const bad = validateTaskInput(input);
+  if (bad) throw new TaskCreateError(bad);
+  const project = await getProject(db, input.project);
+  if (!project) throw new TaskCreateError(`No project with slug '${input.project}'.`, 404);
+  if (!project.repo) throw new TaskCreateError(`Project '${input.project}' has no repository; run relay link in it first.`, 400);
+  const key = input.idempotency_key?.trim() || null;
+  if (key) {
+    const existing = await findTaskByKey(db, key);
+    if (existing) {
+      const view = await taskView(db, existing);
+      return { task: view, task_id: view.id, issue_url: view.issue_url, created: false, events: [] };
+    }
+  }
+  if (!github) throw new TaskCreateError("No GitHub credential: set GITHUB_TOKEN (web) or log in with gh (CLI).", 503);
+  const marker = taskMarker(key ?? ulid());
+  const body = `${(input.body ?? "").trim()}\n\n${marker}\n`.replace(/^\n+/, "");
+  const labels = [`agent:${input.lane}`, ...(input.priority ? [`priority:${input.priority}`] : [])];
+  const issue = await github.createIssue(project.repo, { title: input.title.trim(), body, labels });
+  // Some installations ignore labels on create (no triage permission for the token); apply them explicitly then.
+  const missing = labels.filter((l) => !issue.labels.includes(l));
+  if (missing.length) await github.addLabels(project.repo, issue.number, missing).catch(() => {});
+  const { task, created } = await createTask(db, { project: project.slug, repo: project.repo, issue: issue.number, idempotencyKey: key, createdBy: input.actor });
+  const events: EventRow[] = [];
+  const base = { actor: input.actor, project: project.slug, repo: project.repo, issue: issue.number, lane: input.lane, url: issue.html_url };
+  const opened = await writeEvent(db, { ...base, kind: "issue.opened", summary: input.title.trim(), payload: { labels, via: "relay_task_create" }, dedupe_key: `task:${task.id}:opened` });
+  if (opened) events.push(opened);
+  const createdEv = await writeEvent(db, { ...base, kind: "task.created", summary: `${task.id}: ${input.title.trim()}`, payload: { task_id: task.id, lane: input.lane, priority: input.priority ?? null, idempotency_key: key }, dedupe_key: `task:${task.id}:created` });
+  if (createdEv) events.push(createdEv);
+  const view = await taskView(db, task);
+  return { task: view, task_id: view.id, issue_url: issue.html_url || view.issue_url, created, events };
+}

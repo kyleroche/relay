@@ -3,7 +3,7 @@ import type { Command } from "commander";
 import { invalidateBriefCache, repo } from "@relay/core";
 
 type PreferenceRow = repo.PreferenceRow;
-import { humanActor, log, openReady, resolveProject } from "./_common.ts";
+import { log, openReady, resolveProject } from "./_common.ts";
 
 const SCOPES: ReadonlyArray<PreferenceRow["scope"]> = ["global", "project", "lane", "model"];
 
@@ -31,8 +31,7 @@ export function registerPrefer(program: Command): void {
       if (scope === "global") scopeId = null;
       const h = await openReady();
       try {
-        await repo.upsertPreference(h.db, { key, value, scope, scope_id: scopeId, reason: o.reason ?? null });
-        await repo.writeEvent(h.db, { kind: "preference.set", actor: humanActor(), project: scope === "project" ? scopeId : null, summary: `${key} = ${value} (${scope}${scopeId ? `: ${scopeId}` : ""})`, payload: { key, value, scope, scope_id: scopeId, reason: o.reason ?? null } });
+        await h.client.prefer({ key, value, scope, scopeId, reason: o.reason ?? null });
         invalidateBriefCache(scope === "project" ? scopeId! : undefined);
         log(`${key} = ${value} at ${scope}${scopeId ? ` ${scopeId}` : ""}`);
       } finally {

@@ -56,7 +56,8 @@ export function registerLink(program: Command): void {
       const slug = o.project ?? repoName.split("/")[1]!;
       const maxFiles = Math.max(0, Number(o.maxFiles) || 0);
       let failed = false;
-      const h = await openReady();
+      // the digest cache is always local: the Claude login that writes digests lives on this machine
+      const h = await openReady({ local: true });
       try {
         // the cost line is read back from the ledger: every step.usage event newer than the project's latest one now
         const latest = (await repo.listEvents(h.db, { project: slug, limit: 1 }))[0]?.ts ?? "1970-01-01T00:00:00Z";
@@ -144,13 +145,25 @@ export function registerLink(program: Command): void {
 
         invalidateBriefCache(slug);
         const usage = emptyUsage();
-        for (const e of await repo.listEvents(h.db, { project: slug, kind: "step.usage", after: latest, limit: 5000 })) {
+        const usageRows = await repo.listEvents(h.db, { project: slug, kind: "step.usage", after: latest, limit: 5000 });
+        for (const e of usageRows) {
           usage.calls++;
           usage.tokensIn += e.tokens_in + e.cache_read + e.cache_write;
           usage.tokensOut += e.tokens_out;
           usage.costEquiv += e.cost_equiv;
         }
         await repo.writeEvent(h.db, { kind: "project.linked", actor: humanActor(), project: slug, repo: repoName, summary: `${repoName} linked at ${root}`, payload: { path: root, refresh: !!o.refresh, digest: o.digest, calls: usage.calls } });
+
+        // 8. site mode: the project, its digests and the summary go up through the API; the login never does
+        if (h.mode === "site") {
+          const site = h.client;
+          const uploads = usageRows.map((e) => ({ lane: e.lane ?? "digest", model: e.model, subscription: e.subscription, tokens_in: e.tokens_in, tokens_out: e.tokens_out, cache_read: e.cache_read, cache_write: e.cache_write, cost_equiv: e.cost_equiv, duration_ms: e.duration_ms, summary: e.summary, ts: e.ts }));
+          await site.registerProject({ slug, repo: repoName, path: root, ...(project?.stack ? { stack: project.stack } : {}), ...(project?.check_cmd ? { checkCmd: project.check_cmd } : {}) });
+          const digests = await repo.listFileDigests(h.db, slug);
+          const up = await site.putDigests(slug, digests.map((d) => ({ path: d.path, sha256: d.sha256, size: d.size, summary: d.summary, summary_sha: d.summary_sha, tokens: d.tokens })), { prune: true, usage: uploads });
+          if (project?.summary) await site.putSummary(slug, project.summary, project.summary_tokens ?? 0);
+          log(`site: ${site.site} has ${slug} with ${up.files} file digests${project?.summary ? " and the summary" : ""}${uploads.length ? `, ${uploads.length} usage rows` : ""}`);
+        }
         log(`cost: ${formatUsage(usage)}`);
         if (failed) process.exitCode = 1;
       } finally {

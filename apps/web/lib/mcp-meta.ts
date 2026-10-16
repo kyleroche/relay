@@ -27,7 +27,7 @@ export function serverCard() {
     name: "relay",
     version: APP_VERSION,
     description:
-      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory and asset tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
+      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory, asset, task (relay_task_*) and external-event (relay_event_log) tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
     url: `${SITE_URL}/mcp`,
     transport: "streamable-http",
     stateless: true,
@@ -40,7 +40,8 @@ export function serverCard() {
       public_when_public_read: MCP_TOOLS.filter((t) => t.scope !== null && PUBLIC_READ.has(t.scope)).map((t) => t.name),
       required_for: MCP_TOOLS.filter((t) => t.scope !== null && !PUBLIC_READ.has(t.scope)).map((t) => t.name),
       scopes: SCOPES,
-      token_issuance: "relay token create --name <name> --scopes <scopes>  (run by the operator; the hash is stored, the token shown once)",
+      token_issuance: "relay token create --name <name> --scopes <scopes>, or the /tokens page when signed in (the hash is stored, the token shown once)",
+      integrations: `${SITE_URL}/docs/integrations`,
       // A call without the needed scope is an MCP tool error (isError: true) naming the scope; only an unrecognised bearer is HTTP 401.
       denied_as: "tool error",
       documentation: `${SITE_URL}/docs/api#authentication-and-scopes`,

@@ -3,8 +3,8 @@
  * printed once by `create`; only its hash reaches the database (`tokens` table, migration 003).
  */
 import type { Command } from "commander";
-import { repo, TOKEN_SCOPES } from "@relay/core";
-import { humanActor, log, openReady } from "./_common.ts";
+import { TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES } from "@relay/core";
+import { log, openReady } from "./_common.ts";
 
 export function registerToken(program: Command): void {
   const token = program.command("token").description("Bearer tokens for the web API and the HTTP MCP server (hash stored, plaintext shown once)");
@@ -13,13 +13,14 @@ export function registerToken(program: Command): void {
     .command("create")
     .requiredOption("--name <name>", "what the token is for, e.g. ci-runner")
     .requiredOption("--scopes <list>", `comma-separated: ${TOKEN_SCOPES.join(", ")}`)
-    .option("--by <actor>", "who minted it", humanActor())
+    .option("--by <actor>", "who minted it (local mode; the site attributes to the signed-in or token actor)")
     .option("--json", "print the row and token as JSON")
-    .description("Mint a token and print it once")
-    .action(async (o: { name: string; scopes: string; by: string; json?: boolean }) => {
-      const h = await openReady();
+    .description("Mint a token and print it once (in site mode, against the site's POST /api/v1/tokens)")
+    .addHelpText("after", `\nScopes:\n${TOKEN_SCOPES.map((s) => `  ${s.padEnd(16)} ${TOKEN_SCOPE_DESCRIPTIONS[s]}`).join("\n")}`)
+    .action(async (o: { name: string; scopes: string; by?: string; json?: boolean }) => {
+      const h = await openReady(o.by ? { actor: o.by } : {});
       try {
-        const { token: plaintext, row } = await repo.createToken(h.db, { name: o.name, scopes: o.scopes.split(","), createdBy: o.by });
+        const { token: plaintext, row } = await h.client.createToken({ name: o.name, scopes: o.scopes.split(",") });
         if (o.json) {
           console.log(JSON.stringify({ ...row, token: plaintext }, null, 2));
           return;
@@ -39,7 +40,7 @@ export function registerToken(program: Command): void {
     .action(async (o: { all?: boolean }) => {
       const h = await openReady();
       try {
-        const rows = await repo.listTokens(h.db, { includeRevoked: !!o.all });
+        const rows = await h.client.listTokens({ includeRevoked: !!o.all });
         if (!rows.length) {
           log("no tokens; mint one with: relay token create --name <n> --scopes feed:read");
           return;
@@ -57,7 +58,7 @@ export function registerToken(program: Command): void {
     .action(async (idOrName: string) => {
       const h = await openReady();
       try {
-        const row = await repo.revokeToken(h.db, idOrName);
+        const row = await h.client.revokeToken(idOrName);
         if (!row) {
           log(`no live token matches '${idOrName}'`);
           process.exitCode = 1;

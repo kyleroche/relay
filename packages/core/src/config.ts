@@ -6,6 +6,7 @@
 import { readFileSync, existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { readSiteConfig } from "./client/site.ts";
 
 export interface GatewayConfig {
   apiKey?: string;
@@ -30,6 +31,10 @@ export interface HarnessConfig {
   /** `owner/relay` and ref substituted into the caller workflows by `relay link` (env RELAY_REPO / RELAY_REF win). */
   relayRepo?: string;
   relayRef?: string;
+  /** Hosted site the CLI talks to instead of a database (`relay setup --site`; env RELAY_SITE wins). */
+  site?: string;
+  /** Bearer token for the site, from ~/.harness/credentials.json (env RELAY_TOKEN wins). Never printed. */
+  siteToken?: string;
 }
 
 /** The subset a user may put in ~/.harness/config.json. */
@@ -38,6 +43,8 @@ export interface FileConfig {
   gateway?: { embeddingModel?: string; embeddingDim?: number };
   capture?: { gateCommand?: string };
   relay?: { repo?: string; ref?: string };
+  /** The hosted relay site the CLI talks to; the token lives in credentials.json next to this file. */
+  site?: string;
 }
 
 const HOME = process.env.RELAY_HOME ?? join(homedir(), ".harness");
@@ -69,6 +76,9 @@ export function loadConfig(): HarnessConfig {
   if (process.env.RELAY_REPO) cfg.relayRepo = process.env.RELAY_REPO;
   if (process.env.RELAY_REF) cfg.relayRef = process.env.RELAY_REF;
   if (process.env.DATABASE_URL) cfg.databaseUrl = process.env.DATABASE_URL;
+  const site = readSiteConfig(cfg.home);
+  if (site.site) cfg.site = site.site;
+  if (site.token) cfg.siteToken = site.token;
   if (process.env.AI_GATEWAY_API_KEY) cfg.gateway.apiKey = process.env.AI_GATEWAY_API_KEY;
   return cfg;
 }

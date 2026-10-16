@@ -2,7 +2,7 @@
 import type { Command } from "commander";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { applyPlan, defaultHookContext, planSetup, CLI_NAMES, type CliName } from "@relay/core";
+import { applyPlan, defaultHookContext, httpClient, planSetup, readSiteConfig, validateSiteUrl, writeSiteConfig, CLI_NAMES, type CliName } from "@relay/core";
 import { log, RELAY_ROOT } from "./_common.ts";
 
 export function registerSetup(program: Command): void {
@@ -12,8 +12,37 @@ export function registerSetup(program: Command): void {
     .option("--yes", "write the planned files")
     .option("--only <cli>", "claude | codex | grok (installs even when the CLI is not detected)")
     .option("--remove", "remove relay's hooks and MCP entries instead")
-    .action((o: { yes?: boolean; only?: string; remove?: boolean }) => {
+    .option("--site <url>", "site mode: the hosted relay the CLI and hooks talk to instead of a local database (stored in ~/.harness/config.json)")
+    .option("--token <token>", "bearer token for --site, minted at <site>/tokens (stored in ~/.harness/credentials.json, mode 0600)")
+    .option("--no-site", "leave site mode: remove the site and its token; the CLI opens the local database again")
+    .action(async (o: { yes?: boolean; only?: string; remove?: boolean; site?: string | boolean; token?: string }) => {
       if (o.only && !(CLI_NAMES as readonly string[]).includes(o.only)) throw new Error(`--only must be one of ${CLI_NAMES.join(", ")}`);
+      // --- site mode ---
+      if (o.site === false) {
+        const paths = writeSiteConfig({ site: null, token: null });
+        log(`site mode off: removed site from ${paths.configPath} and the token from ${paths.credentialsPath}`);
+        return;
+      }
+      if (typeof o.site === "string" || o.token) {
+        const current = readSiteConfig();
+        const site = typeof o.site === "string" ? o.site : current.site;
+        if (!site) throw new Error("--token needs --site <url> (or a site already configured)");
+        const bad = validateSiteUrl(site);
+        if (bad) throw new Error(bad);
+        const token = o.token ?? current.token;
+        if (!token) throw new Error(`--site needs --token <token>; mint one at ${site.replace(/\/+$/, "")}/tokens while signed in`);
+        const probe = await httpClient({ site, token }).health();
+        if (!probe.ok) {
+          log(`check failed: ${probe.detail}`);
+          if (!o.yes) throw new Error("site not saved; fix the URL or token, or re-run with --yes to save anyway");
+        } else log(`check: ${probe.detail}`);
+        const paths = writeSiteConfig({ site, token: o.token ?? null });
+        if (o.token) log(`token saved to ${paths.credentialsPath} (mode 0600)`);
+        log(`site mode on: ${site} (${paths.configPath}); memory, feed, token, task and webhook commands and the hooks now use the site. relay link still digests locally and uploads.`);
+        return;
+      }
+      const siteCfg = readSiteConfig();
+      if (siteCfg.site) console.log(`site mode: ${siteCfg.site}${siteCfg.token ? "" : " (no token; run relay setup --site <url> --token <t>)"}\n`);
       const ctx = defaultHookContext(RELAY_ROOT);
       const plans = planSetup(ctx, { ...(o.only ? { only: o.only as CliName } : {}), ...(o.remove ? { remove: true } : {}) });
       let pending = 0;

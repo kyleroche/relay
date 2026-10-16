@@ -1,6 +1,5 @@
 /** `relay memory history`: decisions including superseded ones, with their validity windows. */
 import type { Command } from "commander";
-import { repo } from "@relay/core";
 import { openReady, resolveProject } from "./_common.ts";
 
 export function registerMemory(program: Command): void {
@@ -24,7 +23,7 @@ export function registerMemory(program: Command): void {
       }
       const h = await openReady();
       try {
-        const rows = await repo.listDecisions(h.db, project, { limit: Number(o.limit), ...(o.current ? { current: true } : {}) });
+        const rows = await h.client.listDecisions(project, { limit: Number(o.limit), ...(o.current ? { current: true } : {}) });
         if (o.json) {
           console.log(JSON.stringify(rows, null, 2));
           return;
