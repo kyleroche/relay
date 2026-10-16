@@ -60,8 +60,10 @@ export interface UsageSummaryRow {
   avg_ctx: number;
 }
 
-const cols = "id, ts, kind, actor, project, repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, summary, url, payload, dedupe_key";
-const toEvent = (r: Record<string, unknown>): EventRow => ({
+export const EVENT_COLS = "id, ts, kind, actor, project, repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, summary, url, payload, dedupe_key";
+const cols = EVENT_COLS;
+/** Row normaliser shared with the task module. */
+export const toEvent = (r: Record<string, unknown>): EventRow => ({
   id: num(r.id),
   ts: iso(r.ts) ?? "",
   kind: r.kind as string,

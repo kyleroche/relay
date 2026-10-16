@@ -6,10 +6,39 @@ import { randomBytes } from "node:crypto";
 import { type Db, iso } from "./client.ts";
 import { sha256, ulid } from "../util.ts";
 
-export const TOKEN_SCOPES = ["feed:read", "memory:read", "memory:write", "assets:read", "assets:write", "assets:review"] as const;
+export const TOKEN_SCOPES = [
+  "feed:read",
+  "memory:read",
+  "memory:write",
+  "assets:read",
+  "assets:write",
+  "assets:review",
+  "tasks:read",
+  "tasks:write",
+  "events:write",
+  "projects:write",
+  "webhooks:write",
+  "tokens:write",
+] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
 export const isTokenScope = (s: string): s is TokenScope => (TOKEN_SCOPES as readonly string[]).includes(s);
+
+/** One line per scope, for the token page, the OpenAPI description and `relay token create --help`. */
+export const TOKEN_SCOPE_DESCRIPTIONS: Record<TokenScope, string> = {
+  "feed:read": "Read the feed and projects.",
+  "memory:read": "Read decisions, preferences, briefs and guidance.",
+  "memory:write": "Record decisions and preferences.",
+  "assets:read": "List and view assets (signed URLs).",
+  "assets:write": "Upload, finalize and publish assets.",
+  "assets:review": "Approve or reject assets.",
+  "tasks:read": "Read tasks and their derived state.",
+  "tasks:write": "Open tasks (GitHub issues with a lane label).",
+  "events:write": "Log external.* events; the actor is always bot:<token name>.",
+  "projects:write": "Register projects and upload digests and summaries (relay link in site mode).",
+  "webhooks:write": "Add, list, remove and test outbound webhooks.",
+  "tokens:write": "Mint, list and revoke tokens (relay token in site mode).",
+};
 
 export interface TokenRow {
   id: string;
