@@ -1,8 +1,12 @@
 /**
  * Streamable HTTP for the web app: `createMcpHandler(db, opts)` returns a `(Request) => Promise<Response>` a Next.js
  * route can export as POST. Stateless: every request gets its own server and transport, so the bearer check decides
- * per request which scopes the tools run with. Without a recognised token the request is refused (401) unless
- * `publicRead` is set, in which case a server holding only the public read scopes answers.
+ * per request which scopes the tools run with.
+ *
+ * Anyone can connect. A request without a bearer runs a server that holds no scopes (plus the public read scopes when
+ * `publicRead` is set), so `initialize`, `tools/list` and the always-public tools answer, and a scoped tool returns an
+ * MCP tool error naming the scope it needs. A bearer the server does not recognise is refused with HTTP 401: the
+ * caller meant to authenticate and did not.
  *
  * Two ways to recognise a token: `token` (one shared secret, RELAY_MEMORY_TOKEN, granting every scope) and
  * `authorize` (the app's own lookup: RELAY_API_TOKENS or the `tokens` table, returning the scopes it carries).
@@ -23,7 +27,7 @@ export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "s
   token?: string | undefined;
   /** Resolve a presented bearer token to its scopes; undefined when unknown. */
   authorize?: (bearer: string) => Promise<Grant | undefined>;
-  /** Serve the public read tools to unauthenticated callers. Default false: no token, no answer. */
+  /** Grant the public read scopes (feed:read, memory:read) to callers without a token. Default false. */
   publicRead?: boolean;
   /** Attribution for writes made with the shared token. */
   actor?: string;
@@ -53,15 +57,18 @@ export async function resolveGrant(req: Request, opts: McpHandlerOptions): Promi
   return undefined;
 }
 
+function unauthorized(): Response {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: unknown bearer token" }, id: null }), {
+    status: 401,
+    headers: { "content-type": "application/json", "www-authenticate": 'Bearer realm="relay"' },
+  });
+}
+
 export function createMcpHandler(db: Db, opts: McpHandlerOptions): McpHandler {
   return async (req) => {
+    const presented = bearerOf(req);
     const grant = await resolveGrant(req, opts);
-    if (!grant && !opts.publicRead) {
-      return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized" }, id: null }), {
-        status: 401,
-        headers: { "content-type": "application/json", "www-authenticate": 'Bearer realm="relay"' },
-      });
-    }
+    if (presented && !grant) return unauthorized();
     const server = createRelayServer(db, {
       canWrite: false,
       scopes: grant?.scopes ?? [],

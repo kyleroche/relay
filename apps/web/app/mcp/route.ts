@@ -12,8 +12,10 @@ export const dynamic = "force-dynamic";
 
 /**
  * MCP over Streamable HTTP, stateless: the shared server from @relay/mcp (one tool set for stdio and HTTP) with
- * this site's documents plugged in. The public read tools answer anonymously when public read is on; everything
- * else runs with the bearer token's scopes (RELAY_MEMORY_TOKEN, RELAY_API_TOKENS, or the tokens table).
+ * this site's documents plugged in. Anyone can connect, initialize and list tools; relay_get_info and
+ * relay_get_methodology always answer. The feed and project read tools answer anonymously when public read is on;
+ * everything else runs with the bearer token's scopes (RELAY_MEMORY_TOKEN, RELAY_API_TOKENS, or the tokens table)
+ * and, without them, returns an MCP tool error naming the missing scope. Only an unrecognised bearer is an HTTP 401.
  * In mock mode the memory tools run against an empty in-memory database so the surface stays identical.
  */
 async function handler(req: Request): Promise<Response> {
@@ -50,13 +52,14 @@ export async function POST(req: NextRequest) {
   const res = await handler(req);
   const headers = new Headers(res.headers);
   for (const [k, v] of Object.entries(rateHeaders(rate))) headers.set(k, v);
-  if (res.status === 401) headers.set("WWW-Authenticate", `Bearer realm="relay", resource_metadata="${new URL(req.url).origin}/.well-known/oauth-protected-resource"`);
+  if (res.status === 401) headers.set("WWW-Authenticate", 'Bearer realm="relay"');
   return new NextResponse(res.body, { status: res.status, headers });
 }
 
-/** Stateless server: no standalone SSE stream, no sessions to delete. */
-export function GET() {
-  return problem(405, "Method Not Allowed", "This MCP server is stateless: POST JSON-RPC to /mcp. See /.well-known/mcp/server-card.json.", "/mcp", {}, { Allow: "POST" });
+/** Stateless server: no standalone SSE stream, no sessions to delete. Rate-limit headers travel on every answer. */
+export function GET(req: NextRequest) {
+  const rate = takeToken(clientKey(req));
+  return problem(405, "Method Not Allowed", "This MCP server is stateless: POST JSON-RPC to /mcp. See /.well-known/mcp/server-card.json.", "/mcp", {}, { Allow: "POST", ...rateHeaders(rate) });
 }
 
 export const DELETE = GET;
