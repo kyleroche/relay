@@ -30,6 +30,8 @@ Link: </docs/versioning>; rel="deprecation"; type="text/html"
 
 ## What is stable now
 
-The following are covered by this policy as of the first public release: `GET /api/v1/info`, `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/projects/{slug}`, the MCP tools `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and the files `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/ai-catalog.json`, `/.well-known/api-catalog`, `/.well-known/mcp/server-card.json`, `/.well-known/agent-skills/index.json`, `/.well-known/oauth-protected-resource` and `/server.json`.
+The following are covered by this policy as of the first public release: `GET /api/v1/info`, `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/projects/{slug}`, the MCP tools `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and the files `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/ai-catalog.json`, `/.well-known/api-catalog`, `/.well-known/mcp/server-card.json`, `/.well-known/agent-skills/index.json` and `/server.json`.
+
+`/.well-known/oauth-protected-resource` was served before the first public release and removed before it: relay has no OAuth authorization server, so an RFC 9728 document (whose purpose is to point at one) described something that did not exist. The bearer scheme and scopes live in `/openapi.json` and the server card instead.
 
 Write endpoints and the token-gated MCP memory tools are pre-release: they may change without the notice period until they are listed here.
