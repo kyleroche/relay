@@ -1,92 +1,28 @@
 import type { Metadata } from "next";
-import Link from "next/link";
-import { Feed } from "@/components/feed/feed";
-import { NeedsReview } from "@/components/feed/needs-review";
-import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
-import { getAssets, getFeed, getProjects } from "@/lib/data";
-import { viewerTimeZone } from "@/lib/tz-server";
+import { FEED_METADATA, FeedPage, type Search } from "@/components/feed/feed-page";
+import { Landing, LANDING_METADATA } from "@/components/landing/landing";
+import { dataMode } from "@/lib/data";
+import { homeView } from "@/lib/negotiate";
+import { getSession } from "@/lib/session";
 
-export const metadata: Metadata = {
-  title: { absolute: "relay — feed of everything your coding agents did" },
-  description:
-    "The relay feed: every issue, run, model call, pull request, review and deployment across your coding-agent subscriptions, with tokens and cost, newest first.",
-  alternates: { canonical: "/" },
-};
+/**
+ * Two pages share this path. A signed-in viewer (and everyone in mock mode, which has no sign-in) gets the feed; an
+ * anonymous visitor gets the public landing, server-rendered with no redirect, so people and agents arriving at the
+ * root see what relay is. proxy.ts makes the same call for the Markdown mirror (lib/negotiate.ts `homeDecision`).
+ */
 
 export const dynamic = "force-dynamic";
 
-type Search = Record<string, string | string[] | undefined>;
-
-function one(v: string | string[] | undefined): string | undefined {
-  return Array.isArray(v) ? v[0] : v;
+async function view() {
+  const session = await getSession();
+  return homeView({ signedIn: session !== null, mock: dataMode() === "mock" });
 }
 
-export default async function FeedPage({ searchParams }: { searchParams: Promise<Search> }) {
-  const sp = await searchParams;
-  const filters = {
-    project: one(sp.project),
-    lane: one(sp.lane),
-    actor: one(sp.actor),
-    kind: one(sp.kind),
-  };
-  const [events, projects, allRecent, pending, tz] = await Promise.all([
-    getFeed({ ...filters, limit: 150 }),
-    getProjects(),
-    getFeed({ limit: 300 }),
-    getAssets({ status: "pending", limit: 50 }),
-    viewerTimeZone(),
-  ]);
-  const now = Date.now();
-  const actors = [...new Set(allRecent.map((e) => e.actor))].sort();
-  const today = new Date().toISOString().slice(0, 10);
-  const todayCount = allRecent.filter((e) => e.ts.slice(0, 10) === today).length;
-  const todayCost = allRecent.filter((e) => e.ts.slice(0, 10) === today).reduce((s, e) => s + e.cost_equiv, 0);
+export async function generateMetadata(): Promise<Metadata> {
+  return (await view()) === "feed" ? FEED_METADATA : LANDING_METADATA;
+}
 
-  return (
-    <>
-      <JsonLd data={[softwareApplicationLd(), organizationLd()]} />
-      <section className="py-6 sm:py-8">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold tracking-tight">Feed</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Everything humans, bots, runners and agents did across your coding-agent subscriptions, newest first. relay
-              records each GitHub issue, run, model call, pull request, review and deployment as one append-only event with
-              its tokens and cost equivalent. New here? Read <Link href="/info" className="text-primary underline underline-offset-4">what relay is</Link>,
-              browse the <Link href="/docs" className="text-primary underline underline-offset-4">docs</Link>, or use the{" "}
-              <Link href="/docs/api" className="text-primary underline underline-offset-4">API</Link>.
-            </p>
-          </div>
-          <dl className="flex gap-6 text-sm">
-            <div>
-              <dt className="text-xs text-muted-foreground">Today</dt>
-              <dd className="font-mono tabular-nums">{todayCount} events</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Cost equivalent</dt>
-              <dd className="font-mono tabular-nums">${todayCost.toFixed(2)}</dd>
-            </div>
-            <div>
-              <dt className="text-xs text-muted-foreground">Needs review</dt>
-              <dd className="font-mono tabular-nums">
-                {pending.length > 0 ? (
-                  <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
-                    {pending.length} asset{pending.length === 1 ? "" : "s"}
-                  </Link>
-                ) : (
-                  "0"
-                )}
-              </dd>
-            </div>
-          </dl>
-        </div>
-      </section>
-      {!filters.project && !filters.lane && !filters.actor && !filters.kind && (
-        <div className="mb-4">
-          <NeedsReview assets={pending} now={now} />
-        </div>
-      )}
-      <Feed events={events} projects={projects.map((p) => p.slug)} actors={actors} filters={filters} tz={tz} />
-    </>
-  );
+export default async function HomePage({ searchParams }: { searchParams: Promise<Search> }) {
+  if ((await view()) === "landing") return <Landing />;
+  return <FeedPage searchParams={searchParams} />;
 }

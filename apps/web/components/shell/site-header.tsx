@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { PlanMeters } from "@/components/meters/plan-meters";
-import { Nav } from "@/components/shell/nav";
+import { Nav, NAV, PUBLIC_NAV } from "@/components/shell/nav";
 import { RelayMark } from "@/components/shell/relay-mark";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { ViewerMenu } from "@/components/shell/viewer-menu";
@@ -24,7 +24,7 @@ export async function SiteHeader() {
             <ThemeToggle />
           </div>
         </div>
-        <Nav className="-mx-1 sm:mx-0" />
+        <Nav items={session ? NAV : PUBLIC_NAV} className="-mx-1 sm:mx-0" />
         <div className="flex items-center gap-4 sm:ml-auto">
           {usage && (
             <Link href="/usage" className="min-w-0" aria-label="Plan meters, open usage">

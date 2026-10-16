@@ -1,10 +1,12 @@
 import { TOOL_SCOPES } from "@relay/mcp";
-import { SCOPES } from "@/lib/auth";
-import { REPO_URL, SITE_URL } from "@/lib/data";
+import { RATE_LIMIT, SCOPES } from "@/lib/api";
+import { REPO_URL, SITE_URL } from "@/lib/site";
 import { APP_VERSION } from "@/lib/info-doc";
 
 /** The one tool set, from the shared server: name, description and the scope each tool needs (null = public). */
 export const MCP_TOOLS = TOOL_SCOPES;
+
+const PUBLIC_READ = new Set(["feed:read", "memory:read"]);
 
 /** MCP registry server.json (modelcontextprotocol.io registry schema). */
 export function serverJson() {
@@ -14,7 +16,7 @@ export function serverJson() {
     description: "relay over MCP: the event feed, projects, shared memory (decisions, preferences, vendor guidance) and the asset library for one person's coding-agent subscriptions.",
     version: APP_VERSION,
     repository: { url: REPO_URL, source: "github" },
-    websiteUrl: `${SITE_URL}/info`,
+    websiteUrl: `${SITE_URL}/`,
     remotes: [{ type: "streamable-http", url: `${SITE_URL}/mcp` }],
   };
 }
@@ -24,22 +26,31 @@ export function serverCard() {
   return {
     name: "relay",
     version: APP_VERSION,
-    description: "Public read tools over relay's feed and projects; token-gated memory and asset tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
+    description:
+      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory and asset tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
     url: `${SITE_URL}/mcp`,
     transport: "streamable-http",
     stateless: true,
     authentication: {
       type: "bearer",
-      required_for: MCP_TOOLS.filter((t) => t.scope && t.scope !== "feed:read" && t.scope !== "memory:read").map((t) => t.name),
-      public_when_public_read: MCP_TOOLS.filter((t) => t.scope === "feed:read" || t.scope === "memory:read").map((t) => t.name),
+      scheme: "http",
+      // Anyone can connect, initialize and list tools; the scopes a token carries decide which calls run.
+      anonymous_methods: ["initialize", "tools/list"],
+      anonymous_tools: MCP_TOOLS.filter((t) => t.scope === null).map((t) => t.name),
+      public_when_public_read: MCP_TOOLS.filter((t) => t.scope !== null && PUBLIC_READ.has(t.scope)).map((t) => t.name),
+      required_for: MCP_TOOLS.filter((t) => t.scope !== null && !PUBLIC_READ.has(t.scope)).map((t) => t.name),
       scopes: SCOPES,
-      token_issuance: "relay token create --name <name> --scopes <scopes>",
-      resource_metadata: `${SITE_URL}/.well-known/oauth-protected-resource`,
+      token_issuance: "relay token create --name <name> --scopes <scopes>  (run by the operator; the hash is stored, the token shown once)",
+      // A call without the needed scope is an MCP tool error (isError: true) naming the scope; only an unrecognised bearer is HTTP 401.
+      denied_as: "tool error",
+      documentation: `${SITE_URL}/docs/api#authentication-and-scopes`,
     },
+    rate_limit: { policy: RATE_LIMIT.policyName, requests: RATE_LIMIT.limit, window_seconds: RATE_LIMIT.windowSeconds, headers: ["RateLimit-Policy", "RateLimit"] },
     tools: MCP_TOOLS.map((t) => ({ name: t.name, description: t.description, scope: t.scope })),
     documentation: `${SITE_URL}/docs/api#mcp-server`,
     registry: `${SITE_URL}/server.json`,
     openapi: `${SITE_URL}/openapi.json`,
+    contact: `${SITE_URL}/contact`,
     license: "Apache-2.0",
   };
 }

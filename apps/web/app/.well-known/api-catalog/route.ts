@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
-import { SITE_URL } from "@/lib/data";
+import { SITE_URL } from "@/lib/site";
 
-/** RFC 9727 API catalog: a linkset pointing at the OpenAPI description. */
+/**
+ * RFC 9727 API catalog: a linkset pointing at the OpenAPI description and the MCP server card. Authentication is a
+ * plain bearer token issued by `relay token create`, described in the OpenAPI security scheme; there is no
+ * authorization server, so nothing here points at one.
+ */
 export function GET() {
   const body = {
     linkset: [
@@ -9,7 +13,6 @@ export function GET() {
         anchor: `${SITE_URL}/api/v1`,
         "service-desc": [{ href: `${SITE_URL}/openapi.json`, type: "application/vnd.oai.openapi+json;version=3.1" }],
         "service-doc": [{ href: `${SITE_URL}/docs/api`, type: "text/html" }],
-        "service-meta": [{ href: `${SITE_URL}/.well-known/oauth-protected-resource`, type: "application/json" }],
         status: [{ href: `${SITE_URL}/api/v1/info`, type: "application/json" }],
       },
       {

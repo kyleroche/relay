@@ -1,10 +1,13 @@
 /**
- * Content for /info. One source renders both the HTML page and the text/markdown mirror
- * served through Accept negotiation, so the two never drift.
+ * Content for the public landing (served at / to anonymous visitors, and at /info). One source renders both the HTML
+ * page and the text/markdown mirror served through Accept negotiation, so the two never drift.
  */
-import { REPO_URL, SITE_URL } from "@/lib/data";
+import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
 
 export const TAGLINE = "Your coding-agent subscriptions, working as one system.";
+
+/** The maker line, repeated in visible text so it matches the Organization JSON-LD. */
+export const MAKER = `relay is made by ${AUTHOR.name} and released as open source under the Apache-2.0 license. It is free: there is no paid tier, no account to request and nothing for sale. Support is through GitHub issues.`;
 
 export const WHAT_IS = [
   "relay is an open-source harness for people who pay for more than one coding agent. It turns Claude Code, Codex and Grok Build into a team that shares memory, picks up work from GitHub, runs on machines you already own, and shows you everything it did and what it cost.",
@@ -76,9 +79,11 @@ export function infoMarkdown(): string {
   for (const a of ACCOUNTS) lines.push(`| ${a.tool} | \`${a.login}\` | ${a.plan} |`);
   lines.push("", "## Agents and APIs", "");
   lines.push(`- Public read API: \`${SITE_URL}/api/v1/info\`, \`/api/v1/feed\`, \`/api/v1/projects\` (OpenAPI at \`/openapi.json\`)`);
-  lines.push(`- MCP server (Streamable HTTP): \`${SITE_URL}/mcp\``);
+  lines.push(`- MCP server (Streamable HTTP): \`${SITE_URL}/mcp\` (\`initialize\` and \`tools/list\` need no token)`);
   lines.push(`- Agent skill for installing relay: \`${SITE_URL}/.well-known/agent-skills/index.json\``);
   lines.push(`- Docs: \`${SITE_URL}/docs\`, \`${SITE_URL}/llms.txt\``);
+  lines.push("", "## Who makes it", "", MAKER, "", `- Author: [${AUTHOR.name}](${AUTHOR.url})`, `- Source: ${REPO_URL}`, `- Issues and support: ${ISSUES_URL}`);
+  lines.push(`- [About](${SITE_URL}/about) · [Contact](${SITE_URL}/contact) · [Privacy](${SITE_URL}/privacy)`);
   lines.push("", "## License", "", LICENSE, "", `Source: ${REPO_URL}`, "");
   return lines.join("\n");
 }

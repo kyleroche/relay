@@ -4,7 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
-export const NAV = [
+export interface NavItem {
+  href: string;
+  label: string;
+}
+
+/** The signed-in surface. */
+export const NAV: readonly NavItem[] = [
   { href: "/", label: "Feed" },
   { href: "/projects", label: "Projects" },
   { href: "/assets", label: "Assets" },
@@ -12,13 +18,20 @@ export const NAV = [
   { href: "/workers", label: "Workers" },
   { href: "/info", label: "Info" },
   { href: "/docs", label: "Docs" },
-] as const;
+];
 
-export function Nav({ className }: { className?: string }) {
+/** What an anonymous visitor can open: the landing is at / for them, so no separate Info entry. */
+export const PUBLIC_NAV: readonly NavItem[] = [
+  { href: "/", label: "Overview" },
+  { href: "/docs", label: "Docs" },
+  { href: "/about", label: "About" },
+];
+
+export function Nav({ items = NAV, className }: { items?: readonly NavItem[]; className?: string }) {
   const pathname = usePathname();
   return (
     <nav aria-label="Primary" className={cn("flex items-center gap-0.5 overflow-x-auto text-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", className)}>
-      {NAV.map((item) => {
+      {items.map((item) => {
         const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         return (
           <Link

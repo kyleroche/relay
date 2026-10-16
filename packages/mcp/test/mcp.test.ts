@@ -217,9 +217,37 @@ describe("http handler", () => {
   const call = (name: string, args: Record<string, unknown>, id = 1) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
   type Result = { result: { content: Array<{ text: string }>; isError?: boolean } };
 
-  it("401s without a token unless publicRead, and gates writes on the bearer", async () => {
+  it("lets anonymous callers initialize, list tools and call the always-public tools", async () => {
     const closed = createMcpHandler(db, { token: "s3cret" });
-    expect((await closed(rpc(call("relay_recall", { query: "vitest", project: "demo" })))).status).toBe(401);
+    const init = await closed(
+      rpc({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "scan", version: "0" } } }),
+    );
+    expect(init.status).toBe(200);
+    expect(((await init.json()) as { result: { serverInfo: { name: string } } }).result.serverInfo.name).toBe("relay");
+
+    const list = await closed(rpc({ jsonrpc: "2.0", id: 2, method: "tools/list", params: {} }));
+    expect(list.status).toBe(200);
+    const names = ((await list.json()) as { result: { tools: Array<{ name: string }> } }).result.tools.map((t) => t.name).sort();
+    expect(names).toEqual([...TOOL_SCOPES.map((t) => t.name)].sort());
+
+    const info = await closed(rpc(call("relay_get_info", {})));
+    expect(info.status).toBe(200);
+    const infoBody = (await info.json()) as Result;
+    expect(infoBody.result.isError).toBeFalsy();
+    expect(JSON.parse(infoBody.result.content[0]!.text).granted_scopes).toEqual([]);
+    expect(((await (await closed(rpc(call("relay_get_methodology", {})))).json()) as Result).result.content[0]!.text).toContain("Tasks move");
+  });
+
+  it("answers scoped tools without a token as a tool error, not a 401, and gates writes on the bearer", async () => {
+    const closed = createMcpHandler(db, { token: "s3cret" });
+    const anonScoped = await closed(rpc(call("relay_recall", { query: "vitest", project: "demo" })));
+    expect(anonScoped.status).toBe(200);
+    const denied = (await anonScoped.json()) as Result;
+    expect(denied.result.isError).toBe(true);
+    expect(denied.result.content[0]!.text).toMatch(/memory:read/);
+    const anonFeed = (await (await closed(rpc(call("relay_get_feed", { limit: 1 })))).json()) as Result;
+    expect(anonFeed.result.isError).toBe(true);
+    expect(anonFeed.result.content[0]!.text).toMatch(/feed:read/);
 
     const open = createMcpHandler(db, { token: "s3cret", publicRead: true });
     const anonRead = await open(rpc(call("relay_recall", { query: "vitest", project: "demo" })));
@@ -229,8 +257,10 @@ describe("http handler", () => {
     const anonWrite = await open(rpc(call("relay_decide", { text: "We try to write anonymously because testing", project: "demo" })));
     expect(((await anonWrite.json()) as Result).result.isError).toBe(true);
 
+    // a bearer the server does not recognise is a refusal: the caller meant to authenticate and did not
     const wrongToken = await open(rpc(call("relay_decide", { text: "We try with a wrong token because testing", project: "demo" }), "nope"));
-    expect(((await wrongToken.json()) as Result).result.isError).toBe(true);
+    expect(wrongToken.status).toBe(401);
+    expect(wrongToken.headers.get("www-authenticate")).toMatch(/Bearer/);
 
     const authedWrite = await open(rpc(call("relay_decide", { text: "We write over HTTP with a token because it is allowed", project: "demo" }), "s3cret"));
     expect(authedWrite.status).toBe(200);
@@ -247,7 +277,9 @@ describe("http handler", () => {
         return row ? { scopes: row.scopes, actor: `token:${row.name}` } : undefined;
       },
     });
-    expect((await handler(rpc(call("relay_get_feed", { limit: 1 })))).status).toBe(401);
+    const anon = await handler(rpc(call("relay_get_feed", { limit: 1 })));
+    expect(anon.status).toBe(200);
+    expect(((await anon.json()) as Result).result.isError).toBe(true);
     expect((await handler(rpc(call("relay_get_feed", { limit: 1 }), "rly_unknown"))).status).toBe(401);
     const ok = await handler(rpc(call("relay_get_feed", { limit: 1 }), token));
     expect(ok.status).toBe(200);

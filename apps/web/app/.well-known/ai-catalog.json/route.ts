@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
-import { REPO_URL, SITE_URL } from "@/lib/data";
+import { SCOPES } from "@/lib/auth";
+import { TRUST_PAGES } from "@/lib/content/trust";
+import { publicReadEnabled } from "@/lib/data";
 import { DOCS } from "@/lib/docs";
 import { APP_VERSION } from "@/lib/info-doc";
+import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
+
+export const dynamic = "force-dynamic";
 
 /** Site catalog for agents: what is here and how to use it, in one file. */
 export function GET() {
@@ -15,25 +20,41 @@ export function GET() {
       url: SITE_URL,
       software_version: APP_VERSION,
       license: "Apache-2.0",
+      author: { name: AUTHOR.name, url: AUTHOR.url },
       pricing: { model: "free", notes: "No paid tier. Bring your own vendor subscriptions." },
       repository: REPO_URL,
+      support: ISSUES_URL,
       pages: [
-        { url: `${SITE_URL}/`, title: "Feed", description: "Every event across projects, newest first." },
-        { url: `${SITE_URL}/info`, title: "What relay is", description: "The five rules, how a task flows, quick install, linking accounts.", markdown: true },
-        { url: `${SITE_URL}/projects`, title: "Projects", description: "Linked repositories with decisions and digest coverage." },
-        { url: `${SITE_URL}/usage`, title: "Usage", description: "Calls, tokens, cost equivalent and plan meters per subscription." },
-        { url: `${SITE_URL}/workers`, title: "Workers", description: "Health of self-hosted runners." },
+        { url: `${SITE_URL}/`, title: "What relay is", description: "The five rules, how a task flows, quick install, linking accounts. The feed for a signed-in viewer.", markdown: true },
+        ...TRUST_PAGES.map((p) => ({ url: `${SITE_URL}/${p.slug}`, title: p.title, description: p.description, markdown: true })),
         ...DOCS.map((d) => ({ url: `${SITE_URL}/docs/${d.slug}`, title: d.title, description: d.description, markdown: true })),
+        { url: `${SITE_URL}/projects`, title: "Projects", description: "Linked repositories with decisions and digest coverage.", access: "session" },
+        { url: `${SITE_URL}/usage`, title: "Usage", description: "Calls, tokens, cost equivalent and plan meters per subscription.", access: "session" },
+        { url: `${SITE_URL}/workers`, title: "Workers", description: "Health of self-hosted runners.", access: "session" },
       ],
       apis: [
         { type: "openapi", url: `${SITE_URL}/openapi.json`, base_url: `${SITE_URL}/api/v1`, docs: `${SITE_URL}/docs/api` },
-        { type: "mcp", url: `${SITE_URL}/mcp`, transport: "streamable-http", server_card: `${SITE_URL}/.well-known/mcp/server-card.json`, registry: `${SITE_URL}/server.json` },
+        {
+          type: "mcp",
+          url: `${SITE_URL}/mcp`,
+          transport: "streamable-http",
+          server_card: `${SITE_URL}/.well-known/mcp/server-card.json`,
+          registry: `${SITE_URL}/server.json`,
+          anonymous: ["initialize", "tools/list", "relay_get_info", "relay_get_methodology"],
+        },
       ],
       skills: `${SITE_URL}/.well-known/agent-skills/index.json`,
       llms_txt: `${SITE_URL}/llms.txt`,
       llms_full_txt: `${SITE_URL}/llms-full.txt`,
       sitemap: `${SITE_URL}/sitemap.xml`,
-      auth: { scheme: "bearer", metadata: `${SITE_URL}/.well-known/oauth-protected-resource`, public_read: true },
+      auth: {
+        scheme: "http",
+        type: "bearer",
+        issuance: "relay token create --name <name> --scopes <scopes>, run by the operator; the hash is stored, the token shown once",
+        scopes: SCOPES,
+        docs: `${SITE_URL}/docs/api#authentication-and-scopes`,
+        public_read: publicReadEnabled(),
+      },
       versioning: `${SITE_URL}/docs/versioning`,
     },
     { headers: { "cache-control": "public, max-age=3600" } },

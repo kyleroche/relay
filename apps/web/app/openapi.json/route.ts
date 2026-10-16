@@ -41,7 +41,7 @@ function problemResponse(description: string, extraHeaders: Record<string, unkno
 
 const commonErrors = {
   "401": problemResponse("Missing or unknown bearer token (when public read is disabled).", {
-    "WWW-Authenticate": { schema: { type: "string" }, description: "Bearer challenge naming the required scope and the protected-resource metadata URL." },
+    "WWW-Authenticate": { schema: { type: "string" }, description: "Bearer challenge naming the required scope." },
   }),
   "403": problemResponse("Token lacks the required scope."),
   "429": problemResponse("Rate limit exceeded.", { "Retry-After": { schema: { type: "integer" }, description: "Seconds until the window resets." } }),
@@ -57,7 +57,7 @@ export function GET() {
       summary: "Read model over relay's event feed, projects and plan usage, plus the asset library's upload and review loop.",
       description: `The same data as the site, as JSON. Rate limited to ${RATE_LIMIT.limit} requests per ${RATE_LIMIT.windowSeconds} seconds per client; every response carries RateLimit-Policy and RateLimit headers and 429 includes Retry-After. Errors are RFC 9457 application/problem+json. Versioning and deprecation policy: ${SITE_URL}/docs/versioning (RFC 9745 Deprecation and Sunset headers when an operation is retired).`,
       license: { name: "Apache-2.0", identifier: "Apache-2.0" },
-      contact: { name: "relay", url: `${SITE_URL}/info` },
+      contact: { name: "relay", url: `${SITE_URL}/contact` },
       "x-rate-limit": { policy: RATE_LIMIT.policyName, requests: RATE_LIMIT.limit, window_seconds: RATE_LIMIT.windowSeconds },
     },
     externalDocs: { description: "API and MCP guide", url: `${SITE_URL}/docs/api` },
@@ -226,7 +226,8 @@ export function GET() {
         bearer: {
           type: "http",
           scheme: "bearer",
-          description: `Bearer token minted with the relay CLI. Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read. Protected-resource metadata: ${SITE_URL}/.well-known/oauth-protected-resource`,
+          description: `Bearer token issued by the operator with \`relay token create --name <name> --scopes <scopes>\` (the SHA-256 is stored, the token is shown once). There is no authorization server and no sign-up: ask the operator for a token (${SITE_URL}/contact). Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read.`,
+          "x-token-issuance": "relay token create --name <name> --scopes <scopes>",
           "x-scopes": {
             "feed:read": "Read the feed and projects.",
             "memory:read": "Read decisions, preferences, briefs and guidance through MCP.",

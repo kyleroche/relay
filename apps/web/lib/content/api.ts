@@ -40,7 +40,7 @@ pnpm relay token ls
 pnpm relay token revoke ci-runner
 \`\`\`
 
-Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope. The bearer scheme and scopes are also published at [\`/.well-known/oauth-protected-resource\`](/.well-known/oauth-protected-resource) (RFC 9728).
+Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope. There is no OAuth authorization server and no self-serve sign-up: the bearer scheme and its scopes are described in [\`/openapi.json\`](/openapi.json) (\`securitySchemes.bearer\`) and in the [MCP server card](/.well-known/mcp/server-card.json), and a token comes from the operator ([contact](/contact)). A request without a usable token gets \`401\` with a \`WWW-Authenticate: Bearer realm="relay", scope="<scope>"\` challenge.
 
 ## Rate limits
 
@@ -150,7 +150,7 @@ curl -X PUT ${SITE_URL}/api/v1/assets/<id>/review -H "Authorization: Bearer $TOK
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
 
-With public read enabled (the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token; everything else returns an error naming the missing scope.
+Anyone can connect: \`initialize\` and \`tools/list\` need no token, and \`relay_get_info\` and \`relay_get_methodology\` always answer anonymously. With public read enabled (\`RELAY_PUBLIC_READ=1\`, the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token too. Every other call without the right scope returns an MCP tool error (\`isError: true\`) naming the missing scope, not an HTTP error; only a bearer token the server does not recognise gets HTTP \`401\`. Every response carries the same \`RateLimit\` headers as the API.
 
 Claude Code:
 

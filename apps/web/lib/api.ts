@@ -100,7 +100,7 @@ export async function callerGrant(req: Request): Promise<Grant | undefined> {
 export async function requireScope(req: Request, scope: Scope, instance: string, rate?: RateState): Promise<NextResponse | null> {
   if (PUBLIC_SCOPES.includes(scope) && publicReadEnabled()) return null;
   const token = bearer(req);
-  const challenge = `Bearer realm="relay", scope="${scope}", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"`;
+  const challenge = `Bearer realm="relay", scope="${scope}"`;
   const headers = { "WWW-Authenticate": challenge, ...(rate ? rateHeaders(rate) : {}) };
   if (!token) {
     if (await sessionGrant(req)) return null;
