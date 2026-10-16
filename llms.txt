@@ -15,7 +15,8 @@
 - [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and the `relay_*` MCP tools
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
-- [Feed](docs/FEED.md): event kinds, sources, and the ledger view
+- [Feed](docs/FEED.md): event kinds, sources, the ledger view, and the outbound webhook contract (payload, signature)
+- [Integrations](docs/INTEGRATIONS.md): what an external bot needs: a scoped token, the task and event tools, the webhook, and a Grok Bot walkthrough
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it
 - [Versioning](docs/VERSIONING.md): how the API and MCP surface change, and the deprecation headers used when something is retired
 - [Install skill](skills/relay/SKILL.md): the agent skill for installing and operating relay

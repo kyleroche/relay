@@ -3,7 +3,7 @@
  * In --hook mode (UserPromptSubmit) output is capped at 1K tokens and nothing is printed unless the cwd is linked.
  */
 import type { Command } from "commander";
-import { approxTokens, briefEmbedder, matchingDecisions, mergedPreferences, renderDecision, renderPreference, repo } from "@relay/core";
+import { approxTokens } from "@relay/core";
 import { hookSafe, log, openReady, resolveProject } from "./_common.ts";
 
 /** Fit whole lines under a token budget. */
@@ -40,20 +40,16 @@ export function registerRecall(program: Command): void {
         const budget = Number(o.maxTokens);
         const h = await openReady();
         try {
-          if (!(await repo.getProject(h.db, ref.slug))) {
+          if (!(await h.client.getProject(ref.slug))) {
             if (hook) return;
             throw new Error(`unknown project ${ref.slug}; run relay link first`);
           }
-          const embed = briefEmbedder(h);
-          const prefs = await mergedPreferences(h.db, { project: ref.slug, ...(o.lane ? { lane: o.lane } : {}) });
-          const decisions = query ? await matchingDecisions(h.db, ref.slug, query, { ...(embed ? { embed } : {}) }) : await repo.listDecisions(h.db, ref.slug, { current: true, limit: 50 });
+          const r = await h.client.recall({ project: ref.slug, query, ...(o.lane ? { lane: o.lane } : {}) });
           if (o.json) {
-            console.log(JSON.stringify({ project: ref.slug, preferences: prefs, decisions }, null, 2));
+            console.log(JSON.stringify({ project: ref.slug, preferences: r.preferences, decisions: r.decisions, text: r.text }, null, 2));
             return;
           }
-          const lines: string[] = [];
-          if (prefs.length) lines.push("Preferences:", ...prefs.map(renderPreference));
-          if (decisions.length) lines.push(`${prefs.length ? "\n" : ""}Decisions:`, ...decisions.map(renderDecision));
+          const lines = r.text ? r.text.split("\n") : [];
           if (!lines.length) {
             if (!hook) log(`no decisions or preferences for ${ref.slug}`);
             return;

@@ -63,6 +63,11 @@ export function registerCapture(program: Command): void {
         const offset = o.all ? 0 : prev?.offset ?? 0;
         const h = await openReady();
         try {
+          if (h.mode === "site") {
+            // capture needs the database for the Sonnet extraction loop; in site mode it is deferred (docs/MEMORY.md)
+            if (hook) return;
+            throw new Error(`relay capture is not available in site mode yet; record decisions with relay decide, or run capture on the machine that holds the database`);
+          }
           const project = ref.slug && (await repo.getProject(h.db, ref.slug)) ? ref.slug : null;
           if (!project && hook) return;
           const r = await captureDecisions(h, o.transcript, {

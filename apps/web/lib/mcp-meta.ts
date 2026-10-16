@@ -24,7 +24,7 @@ export function serverCard() {
   return {
     name: "relay",
     version: APP_VERSION,
-    description: "Public read tools over relay's feed and projects; token-gated memory and asset tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
+    description: "Public read tools over relay's feed and projects; token-gated memory, asset, task (relay_task_*) and external-event (relay_event_log) tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
     url: `${SITE_URL}/mcp`,
     transport: "streamable-http",
     stateless: true,
@@ -33,7 +33,8 @@ export function serverCard() {
       required_for: MCP_TOOLS.filter((t) => t.scope && t.scope !== "feed:read" && t.scope !== "memory:read").map((t) => t.name),
       public_when_public_read: MCP_TOOLS.filter((t) => t.scope === "feed:read" || t.scope === "memory:read").map((t) => t.name),
       scopes: SCOPES,
-      token_issuance: "relay token create --name <name> --scopes <scopes>",
+      token_issuance: "relay token create --name <name> --scopes <scopes>, or the /tokens page when signed in",
+      integrations: `${SITE_URL}/docs/integrations`,
       resource_metadata: `${SITE_URL}/.well-known/oauth-protected-resource`,
     },
     tools: MCP_TOOLS.map((t) => ({ name: t.name, description: t.description, scope: t.scope })),

@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { problem } from "@/lib/api";
 import { writeEvent } from "@/lib/data";
+import { dispatchAfter } from "@/lib/dispatch";
 import { githubEvents } from "@/lib/webhooks/github";
 import { verifyGitHub } from "@/lib/webhooks/verify";
 
@@ -34,10 +35,13 @@ export async function POST(req: NextRequest) {
   if (!events.length) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });
 
   const written = [];
+  const rows = [];
   for (const event of events) {
     const row = await writeEvent(event);
+    rows.push(row);
     written.push({ id: row?.id ?? null, kind: event.kind, deduped: row === null });
   }
+  dispatchAfter(rows);
   return NextResponse.json({ ok: true, events: written }, { status: 201 });
 }
 

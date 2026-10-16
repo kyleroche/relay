@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
-import { briefEmbedder, compileBrief, readCachedBrief, writeCachedBrief, repo, type BriefIssue } from "@relay/core";
+import { readCachedBrief, writeCachedBrief, type BriefIssue } from "@relay/core";
 import { hookSafe, log, onPath, openReady, resolveProject } from "./_common.ts";
 
 export const SESSION_START_INTENT = "session start";
@@ -61,24 +61,25 @@ export function registerBrief(program: Command): void {
         }
         const h = await openReady();
         try {
-          const project = await repo.getProject(h.db, ref.slug);
+          const project = await h.client.getProject(ref.slug);
           if (!project) {
             if (hook) return;
             throw new Error(`unknown project ${ref.slug}; run relay link first`);
           }
-          const embed = briefEmbedder(h);
           const issue = issueNo ? fetchIssue(ref.repo, issueNo) : undefined;
           // the summary is budgeted first: a linked project's brief always carries it when one exists
-          const b = await compileBrief(h.db, { project: ref.slug, intent, maxTokens, sections: ["summary", "preferences", "decisions", "guidance"], ...(issue ? { issue } : {}), ...(o.model ? { model: o.model } : {}), ...(o.lane ? { lane: o.lane } : {}), ...(embed ? { embed } : {}) });
+          const b = await h.client.brief({ project: ref.slug, intent, maxTokens, ...(issue ? { issue } : {}), ...(o.model ? { model: o.model } : {}), ...(o.lane ? { lane: o.lane } : {}) });
+          const sections = b.sections ?? [];
+          const omitted = b.omitted ?? [];
           if (o.cache && !issueNo) writeCachedBrief({ project: ref.slug, key, text: b.text, tokens: b.tokens });
-          if (o.json) console.log(JSON.stringify({ text: b.text, sections: b.sections, tokens: b.tokens, omitted: b.omitted }, null, 2));
+          if (o.json) console.log(JSON.stringify({ text: b.text, sections, tokens: b.tokens, omitted, ...(h.mode === "site" ? { site: h.client.site } : {}) }, null, 2));
           else {
             process.stdout.write(b.text);
-            if (!hook) log(`${b.tokens} tokens: ${b.sections.map((s) => `${s.name}=${s.tokens}`).join(" ")}${b.omitted.length ? ` (omitted: ${b.omitted.join(", ")})` : ""}`);
+            if (!hook) log(`${b.tokens} tokens${sections.length ? `: ${sections.map((s) => `${s.name}=${s.tokens}`).join(" ")}` : ` from ${h.client.site}`}${omitted.length ? ` (omitted: ${omitted.join(", ")})` : ""}`);
           }
           if (!hook) {
-            if (!project.summary) log(`project ${ref.slug} has no summary yet, so the brief has no project section; run \`relay link --refresh\` in the repo to write it`);
-            else if (b.omitted.includes("summary")) log(`the project summary (${project.summary_tokens ?? "?"} tokens) does not fit under --max-tokens ${maxTokens}; raise the cap to include it`);
+            if (!project.summary && h.mode === "local") log(`project ${ref.slug} has no summary yet, so the brief has no project section; run \`relay link --refresh\` in the repo to write it`);
+            else if (omitted.includes("summary")) log(`the project summary (${project.summary_tokens ?? "?"} tokens) does not fit under --max-tokens ${maxTokens}; raise the cap to include it`);
           }
         } finally {
           await h.close();

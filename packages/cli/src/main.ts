@@ -17,11 +17,16 @@ import { registerPrefer } from "./commands/prefer.ts";
 import { registerCapture } from "./commands/capture.ts";
 import { registerMemory } from "./commands/memory.ts";
 import { registerToken } from "./commands/token.ts";
+import { registerTask } from "./commands/task.ts";
+import { registerWebhook } from "./commands/webhook.ts";
+import { openReady } from "./commands/_common.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version("0.0.1");
 registerAssetCommands(program);
 registerToken(program);
+registerTask(program);
+registerWebhook(program);
 
 // ---------- memory layer: setup, link, brief, recall, decide, prefer, capture, memory (packages/cli/src/commands) ----------
 for (const register of [registerSetup, registerLink, registerBrief, registerRecall, registerDecide, registerPrefer, registerCapture, registerMemory]) register(program);
@@ -37,9 +42,10 @@ program
       writeFileSync(cfg.configPath, JSON.stringify(template, null, 2) + "\n");
       log(`wrote ${cfg.configPath} (set DATABASE_URL for Postgres, AI_GATEWAY_API_KEY for embeddings; neither is stored in a file)`);
     }
-    const h = await openHarness(cfg);
+    const h = await openHarness(cfg, { local: true });
     try {
       log(`database: ${h.db.driver}${h.db.driver === "pglite" ? ` at ${cfg.dbFile}` : " via DATABASE_URL"}`);
+      if (cfg.site) log(`site mode: commands talk to ${cfg.site}; this local database serves relay link's digest cache and the stdio MCP server`);
       const v = await migrate(h.db, { log });
       log(`schema at v${v}`);
       await seedRegistry(h, log);
@@ -139,6 +145,19 @@ program
     }
 
     const cfg = loadConfig();
+    const siteMode = !!cfg.site && !!cfg.siteToken;
+    if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site} --token <t>` });
+    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, task and webhook commands and the hooks use it)` : "local: the database on this machine" });
+    if (siteMode) {
+      const t0 = Date.now();
+      const h = await openReady();
+      try {
+        const health = await h.client.health();
+        checks.push({ status: health.ok ? "ok" : "fail", name: "site", detail: `${health.detail}, ${Date.now() - t0} ms` });
+      } finally {
+        await h.close();
+      }
+    }
     const t0 = Date.now();
     try {
       const db = await openDb(cfg.databaseUrl ? { url: cfg.databaseUrl } : { file: cfg.dbFile });
@@ -146,12 +165,12 @@ program
         await db.query("SELECT 1");
         const v = await currentVersion(db);
         const where = db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${cfg.dbFile}`;
-        checks.push({ status: v > 0 ? "ok" : "warn", name: "database", detail: `${where}, schema v${v}${v > 0 ? "" : " (run: relay init)"}, ${Date.now() - t0} ms` });
+        checks.push({ status: v > 0 ? "ok" : siteMode ? "ok" : "warn", name: "database", detail: `${where}, schema v${v}${v > 0 || siteMode ? "" : " (run: relay init)"}, ${Date.now() - t0} ms${siteMode ? " (digest cache and stdio MCP only)" : ""}` });
       } finally {
         await db.close();
       }
     } catch (e) {
-      checks.push({ status: "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
+      checks.push({ status: siteMode ? "warn" : "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
     }
     checks.push({ status: cfg.gateway.apiKey ? "ok" : "warn", name: "gateway", detail: cfg.gateway.apiKey ? "AI_GATEWAY_API_KEY set (embeddings on)" : "AI_GATEWAY_API_KEY unset; retrieval uses full-text only" });
 
@@ -353,16 +372,16 @@ program
   .option("--actor <actor>")
   .option("--days <n>", "window", "7")
   .option("-n <n>", "rows", "50")
-  .description("Recent events, newest first")
+  .description("Recent events, newest first (from the site in site mode)")
   .action(async (o: { project?: string; kind?: string; actor?: string; days: string; n: string }) => {
-    const h = await openHarness();
+    const h = await openReady();
     try {
       const since = new Date(Date.now() - Number(o.days) * 86_400_000).toISOString();
       const opts: Parameters<typeof repo.listEvents>[1] = { since, limit: Number(o.n) };
       if (o.project) opts.project = o.project;
       if (o.kind) opts.kind = o.kind;
       if (o.actor) opts.actor = o.actor;
-      for (const e of await repo.listEvents(h.db, opts)) {
+      for (const e of await h.client.listEvents(opts)) {
         const usage = e.kind === "step.usage" ? `  ${e.tokens_in + e.cache_read} in / ${e.tokens_out} out  $${e.cost_equiv.toFixed(4)}` : "";
         console.log(`${e.ts}  ${e.kind.padEnd(18)} ${e.actor.padEnd(18)} ${(e.project ?? "-").padEnd(14)} ${e.summary.slice(0, 80)}${usage}`);
       }
@@ -374,12 +393,12 @@ program
 program
   .command("usage")
   .option("--days <n>", "window", "7")
-  .description("Ledger summary per subscription (step.usage events)")
+  .description("Ledger summary per subscription (step.usage events; from the site in site mode)")
   .action(async (o: { days: string }) => {
-    const h = await openHarness();
+    const h = await openReady();
     try {
       const since = new Date(Date.now() - Number(o.days) * 86_400_000).toISOString();
-      console.table(await h.ledger.summary(since));
+      console.table(await h.client.usageSummary(since));
     } finally {
       await h.close();
     }

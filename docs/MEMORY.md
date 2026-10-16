@@ -165,10 +165,32 @@ contradicted by newer ones, and drops preferences whose scope target no longer e
 schedule, not on your machines, and it uses the Gateway only if `AI_GATEWAY_API_KEY` is set; otherwise it does the
 exact-match merges only. (Not built yet; capture already dedupes exact matches and records supersessions.)
 
+## Site mode
+
+A machine does not have to hold the database. `relay setup --site https://relay.example.com --token <t>` stores the
+site URL in `~/.harness/config.json` (`site`) and the token in `~/.harness/credentials.json` (mode 0600; `RELAY_SITE`
+and `RELAY_TOKEN` override both). Mint the first token on the site's `/tokens` page while signed in; after that
+`relay token create` works from a site-mode machine too (scope `tokens:write`). `relay setup` checks the site answers
+and accepts the token before saving (`--yes` saves anyway).
+
+With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,
+`httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`,
+`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay task`, `relay webhook` and
+the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay link` still
+hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
+`step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`; scope `projects:write`).
+`relay doctor` reports `mode` and `site`. Without a site nothing changes: the CLI opens PGlite or `DATABASE_URL`.
+
+Not available in site mode (they need the database on the machine): `relay capture` (the session-end hook exits
+quietly; use `relay decide`), `relay decide --global`, `relay sql`, `relay init`, `relay onboard`, `relay models`,
+`relay project *`, `relay asset *`, and the stdio MCP server, which always serves the local database. They fail with
+one line saying so. `relay setup --no-site` returns to local mode.
+
 ## Working with memory by hand
 
 ```text
 pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
+pnpm relay setup --site <url> --token <t> | --no-site             # site mode: commands and hooks use the hosted relay
 pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels
 pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
 pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now
@@ -176,6 +198,9 @@ pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]
 pnpm relay prefer <key> <value> --scope lane --id grok
 pnpm relay capture --transcript <path> [--source claude|codex|grok] [--dry-run] [--all]
 pnpm relay memory history [--project <slug>] [--current]         # decisions including superseded ones
+pnpm relay task create --title <t> --lane claude|codex|grok [--priority <p>] [--key <k>]   # open a task (GitHub issue with the lane label)
+pnpm relay task get <owner/repo#n> | relay task ls [--state review]                        # derived state from the feed
+pnpm relay webhook add --url <url> --events pr.merged,run.failed [--bearer <k>] | ls | rm <id> | test <id>
 ```
 
 `relay decide` writes a `decision.captured` event, `relay prefer` a `preference.set` event, `relay link` a
@@ -202,6 +227,9 @@ Schema lives in `packages/core/src/db/migrations/NNN_name.sql`, applied in order
 | `guidance` | chunked vendor guidance per model with kind, tokens, embedding (1536) and a generated `tsv` | `(model, id)` — one source may guide several models |
 | `skills` | provider-published skills installed under `~/.harness/skills` | `(name, model)` |
 | `events` | the append-only feed: who did what, with tokens and cost; `dedupe_key` makes webhook writes idempotent | `id` |
+| `tokens` | bearer tokens for the site: name, scopes, SHA-256 of the plaintext, revocation | `id` |
+| `tasks` | a GitHub issue relay opened or tracks as a task; state is derived from `events` (`docs/INTEGRATIONS.md`) | `id` = `owner/repo#n` |
+| `webhooks`, `webhook_deliveries` | outbound hooks (url, events, project, secret, bearer) and one row per delivery attempt set (`docs/FEED.md`) | `id` |
 | `ledger` (view) | `events WHERE kind = 'step.usage'`; `relay usage` groups it by subscription | — |
 
 Full-text search uses `websearch_to_tsquery('english', …)` against the `tsv` columns; vector search uses the
@@ -216,13 +244,17 @@ retrieval falls back to full text.
 - `guidance.ts`: providers, models, sources, guidance chunks (`replaceGuidance`, `pruneGuidance`, `setEmbeddings`, `vectorSearchGuidance`, `textSearchGuidance`), skills
 - `memory.ts`: `addDecision`, `supersedeDecision`, `listDecisions`, `searchDecisions`, `upsertPreference`, `listPreferences`
 - `events.ts`: `writeEvent`, `listEvents`, `usageSummary`
+- `tokens.ts`: `createToken`, `findToken`, `listTokens`, `revokeToken`, `TOKEN_SCOPES`
+- `tasks.ts`: `createTask`, `getTask`, `listTasks`, `taskState` / `deriveTaskStatus`, `listTaskViews`
+- `webhooks.ts`: `createWebhook`, `listWebhooks`, `matchingWebhooks`, `deleteWebhook`, the delivery log
 
 `repo.ts` re-exports all of them as one namespace (`repo.getModel(h.db, id)`). The `Ledger` class in
 `ledger/ledger.ts` is a thin adapter that writes `step.usage` events and holds the Gateway list-price table.
 
 Above the query layer: `brief/` (`compileBrief`, `renderRulesFile`, `mergedPreferences`), `rules/owned-section.ts`,
 `hooks/` (per-CLI installers, `planSetup`/`applyPlan`, the brief cache), `memory/capture.ts` (`captureDecisions`,
-`parseTranscript`, the gates).
+`parseTranscript`, the gates), `tasks/create.ts` (`openTask`), `github/client.ts` (issues over an env token or `gh`),
+`webhooks/dispatch.ts` (signing, delivery, fan-out), `client/` (`RelayClient`: `localClient`, `httpClient`, site config).
 
 ### Configuration
 
@@ -231,6 +263,9 @@ Above the query layer: `brief/` (`compileBrief`, `renderRulesFile`, `mergedPrefe
 - `RELAY_REPO`, `RELAY_REF` (env, optional) or `relay.repo` / `relay.ref` in `~/.harness/config.json`: what
   `relay link` substitutes for `__RELAY_REPO__` / `__RELAY_REF__` in the caller workflows (default `<owner>/relay@main`).
 - `RELAY_CAPTURE_GATE` (env, optional) or `capture.gateCommand` in `~/.harness/config.json`: the segment gate command.
-- `~/.harness/config.json`: `staleDays` and `gateway.embeddingModel`. No secrets are ever written there.
+- `RELAY_SITE`, `RELAY_TOKEN` (env, optional) or `site` in `~/.harness/config.json` plus `token` in
+  `~/.harness/credentials.json` (0600): site mode, written by `relay setup --site`.
+- `~/.harness/config.json`: `staleDays`, `gateway.embeddingModel`, `site`. No secrets are ever written there; the
+  site token lives in `credentials.json` next to it.
 
 `relay doctor` reports database reachability and schema version alongside the CLI login checks.

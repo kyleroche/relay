@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { problem } from "@/lib/api";
 import { writeEvent } from "@/lib/data";
+import { dispatchAfter } from "@/lib/dispatch";
 import { normalizeVercel } from "@/lib/webhooks/vercel";
 import { verifyVercel } from "@/lib/webhooks/verify";
 
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest) {
   if (!event) return NextResponse.json({ ok: true, ignored: true, type: body.type ?? null }, { status: 202 });
 
   const row = await writeEvent(event);
+  dispatchAfter([row]);
   return NextResponse.json({ ok: true, id: row?.id ?? null, kind: event.kind }, { status: 201 });
 }
 

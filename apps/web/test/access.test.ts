@@ -45,9 +45,11 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/api/feed", "/api/meters", "/api/assets/mock/abc", "/anything-else"]) {
+    for (const p of ["/", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/api/feed", "/api/meters"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
+    // unknown paths are nobody's: they fall through to a real 404, never a sign-in redirect
+    for (const p of ["/api/assets/mock/abc", "/anything-else"]) expect(classifyRoute(p, anon), p).toBe("public");
   });
 
   it("lets /api/v1 through with a bearer and gates it otherwise", () => {
@@ -71,10 +73,11 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/info/", anon)).toBe("public");
     expect(classifyRoute("//info", anon)).toBe("public");
     expect(classifyRoute("/docs//api", anon)).toBe("public");
-    expect(classifyRoute("/information", anon)).toBe("session");
-    expect(classifyRoute("/infoX", anon)).toBe("session");
-    expect(classifyRoute("/skillsX", anon)).toBe("session");
-    expect(classifyRoute("/mcp/other", anon)).toBe("session");
+    expect(classifyRoute("/projects/", anon)).toBe("session");
+    expect(classifyRoute("//assets", anon)).toBe("session");
+    // near-misses of public names are unknown paths (404), not protected pages
+    expect(classifyRoute("/information", anon)).toBe("public");
+    expect(classifyRoute("/skillsX", anon)).toBe("public");
   });
 
   it("names the API paths that get problem+json instead of a redirect", () => {

@@ -4,6 +4,7 @@ import { SITE_URL } from "@/lib/data";
 import { EVENT_KIND_LIST } from "@/lib/events";
 import { APP_VERSION } from "@/lib/info-doc";
 import { ASSET_KINDS, ASSET_STATUSES } from "@/lib/types";
+import { integrationPaths, integrationSchemas, integrationTags, scopeDescriptions } from "@/lib/openapi-ext";
 
 const problemSchema = {
   type: "object",
@@ -67,6 +68,7 @@ export function GET() {
       { name: "feed", description: "The append-only event feed." },
       { name: "projects", description: "Linked repositories, decisions and models." },
       { name: "assets", description: "The asset library: media agents produce, versioned, with an approve-or-reject review loop (docs/ASSETS.md)." },
+      ...integrationTags,
     ],
     security: [{}, { bearer: ["feed:read"] }],
     paths: {
@@ -220,6 +222,7 @@ export function GET() {
           },
         },
       },
+      ...integrationPaths({ response, problemResponse, commonErrors }),
     },
     components: {
       securitySchemes: {
@@ -227,14 +230,7 @@ export function GET() {
           type: "http",
           scheme: "bearer",
           description: `Bearer token minted with the relay CLI. Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read. Protected-resource metadata: ${SITE_URL}/.well-known/oauth-protected-resource`,
-          "x-scopes": {
-            "feed:read": "Read the feed and projects.",
-            "memory:read": "Read decisions, preferences, briefs and guidance through MCP.",
-            "memory:write": "Record decisions and preferences through MCP.",
-            "assets:read": "List and view assets (signed URLs).",
-            "assets:write": "Upload, finalize and publish assets.",
-            "assets:review": "Approve or reject assets.",
-          },
+          "x-scopes": scopeDescriptions,
         },
       },
       schemas: {
@@ -453,6 +449,7 @@ export function GET() {
             by: { type: "string", description: "Reviewer actor; defaults to the token's name." },
           },
         },
+        ...integrationSchemas,
       },
     },
   };

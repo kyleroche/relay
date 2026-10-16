@@ -1,0 +1,98 @@
+/**
+ * `relay task …`: open and read tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally the issue
+ * is opened with the machine's gh login; in site mode the site opens it with its own GitHub token. State is derived
+ * from the feed every time it is asked for (docs/INTEGRATIONS.md).
+ */
+import type { Command } from "commander";
+import { readFileSync } from "node:fs";
+import { TASK_LANES, TASK_PRIORITIES, TASK_STATES, isTaskState, type TaskLane, type TaskPriority, type TaskView } from "@relay/core";
+import { log, openReady, resolveProject } from "./_common.ts";
+
+function line(t: TaskView): string {
+  const who = t.runner ? ` ${t.runner}` : "";
+  const pr = t.pr ? ` PR #${t.pr}` : "";
+  return `${t.id.padEnd(28)} ${t.state.padEnd(8)} ${(t.lane ?? "-").padEnd(7)}${who}${pr}  ${(t.summary ?? "").slice(0, 70)}`;
+}
+
+export function registerTask(program: Command): void {
+  const task = program.command("task").description("Tasks: GitHub issues with a lane label, with state derived from the feed (docs/INTEGRATIONS.md)");
+
+  task
+    .command("create")
+    .requiredOption("--title <text>")
+    .requiredOption("--lane <lane>", `one of ${TASK_LANES.join(", ")}`)
+    .option("--project <slug>", "project slug (default: the linked project of the cwd)")
+    .option("--body <text>", "issue body (markdown)")
+    .option("--body-file <path>", "read the body from a file ('-' for stdin)")
+    .option("--priority <p>", `one of ${TASK_PRIORITIES.join(", ")}`)
+    .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
+    .option("--cwd <path>")
+    .option("--json")
+    .description("Open a task: a GitHub issue with agent:<lane> (and priority:<p>) labels")
+    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
+      if (!(TASK_LANES as readonly string[]).includes(o.lane)) throw new Error(`--lane must be one of ${TASK_LANES.join(", ")}`);
+      if (o.priority && !(TASK_PRIORITIES as readonly string[]).includes(o.priority)) throw new Error(`--priority must be one of ${TASK_PRIORITIES.join(", ")}`);
+      const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
+      if (!ref.slug) throw new Error("no project: pass --project or run relay link in the repo");
+      const body = o.bodyFile ? readFileSync(o.bodyFile === "-" ? 0 : o.bodyFile, "utf8") : o.body ?? "";
+      const h = await openReady();
+      try {
+        const r = await h.client.createTask({ project: ref.slug, title: o.title, body, lane: o.lane as TaskLane, ...(o.priority ? { priority: o.priority as TaskPriority } : {}), idempotency_key: o.key ?? null });
+        if (o.json) console.log(JSON.stringify(r, null, 2));
+        else {
+          console.log(r.task_id);
+          log(`${r.created ? "opened" : "already open (same key)"}: ${r.issue_url} [${r.task.state}]`);
+        }
+      } finally {
+        await h.close();
+      }
+    });
+
+  task
+    .command("get")
+    .argument("<task-id>", "owner/repo#n")
+    .option("--json")
+    .description("One task with its derived state, runner, PR and last summary")
+    .action(async (id: string, o: { json?: boolean }) => {
+      const h = await openReady();
+      try {
+        const t = await h.client.getTask(id);
+        if (!t) {
+          log(`no task ${id}`);
+          process.exitCode = 1;
+          return;
+        }
+        if (o.json) console.log(JSON.stringify(t, null, 2));
+        else {
+          console.log(`${t.id}  ${t.state}${t.lane ? `  lane ${t.lane}` : ""}${t.runner ? `  ${t.runner}` : ""}`);
+          console.log(`issue: ${t.issue_url}${t.pr_url ? `\npr:    ${t.pr_url}` : ""}`);
+          console.log(`last:  ${t.last_kind ?? "-"} ${t.updated_at ? t.updated_at.slice(0, 16) : ""} ${t.summary ?? ""}`.trimEnd());
+          console.log(`events: ${t.events}  created ${t.created_at.slice(0, 16)} by ${t.created_by}${t.idempotency_key ? `  key ${t.idempotency_key}` : ""}`);
+        }
+      } finally {
+        await h.close();
+      }
+    });
+
+  task
+    .command("ls")
+    .option("--project <slug>")
+    .option("--state <state>", `one of ${TASK_STATES.join(", ")}`)
+    .option("-n <n>", "rows", "50")
+    .option("--json")
+    .description("Tasks with derived state, newest first")
+    .action(async (o: { project?: string; state?: string; n: string; json?: boolean }) => {
+      if (o.state && !isTaskState(o.state)) throw new Error(`--state must be one of ${TASK_STATES.join(", ")}`);
+      const h = await openReady();
+      try {
+        const rows = await h.client.listTasks({ ...(o.project ? { project: o.project } : {}), ...(o.state && isTaskState(o.state) ? { state: o.state } : {}), limit: Number(o.n) });
+        if (o.json) console.log(JSON.stringify(rows, null, 2));
+        else {
+          if (!rows.length) log("no tasks");
+          for (const t of rows) console.log(line(t));
+        }
+      } finally {
+        await h.close();
+      }
+    });
+}
