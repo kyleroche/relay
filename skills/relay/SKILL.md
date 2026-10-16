@@ -64,7 +64,7 @@ Do these steps in order and stop at anything that needs the user's browser.
 
 ## Reading the feed
 
-- Web: the site root is the feed; `/projects`, `/usage`, `/workers` are rollups; `/info` explains the system.
+- Web: the site root is the public overview for anonymous visitors and the feed once signed in; `/docs` explains the system.
 - Terminal: `pnpm relay feed --limit 20`, `pnpm relay usage --window 7d`.
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
 - MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`.
