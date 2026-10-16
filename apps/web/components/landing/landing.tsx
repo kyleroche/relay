@@ -23,6 +23,8 @@ export const LANDING_METADATA: Metadata = {
   robots: { index: true, follow: true },
 };
 
+import { AgenticScore } from "./agentic-score";
+
 export function Landing() {
   return (
     <>
@@ -39,6 +41,7 @@ export function Landing() {
           <p className="mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">
             relay is a developer tool for macOS and Linux that turns the Claude Code, Codex and Grok subscriptions you already pay for into one system. It costs nothing and runs on your own machines.
           </p>
+          <AgenticScore />
           <div className="mt-6 flex flex-wrap gap-2">
             <a href="#install" className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90">
               Install

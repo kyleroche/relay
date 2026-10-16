@@ -4,7 +4,7 @@
 
 relay turns Claude Code, Codex, and Grok Build into a team that shares memory, picks up work from GitHub, runs on machines you own, and shows you everything it did and what it cost. No new agent to learn, no tokens leaving your machines.
 
-> Status: alpha. The pieces work individually; the first end-to-end lane is being wired. Watch the feed at a demo soon.
+> Status: alpha, deployed. The reference deployment is [relay.kyro.house](https://relay.kyro.house); its public pages, API, and MCP endpoint are open to agents and it scores 100/100 on [is-agentic.com](https://is-agentic.com/scan/relay.kyro.house). The first end-to-end runner lane is being wired.
 
 ## What you get
 
