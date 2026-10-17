@@ -8,6 +8,29 @@ import { dataMode, publicReadEnabled, SITE_URL } from "@/lib/data";
 import { SESSION_COOKIE, sessionActor, verifySession } from "@/lib/session-token";
 
 export const RESOURCE_METADATA_URL = `${SITE_URL}/.well-known/oauth-protected-resource`;
+export const AUTHORIZATION_SERVER_URL = `${SITE_URL}/.well-known/oauth-authorization-server`;
+
+/**
+ * How an agent gets access by itself, in one paragraph, for every 401 body: the error is the documentation most bots
+ * read. Register (RFC 7591), then the device flow (a person approves a short code once) or an invite code, then retry.
+ */
+export const ACCESS_HOWTO = `You can request access yourself; no person needs to hand you a token. 1) POST ${SITE_URL}/oauth/device with client_name=<your name> and scope=<space-separated scopes> (this registers you); it returns device_code, user_code (RLAY-XXXX) and verification_uri. 2) Show the person "approve <user_code> at ${SITE_URL}/activate" and poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=… every 5 s until it returns access_token (24 h) and refresh_token (90 d). If the operator gave you an invite code instead, POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite&invite=<code> and skip the approval. 3) Retry with Authorization: Bearer <access_token>. Metadata: ${AUTHORIZATION_SERVER_URL}; guide: ${SITE_URL}/docs/api#access.`;
+
+/** The same steps as data, for problem+json bodies and info documents. */
+export function accessSteps(): Record<string, unknown> {
+  return {
+    authorization_server: AUTHORIZATION_SERVER_URL,
+    resource_metadata: RESOURCE_METADATA_URL,
+    register: `POST ${SITE_URL}/oauth/register (RFC 7591, public client) or let POST ${SITE_URL}/oauth/device register you with client_name`,
+    device_flow: { start: `POST ${SITE_URL}/oauth/device {client_name, scope}`, approve: `the person opens ${SITE_URL}/activate and enters user_code, or a bot with tokens:write calls POST ${SITE_URL}/api/v1/access/{user_code}/approve`, poll: `POST ${SITE_URL}/oauth/token grant_type=urn:ietf:params:oauth:grant-type:device_code device_code=… client_id=…` },
+    invite: `POST ${SITE_URL}/oauth/token grant_type=urn:relay:invite invite=<code from relay invite create>`,
+    browser_consent: `POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize with PKCE S256; token at POST ${SITE_URL}/oauth/token`,
+    token_lifetime: { access_seconds: 86_400, refresh_seconds: 90 * 86_400, refresh: `POST ${SITE_URL}/oauth/token grant_type=refresh_token` },
+    whoami: `GET ${SITE_URL}/api/v1/whoami or the relay_whoami tool`,
+    docs: `${SITE_URL}/docs/api#access`,
+    fallback_for_humans: `${SITE_URL}/tokens`,
+  };
+}
 
 /** `WWW-Authenticate` for every refusal: the realm, the scope wanted, and where the authorization server is (RFC 9728). */
 export function bearerChallenge(scope?: string): string {
@@ -110,11 +133,11 @@ export async function requireScope(req: Request, scope: Scope, instance: string,
   const headers = { "WWW-Authenticate": bearerChallenge(scope), ...(rate ? rateHeaders(rate) : {}) };
   if (!token) {
     if (await sessionGrant(req)) return null;
-    return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope, or a signed-in session. Get one through the authorization server (${RESOURCE_METADATA_URL}).`, instance, {}, headers);
+    return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope. ${ACCESS_HOWTO}`, instance, { required_scope: scope, access: accessSteps() }, headers);
   }
   const grant = await resolveGrant(token);
-  if (!grant) return problem(401, "Unauthorized", "Unknown, expired or revoked token.", instance, {}, headers);
-  if (!grant.scopes.includes(scope)) return problem(403, "Forbidden", `Token lacks the ${scope} scope.`, instance, { scopes: grant.scopes }, headers);
+  if (!grant) return problem(401, "Unauthorized", `Unknown, expired or revoked token. ${ACCESS_HOWTO}`, instance, { required_scope: scope, access: accessSteps() }, headers);
+  if (!grant.scopes.includes(scope)) return problem(403, "Forbidden", `Token ${grant.name} lacks the ${scope} scope. Request a new grant that includes it (same steps as a first request); scopes cannot be widened on refresh.`, instance, { scopes: grant.scopes, required_scope: scope, access: accessSteps() }, headers);
   return null;
 }
 

@@ -38,6 +38,17 @@ export default async function TokensPage() {
           </Link>
           .
         </p>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Bots can request access themselves: they ask at <code className="font-mono">/oauth/device</code>, you approve a code on{" "}
+          <Link href="/activate" className="underline underline-offset-2 hover:text-foreground">
+            Activate
+          </Link>{" "}
+          (or hand out an invite with <code className="font-mono">relay invite create</code>); see{" "}
+          <Link href="/docs/api#access" className="underline underline-offset-2 hover:text-foreground">
+            /docs/api#access
+          </Link>
+          . The form below is the fallback for minting a token by hand.
+        </p>
         {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; tokens need a database (RELAY_DATA=db or DATABASE_URL).</p>}
       </section>
       <TokenManager tokens={tokens} scopes={scopes} preset={BOT_PRESET} canWrite={db} siteUrl={SITE_URL} />

@@ -1,4 +1,5 @@
 import { FLOW, RULES, TAGLINE } from "@/lib/content/info";
+import { accessSteps } from "@/lib/api";
 import { dataMode, publicReadEnabled, REPO_URL, SITE_URL } from "@/lib/data";
 
 export const APP_VERSION = "0.0.1";
@@ -17,6 +18,7 @@ export function infoDocument() {
     site: SITE_URL,
     data_mode: dataMode(),
     public_read: publicReadEnabled(),
+    access: { summary: "Agents request access themselves: register, a person approves a short code once (or an invite code skips it), then retry with the bearer token.", ...accessSteps() },
     rules: RULES.map((r, i) => ({ n: i + 1, title: r.title, body: r.body })),
     task_flow: FLOW.map((f, i) => ({ n: i + 1, step: f.step, where: f.where, detail: f.detail })),
     links: {

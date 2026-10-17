@@ -41,6 +41,12 @@ export function serverCard() {
       required_for: MCP_TOOLS.filter((t) => t.scope !== null && !PUBLIC_READ.has(t.scope)).map((t) => t.name),
       scopes: SCOPES,
       token_issuance: "OAuth 2.1 at this site (register at /oauth/register, authorization code with PKCE S256, or the device flow approved at /activate), an invite code from relay invite create, or relay token create / the /tokens page (the hash is stored, the token shown once)",
+      how_to_get_access: [
+        `POST ${SITE_URL}/oauth/device with client_name and scope (registers you); note device_code, user_code, verification_uri`,
+        `ask the person to approve user_code at ${SITE_URL}/activate (or a tokens:write bot posts to ${SITE_URL}/api/v1/access/{user_code}/approve); poll POST ${SITE_URL}/oauth/token grant_type=urn:ietf:params:oauth:grant-type:device_code until access_token arrives`,
+        `retry /mcp with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before 24 h; relay_whoami tells you what you are`,
+        `no browser anywhere: redeem an invite code with grant_type=urn:relay:invite; a browser client uses POST /oauth/register then GET /oauth/authorize (PKCE S256)`,
+      ],
       oauth: {
         authorization_server: `${SITE_URL}/.well-known/oauth-authorization-server`,
         resource_metadata: `${SITE_URL}/.well-known/oauth-protected-resource`,

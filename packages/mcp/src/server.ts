@@ -112,8 +112,10 @@ export interface RelayServerOptions {
   afterEvent?: (row: repo.EventRow) => void | Promise<void>;
   /** What relay_whoami reports about this connection's credential (HTTP: from the token row). */
   identity?: ConnectionIdentity;
-  /** Where an anonymous caller can get access (the site's OAuth metadata); shown by relay_whoami. */
+  /** Where an anonymous caller can get access (the site's OAuth metadata); shown by relay_whoami and in scope errors. */
   authorizationServer?: string;
+  /** One paragraph on how to get access, appended to every scope refusal an anonymous caller gets. */
+  accessHint?: string;
 }
 
 export interface ConnectionIdentity {
@@ -204,13 +206,15 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       /* delivery problems are the dispatcher's to record */
     }
   };
+  const anonymous = !opts.canWrite && !opts.scopes?.length;
+  const hint = anonymous && (opts.accessHint || opts.authorizationServer) ? ` ${opts.accessHint ?? `Get one through the authorization server: ${opts.authorizationServer}`}` : "";
   const gate = (scope: TokenScope, tool: string) =>
     granted.has(scope)
       ? undefined
       : fail(
           scope === "memory:write" && !opts.scopes
             ? `relay: writes need a bearer token with memory:write; this connection is read-only`
-            : `relay: ${tool} needs a bearer token with the ${scope} scope`,
+            : `relay: ${tool} needs a bearer token with the ${scope} scope.${hint}`,
         );
   const assetsHooks = opts.assets;
   const viewUrl = async (key: string | null): Promise<string | null> => {
@@ -581,7 +585,6 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   );
 
   server.registerTool("relay_whoami", { title: "Who am I", description: toolDescription("relay_whoami"), inputSchema: {} }, async () => {
-    const anonymous = !opts.canWrite && !opts.scopes?.length;
     const identity = opts.identity ?? (opts.canWrite ? { name: actor, expires_at: null, source: "local" } : { name: "anonymous", expires_at: null, source: "anonymous" });
     return json({
       actor: anonymous ? "anon" : actor,

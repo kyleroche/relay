@@ -1,9 +1,9 @@
 import { createMcpHandler, type Grant } from "@relay/mcp";
 import { NextResponse, type NextRequest } from "next/server";
-import { bearerChallenge, clientKey, problem, rateHeaders, RESOURCE_METADATA_URL, takeToken } from "@/lib/api";
+import { ACCESS_HOWTO, accessSteps, AUTHORIZATION_SERVER_URL, bearerChallenge, clientKey, problem, rateHeaders, RESOURCE_METADATA_URL, takeToken } from "@/lib/api";
 import { getStore, publicUploadUrl, publicViewUrl, VIEW_TTL } from "@/lib/assets";
 import { resolveGrant } from "@/lib/auth";
-import { dataMode, getFeed, getProject, publicReadEnabled, SITE_URL } from "@/lib/data";
+import { dataMode, getFeed, getProject, publicReadEnabled } from "@/lib/data";
 import { getDb, getMemoryDb } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch";
 import { siteGitHub } from "@/lib/integrations";
@@ -30,7 +30,8 @@ async function handler(req: Request): Promise<Response> {
     },
     publicRead: publicReadEnabled(),
     resourceMetadata: RESOURCE_METADATA_URL,
-    authorizationServer: `${SITE_URL}/.well-known/oauth-authorization-server`,
+    authorizationServer: AUTHORIZATION_SERVER_URL,
+    accessHint: ACCESS_HOWTO,
     ...(dataMode() === "db" ? { github: await siteGitHub(), afterEvent: dispatchOne } : {}),
     site: {
       info: infoDocument,
@@ -57,7 +58,12 @@ export async function POST(req: NextRequest) {
   const res = await handler(req);
   const headers = new Headers(res.headers);
   for (const [k, v] of Object.entries(rateHeaders(rate))) headers.set(k, v);
-  if (res.status === 401) headers.set("WWW-Authenticate", bearerChallenge());
+  if (res.status === 401) {
+    // The refusal is the documentation most bots read: say how to get access, in the JSON-RPC error itself.
+    headers.set("WWW-Authenticate", bearerChallenge());
+    headers.set("content-type", "application/json");
+    return new NextResponse(JSON.stringify({ jsonrpc: "2.0", id: null, error: { code: -32001, message: `unauthorized: unknown, expired or revoked bearer token. ${ACCESS_HOWTO}`, data: { access: accessSteps() } } }), { status: 401, headers });
+  }
   return new NextResponse(res.body, { status: res.status, headers });
 }
 

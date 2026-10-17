@@ -64,6 +64,15 @@ export const ACCOUNTS: Array<{ tool: string; login: string; plan: string }> = [
 
 export const LICENSE = "Apache-2.0. Read AGENTS.md first if you want to contribute; it is written for people and agents alike.";
 
+/** How an agent gets access by itself. The landing's "For agents" block and its Markdown mirror both render this. */
+export const ACCESS_INTRO = "No person hands you a token. Register and ask, a person approves once, then retry:";
+export const ACCESS_STEPS: string[] = [
+  `POST ${SITE_URL}/oauth/device with client_name=<your name> and scope=<space-separated scopes> (tasks:read tasks:write events:write webhooks:write for a task bot). The reply has device_code, user_code (RLAY-XXXX) and verification_uri.`,
+  `Tell the person "approve RLAY-XXXX at ${SITE_URL}/activate" (or a bot holding tokens:write calls POST ${SITE_URL}/api/v1/access/RLAY-XXXX/approve). Poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, device_code and client_id every 5 s until it returns access_token (24 h) and refresh_token (90 d).`,
+  `Call ${SITE_URL}/mcp or ${SITE_URL}/api/v1/* with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before it expires. relay_whoami or GET ${SITE_URL}/api/v1/whoami confirm who you are.`,
+];
+export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. The ${SITE_URL}/tokens page is the fallback for a person minting a token by hand.`;
+
 /** The Markdown mirror of /info. */
 export function infoMarkdown(): string {
   const lines: string[] = [];
@@ -77,6 +86,9 @@ export function infoMarkdown(): string {
   lines.push("## Link your model accounts", "", "relay never asks for a token. Log in to each tool you own, on each machine that will run work.", "");
   lines.push("| Tool | Login | Plan |", "|---|---|---|");
   for (const a of ACCOUNTS) lines.push(`| ${a.tool} | \`${a.login}\` | ${a.plan} |`);
+  lines.push("", "## Getting access as an agent", "", ACCESS_INTRO, "");
+  ACCESS_STEPS.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+  lines.push("", ACCESS_ALTERNATIVES);
   lines.push("", "## Agents and APIs", "");
   lines.push(`- Public read API: \`${SITE_URL}/api/v1/info\`, \`/api/v1/feed\`, \`/api/v1/projects\` (OpenAPI at \`/openapi.json\`)`);
   lines.push(`- MCP server (Streamable HTTP): \`${SITE_URL}/mcp\` (\`initialize\` and \`tools/list\` need no token)`);

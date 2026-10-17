@@ -6,7 +6,7 @@ import { CopyButton } from "@/components/copy-button";
 import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
 import { RelayMark } from "@/components/shell/relay-mark";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ACCOUNTS, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, LICENSE, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
+import { ACCESS_ALTERNATIVES, ACCESS_INTRO, ACCESS_STEPS, ACCOUNTS, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, LICENSE, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
 import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
 
 /**
@@ -151,8 +151,20 @@ export function Landing() {
           <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
             This site is built to be read by agents as well as people. Every page is server-rendered, this page and the docs are served as Markdown on request (<code className="rounded bg-muted px-1 font-mono text-xs">Accept: text/markdown</code>), and the API and MCP server are described in machine-readable form. The MCP server answers <code className="rounded bg-muted px-1 font-mono text-xs">initialize</code> and <code className="rounded bg-muted px-1 font-mono text-xs">tools/list</code> without a token.
           </p>
+          <div className="mt-5 rounded-lg border p-4">
+            <h3 className="text-sm font-medium">Getting access as an agent</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{ACCESS_INTRO}</p>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+              {ACCESS_STEPS.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ol>
+            <p className="mt-2 text-xs text-muted-foreground">{ACCESS_ALTERNATIVES}</p>
+          </div>
           <ul className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
             {[
+              ["/docs/api#access", "How to get access (device flow, invite, consent)"],
+              ["/.well-known/oauth-authorization-server", "OAuth 2.1 authorization server metadata"],
               ["/docs/api", "REST API and MCP guide"],
               ["/openapi.json", "OpenAPI 3.1 description"],
               ["/mcp", "MCP server, Streamable HTTP"],

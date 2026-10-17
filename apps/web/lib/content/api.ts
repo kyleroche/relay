@@ -21,6 +21,8 @@ Read endpoints work without credentials when the deploy enables public read (\`R
 Authorization: Bearer <token>
 \`\`\`
 
+### Access
+
 Nobody copies tokens. This site runs an OAuth 2.1 authorization server ([metadata](/.well-known/oauth-authorization-server), RFC 8414; the API and MCP server name it in [\`/.well-known/oauth-protected-resource\`](/.well-known/oauth-protected-resource), RFC 9728, and in every \`WWW-Authenticate\` challenge). Three ways in, each ending in one approval by a signed-in person:
 
 | You are | Do this | Approval |
