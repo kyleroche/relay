@@ -46,7 +46,7 @@ export default async function ProjectPage({ params }: Props) {
         </p>
         <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h1 className="text-3xl font-semibold tracking-tight">{p.slug}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{p.slug}</h1>
             <a
               href={`https://github.com/${p.repo}`}
               className="mt-1 inline-flex items-center gap-1 font-mono text-sm text-muted-foreground hover:text-primary"
@@ -93,9 +93,6 @@ export default async function ProjectPage({ params }: Props) {
             <h2 id="decisions" className="text-lg font-semibold tracking-tight">
               Current decisions <span className="ml-1 font-mono text-sm font-normal text-muted-foreground">{p.decisions.length}</span>
             </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Durable, cross-tool memory. A decision stays current until a later one supersedes it; every lane sees these in its brief.
-            </p>
             {p.decisions.length === 0 ? (
               <p className="mt-4 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                 No decisions captured yet. They are extracted when a PR merges and from session-end hooks.
@@ -131,10 +128,12 @@ export default async function ProjectPage({ params }: Props) {
           </section>
 
           <section aria-labelledby="timeline">
-            <h2 id="timeline" className="text-lg font-semibold tracking-tight">Timeline</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The last {p.events.length} events in this project. <Link href={`/?project=${p.slug}`} className="text-primary underline underline-offset-4">Open in the feed</Link> for filters and live updates.
-            </p>
+            <h2 id="timeline" className="flex items-baseline gap-3 text-lg font-semibold tracking-tight">
+              Timeline
+              <Link href={`/?project=${p.slug}`} className="text-xs font-normal text-primary underline underline-offset-4">
+                Open in the feed
+              </Link>
+            </h2>
             <div className="mt-4 flex flex-col gap-4">
               {groups.map((g) => (
                 <div key={g.key}>
@@ -153,7 +152,6 @@ export default async function ProjectPage({ params }: Props) {
         <aside className="flex flex-col gap-8">
           <section aria-labelledby="models">
             <h2 id="models" className="text-lg font-semibold tracking-tight">Models in use</h2>
-            <p className="mt-1 text-sm text-muted-foreground">A lane may use a model only after its official docs and skills are onboarded.</p>
             <ul className="mt-4 flex flex-col gap-3">
               {p.models.map((m) => (
                 <li key={m.id} className="rounded-md border bg-card p-3">

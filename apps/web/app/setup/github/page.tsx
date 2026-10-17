@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import type { InstallationInfo } from "@relay/core";
+import { PageIntro } from "@/components/page-intro";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { dataMode, REPO_URL, SITE_URL } from "@/lib/data";
@@ -51,13 +51,7 @@ export default async function GitHubSetupPage({ searchParams }: { searchParams: 
       <section className="py-6 sm:py-8">
         <p className="text-xs uppercase tracking-wide text-muted-foreground">Setup</p>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">GitHub App</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          relay opens tasks, reads runs and pull requests and comments on reviews as one GitHub App installed once per organization, instead of a personal token. Tokens are minted per installation, last an hour and live only in memory. Details in{" "}
-          <Link href="/docs/hosting" className="underline underline-offset-2 hover:text-foreground">
-            Hosting
-          </Link>
-          .
-        </p>
+        <PageIntro doc="/docs/hosting">relay talks to GitHub as one app, installed once per organization instead of a personal token.</PageIntro>
       </section>
 
       {error && (

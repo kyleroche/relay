@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Circle, Pause, Power } from "lucide-react";
 import Link from "next/link";
+import { PageIntro } from "@/components/page-intro";
 import { getWorkers } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
 import type { WorkerStatus } from "@/lib/types";
@@ -29,12 +30,9 @@ export default async function WorkersPage() {
     <>
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Machines you own that run <code className="mx-1 rounded bg-muted px-1 font-mono text-xs">relay work</code>. Each one registers the lanes its own
-          logins allow, rings the queue&apos;s doorbell on a tick that stretches from 15 seconds to 5 minutes while nothing is queued, and claims the
-          oldest queued task it can run under a 30-minute lease. Nothing here is configured from the web: a machine becomes a worker with{" "}
-          <code className="mx-1 rounded bg-muted px-1 font-mono text-xs">relay work --install --yes</code>.
-        </p>
+        <PageIntro doc="/docs/workers">
+          Your machines running <code className="rounded bg-muted px-1 font-mono text-xs">relay work</code>: their lanes, what they are on, when they last checked in.
+        </PageIntro>
       </section>
       {workers.length === 0 ? (
         <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
@@ -110,23 +108,6 @@ export default async function WorkersPage() {
           );
         })}
       </ul>
-      <section className="mt-10 max-w-2xl">
-        <h2 className="text-lg font-semibold tracking-tight">How status is derived</h2>
-        <ul className="mt-2 flex flex-col gap-1 text-sm text-muted-foreground">
-          {(Object.keys(STATUS) as WorkerStatus[]).map((k) => (
-            <li key={k} className="flex gap-2">
-              <span className={cn("w-14 shrink-0 font-mono text-xs", STATUS[k].className)}>{STATUS[k].label}</span>
-              <span>{STATUS[k].hint}</span>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-3 text-sm text-muted-foreground">
-          A claimed task is leased for 30 minutes and every heartbeat renews it; when a worker vanishes mid-run the lease runs out and the task is
-          queued again for the next worker. Between tasks a worker reads the doorbell (the queue version) instead of claiming, and a new task is
-          picked up within one tick: 15 seconds right after activity, at most 5 minutes after a long quiet spell. Lanes are the subscriptions the machine is logged in to; labels are extra capabilities a project can
-          require with the <code className="rounded bg-muted px-1 font-mono text-xs">lane.labels</code> preference.
-        </p>
-      </section>
     </>
   );
 }

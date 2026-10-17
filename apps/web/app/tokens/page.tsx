@@ -1,11 +1,11 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { clientOrigin, listClients, listInvites, listRecentAccess, repo, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES } from "@relay/core";
 import { AccessRequests, type RequestView } from "@/components/tokens/access-requests";
 import { ClientList, type ClientView } from "@/components/tokens/client-list";
 import { InviteCreate, InviteList, type InviteView } from "@/components/tokens/invite-manager";
 import { GrantList, MintByHand, type TokenOrigin, type TokenRowView } from "@/components/tokens/token-manager";
 import { CopyButton } from "@/components/copy-button";
+import { PageIntro } from "@/components/page-intro";
 import { CONNECT_AGENT_PROMPT } from "@/lib/content/info";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -99,13 +99,7 @@ export default async function AccessPage() {
     <>
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Access</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Who may call this relay. Agents ask for access themselves and you approve once; tokens renew on their own. Scopes are checked per call (
-          <Link href="/docs/api#access" className="underline underline-offset-2 hover:text-foreground">
-            how it works
-          </Link>
-          ).
-        </p>
+        <PageIntro doc="/docs/api#access">Who may call this relay: agents ask for access themselves, you approve once.</PageIntro>
         {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; access needs a database (RELAY_DATA=db or DATABASE_URL).</p>}
       </section>
 

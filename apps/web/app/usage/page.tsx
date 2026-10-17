@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { MeterBar } from "@/components/meters/plan-meters";
+import { PageIntro } from "@/components/page-intro";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AvgContextOverTime, CostByDay } from "@/components/usage/charts";
 import { getUsage } from "@/lib/data";
@@ -43,42 +44,34 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
     <>
       <section className="py-6 sm:py-10">
         <h1 className="text-2xl font-semibold tracking-tight">Usage</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Every model call is a <code className="rounded bg-muted px-1 font-mono text-xs">step.usage</code> event with tokens, cache
-          reads and a cost equivalent at gateway list price, so subscription use and pay-per-token use compare on one scale.
-        </p>
-        <div className="mt-8 grid gap-6 sm:grid-cols-[auto_1fr] sm:items-end">
-          <div>
-            <p className="text-xs text-muted-foreground">Average input context per call, last 7 days</p>
-            <p className="mt-1 text-5xl font-semibold tracking-tight sm:text-6xl">
-              {fmtTokens(avg)}
-              <span className="ml-2 text-base font-normal text-muted-foreground">tokens</span>
-            </p>
-            <p className="mt-2 text-sm">
-              <span className={cn("font-mono tabular-nums", delta < 0 ? "text-ok" : "text-warn")}>
-                {delta > 0 ? "+" : ""}
-                {delta}%
-              </span>{" "}
-              <span className="text-muted-foreground">
-                vs a baseline of {fmtTokens(baseline)} per call
-                {" · "}
-                <span title="Set ?baseline=<tokens> in the URL or RELAY_CTX_BASELINE in the environment.">configurable</span>
-              </span>
-            </p>
-          </div>
-          <p className="max-w-md text-sm text-muted-foreground sm:justify-self-end sm:text-right">
-            The baseline is what a coding agent re-reads per call without a harness: the whole repo context, every time. relay sends
-            a brief instead. This number is the whole point.
+        <PageIntro doc="/docs/feed">
+          Every model call is a <code className="rounded bg-muted px-1 font-mono text-xs">step.usage</code> event with its tokens and a cost equivalent at list price.
+        </PageIntro>
+        <div className="mt-8">
+          <p className="text-xs text-muted-foreground">Average input context per call, last 7 days</p>
+          <p className="mt-1 text-5xl font-semibold tracking-tight sm:text-6xl">
+            {fmtTokens(avg)}
+            <span className="ml-2 text-base font-normal text-muted-foreground">tokens</span>
+          </p>
+          <p className="mt-2 text-sm">
+            <span className={cn("font-mono tabular-nums", delta < 0 ? "text-ok" : "text-warn")}>
+              {delta > 0 ? "+" : ""}
+              {delta}%
+            </span>{" "}
+            <span className="text-muted-foreground">
+              vs a baseline of {fmtTokens(baseline)} per call
+              {" · "}
+              <span title="What a coding agent re-reads per call without a harness. Set ?baseline=<tokens> in the URL or RELAY_CTX_BASELINE in the environment.">configurable</span>
+            </span>
           </p>
         </div>
       </section>
 
       <section aria-labelledby="meters" className="mb-10">
         <h2 id="meters" className="text-lg font-semibold tracking-tight">Plan meters</h2>
-        <p className="mt-1 text-sm text-muted-foreground">Amber above 70%, red above 90%. Where a vendor publishes no meter, the bar says so instead of guessing.</p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
           {usage.windows.map((m) => (
-            <div key={m.id} className="rounded-md border bg-card p-3">
+            <div key={m.id} className="rounded-md border bg-card p-3" title="Amber above 70%, red above 90%. Where a vendor publishes no meter, the bar says so instead of guessing.">
               <p className="mb-2 font-mono text-[11px] text-muted-foreground">{m.subscription}</p>
               <MeterBar meter={m} />
             </div>

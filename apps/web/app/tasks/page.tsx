@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { ArrowUpRight, Globe } from "lucide-react";
 import Link from "next/link";
-import { repo, TASK_STATES, type TaskState, type TaskView } from "@relay/core";
+import { repo, type TaskState, type TaskView } from "@relay/core";
 import { CopyButton } from "@/components/copy-button";
+import { PageIntro } from "@/components/page-intro";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { fmtAgo, fmtCost } from "@/lib/format";
@@ -66,10 +67,7 @@ export default async function TasksPage() {
     <>
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Every task is a GitHub issue with a lane label; its state is folded from the feed each time you look. The ones in <span className="text-warn">review</span> have a pull request and,
-          when Vercel has built it, a preview: open the task to see it and decide.
-        </p>
+        <PageIntro doc="/docs/workers">Every task is a GitHub issue; its state is read from the feed, and the ones in review wait for your decision.</PageIntro>
         {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; tasks need a database (RELAY_DATA=db or DATABASE_URL).</p>}
       </section>
 
@@ -109,17 +107,6 @@ export default async function TasksPage() {
           );
         })}
       </div>
-      <section className="mt-10 max-w-2xl">
-        <h2 className="text-lg font-semibold tracking-tight">How state is derived</h2>
-        <ul className="mt-2 flex flex-col gap-1 text-sm text-muted-foreground">
-          {TASK_STATES.map((k) => (
-            <li key={k} className="flex gap-2">
-              <span className={cn("w-16 shrink-0 font-mono text-xs", STATE_TONE[k])}>{k}</span>
-              <span>{STATE_HINT[k]}</span>
-            </li>
-          ))}
-        </ul>
-      </section>
     </>
   );
 }

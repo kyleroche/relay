@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { CoverageBar } from "@/components/coverage-bar";
+import { PageIntro } from "@/components/page-intro";
 import { getProjects } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
 
@@ -19,11 +20,9 @@ export default async function ProjectsPage() {
     <>
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Projects</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Every repository linked with <code className="rounded bg-muted px-1 font-mono text-xs">relay link</code>. A project carries its
-          summary, per-file digests keyed by content hash, and the decisions agents and humans made in it. Coverage is the share of files
-          whose digest is current.
-        </p>
+        <PageIntro doc="/docs/memory">
+          Repositories linked with <code className="rounded bg-muted px-1 font-mono text-xs">relay link</code>, with their decisions and digest coverage.
+        </PageIntro>
       </section>
       <ul className="grid gap-3 sm:grid-cols-2">
         {projects.map((p) => (
