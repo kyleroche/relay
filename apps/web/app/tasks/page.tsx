@@ -6,6 +6,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -84,9 +85,9 @@ export default async function TasksPage() {
       </section>
 
       {db && tasks.length === 0 && (
-        <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
-          No tasks yet. Open one with <code className="rounded bg-muted px-1 font-mono text-xs">relay task create --title … --lane claude</code>, the <code className="rounded bg-muted px-1 font-mono text-xs">relay_task_create</code> tool, or an <code className="rounded bg-muted px-1 font-mono text-xs">agent:*</code> label on a GitHub issue.
-        </p>
+        <EmptyState title="No tasks yet" command={`relay task create --title "…" --lane claude`}>
+          A task is a GitHub issue with an agent:* label. Open one with the command, the relay_task_create tool, or by labelling an issue.
+        </EmptyState>
       )}
       {groups.length > 0 && (
         <ul className="divide-y rounded-lg border" aria-label="Tasks by state">

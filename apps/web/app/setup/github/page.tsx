@@ -6,6 +6,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { ManifestForm } from "@/components/github/manifest-form";
 import { PageIntro } from "@/components/page-intro";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { appManifest, githubApp, githubAppConfig, manifestState, type ResolvedGitHubApp } from "@/lib/github-app";
@@ -131,7 +132,9 @@ function Configured({ resolved, installations, installError }: { resolved: Resol
             Could not list installations: {installError}
           </Alert>
         ) : installations.length === 0 ? (
-          <p className="mt-2 rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">Not installed anywhere yet. Install it on the organization whose repositories relay manages, and pick the repositories.</p>
+          <EmptyState title="Not installed anywhere yet" as="p" className="mt-2">
+            Install it on the organization whose repositories relay manages, and pick the repositories.
+          </EmptyState>
         ) : (
           <ul className="mt-2 divide-y rounded-lg border text-sm">
             {installations.map((i) => (

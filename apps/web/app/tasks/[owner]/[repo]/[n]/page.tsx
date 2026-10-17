@@ -8,6 +8,7 @@ import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
@@ -73,12 +74,7 @@ export default async function TaskPage({ params }: Props) {
   return (
     <>
       <section className="py-6 sm:py-8">
-        <p className="text-xs text-muted-foreground">
-          <Link href="/tasks" className="hover:text-foreground">
-            Tasks
-          </Link>{" "}
-          / <span className="font-mono">{t.id}</span>
-        </p>
+        <Breadcrumb items={[{ label: "Tasks", href: "/tasks" }, { label: t.id, mono: true }]} />
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>

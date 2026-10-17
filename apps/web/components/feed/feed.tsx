@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EventRow } from "@/components/feed/event-row";
 import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Kbd } from "@/components/ui/kbd";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { EVENT_KIND_LIST, kindInfo } from "@/lib/events";
@@ -180,9 +182,7 @@ export function Feed({
               <X className="size-3.5" />
             </button>
           ) : (
-            <kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border bg-muted px-1 font-mono text-[10px] text-muted-foreground sm:block">
-              /
-            </kbd>
+            <Kbd className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 sm:block">/</Kbd>
           )}
         </div>
         <FilterSelect label="Project" value={filters.project} onChange={(v) => setFilter("project", v)} options={projects.map((p) => [p, p])} />
@@ -202,7 +202,7 @@ export function Feed({
       </div>
 
       {groups.length === 0 ? (
-        <EmptyState filtered={anyFilter || q.length > 0} />
+        <FeedEmpty filtered={anyFilter || q.length > 0} />
       ) : (
         <div className="flex flex-col gap-5">
           {groups.map((g) => (
@@ -221,8 +221,7 @@ export function Feed({
         </div>
       )}
       <p className="text-[11px] text-muted-foreground">
-        <kbd className="rounded border bg-muted px-1 font-mono">j</kbd> / <kbd className="rounded border bg-muted px-1 font-mono">k</kbd> to move,{" "}
-        <kbd className="rounded border bg-muted px-1 font-mono">Enter</kbd> to open, <kbd className="rounded border bg-muted px-1 font-mono">/</kbd> to search.
+        <Kbd>j</Kbd> / <Kbd>k</Kbd> to move, <Kbd>Enter</Kbd> to open, <Kbd>/</Kbd> to search.
         {live && " Refreshes every 30 seconds."}
       </p>
     </div>
@@ -259,22 +258,16 @@ function FilterSelect({
   );
 }
 
-function EmptyState({ filtered }: { filtered: boolean }) {
+function FeedEmpty({ filtered }: { filtered: boolean }) {
+  if (filtered) return <EmptyState title="Nothing matches these filters">Widen the filters or clear the search. Events are never deleted, so what you saw before is still here.</EmptyState>;
   return (
-    <div className="rounded-md border border-dashed p-6 sm:p-10">
-      <h2 className="text-base font-medium">{filtered ? "Nothing matches these filters" : "No events yet"}</h2>
-      <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-        {filtered
-          ? "Widen the filters or clear the search. Events are never deleted, so what you saw before is still here."
-          : "Events arrive three ways. GitHub sends issues, labels, pull requests, reviews and workflow runs to the webhook. Vercel sends deployments. Runners write run.* and step.usage rows as they execute a lane."}
-      </p>
-      {!filtered && (
-        <pre className="mt-4 overflow-x-auto rounded-md border bg-card p-3 font-mono text-xs leading-5">
-          <code className="language-text">{`GitHub  → POST /api/webhooks/github   (X-Hub-Signature-256, GITHUB_WEBHOOK_SECRET)
+    <EmptyState
+      title="No events yet"
+      command={`GitHub  → POST /api/webhooks/github   (X-Hub-Signature-256, GITHUB_WEBHOOK_SECRET)
 Vercel  → POST /api/webhooks/vercel   (x-vercel-signature, VERCEL_WEBHOOK_SECRET)
-Runners → relay lane … writes step.usage through @relay/core`}</code>
-        </pre>
-      )}
-    </div>
+Workers → relay work … writes run.* and step.usage through @relay/core`}
+    >
+      Events arrive three ways. GitHub sends issues, labels, pull requests, reviews and workflow runs to the webhook. Vercel sends deployments. Workers write run.* and step.usage rows as they execute a lane.
+    </EmptyState>
   );
 }

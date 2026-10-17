@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CoverageBar } from "@/components/coverage-bar";
 import { PageIntro } from "@/components/page-intro";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { getProjects } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
@@ -26,13 +27,9 @@ export default async function ProjectsPage() {
         </PageIntro>
       </section>
       {projects.length === 0 && (
-        <div className="rounded-md border border-dashed p-6 sm:p-10">
-          <h2 className="text-base font-medium">No projects linked</h2>
-          <p className="mt-2 max-w-prose text-sm text-muted-foreground">Run this in a repository on a machine with your coding-agent logins; it registers the project and writes its summary.</p>
-          <pre className="mt-4 overflow-x-auto rounded-md border bg-card p-3 font-mono text-xs leading-5">
-            <code className="language-bash">npx @kyleroche/relay link</code>
-          </pre>
-        </div>
+        <EmptyState title="No projects linked" command="npx @kyleroche/relay link">
+          Run this in a repository on a machine with your coding-agent logins; it registers the project and writes its summary.
+        </EmptyState>
       )}
       <ul className="grid gap-3 sm:grid-cols-2">
         {projects.map((p) => (

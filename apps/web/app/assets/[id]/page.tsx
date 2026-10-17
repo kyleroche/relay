@@ -7,6 +7,7 @@ import { AssetViewer } from "@/components/assets/asset-viewer";
 import { ReviewControls } from "@/components/assets/review-controls";
 import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getAsset } from "@/lib/data";
@@ -37,15 +38,7 @@ export default async function AssetPage({ params }: Props) {
   return (
     <>
       <section className="py-6 sm:py-8">
-        <p className="text-xs text-muted-foreground">
-          <Link href="/assets" className="hover:text-foreground">Assets</Link>
-          {asset.project && (
-            <>
-              {" / "}
-              <Link href={`/assets?project=${asset.project}`} className="hover:text-foreground">{asset.project}</Link>
-            </>
-          )}
-        </p>
+        <Breadcrumb items={[{ label: "Assets", href: "/assets" }, ...(asset.project ? [{ label: asset.project, href: `/assets?project=${asset.project}` }] : [])]} />
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">

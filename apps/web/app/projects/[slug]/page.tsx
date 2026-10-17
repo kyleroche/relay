@@ -5,6 +5,8 @@ import Link from "next/link";
 import { CoverageBar } from "@/components/coverage-bar";
 import { EventRow } from "@/components/feed/event-row";
 import { ModelStatusBadge } from "@/components/model-status";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getProject } from "@/lib/data";
@@ -43,9 +45,7 @@ export default async function ProjectPage({ params }: Props) {
   return (
     <>
       <section className="py-6 sm:py-10">
-        <p className="text-xs text-muted-foreground">
-          <Link href="/projects" className="hover:text-foreground">Projects</Link> / {p.slug}
-        </p>
+        <Breadcrumb items={[{ label: "Projects", href: "/projects" }, { label: p.slug }]} />
         <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">{p.slug}</h1>
@@ -109,9 +109,9 @@ export default async function ProjectPage({ params }: Props) {
               Current decisions
             </SectionHeading>
             {p.decisions.length === 0 ? (
-              <p className="mt-4 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                No decisions captured yet. They are extracted when a PR merges and from session-end hooks.
-              </p>
+              <EmptyState title="No decisions yet" as="p" className="mt-4">
+                Decisions are extracted when a pull request merges and from session-end hooks; relay decide records one by hand.
+              </EmptyState>
             ) : (
               <ol className="mt-4 flex flex-col divide-y">
                 {p.decisions.map((d) => (

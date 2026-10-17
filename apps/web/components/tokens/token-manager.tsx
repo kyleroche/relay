@@ -7,6 +7,8 @@ import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/
 import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Disclosure } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
@@ -38,7 +40,6 @@ const originLabel = (o: TokenOrigin): string => (o.kind === "oauth" ? "device fl
 export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWrite: boolean }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
-  const [showPast, setShowPast] = useState(false);
   const [pending, start] = useTransition();
   const live = tokens.filter((t) => !t.revoked && !t.expired);
   const past = tokens.filter((t) => t.revoked || t.expired);
@@ -90,7 +91,9 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
         </p>
       )}
       {live.length === 0 ? (
-        <p className="text-sm text-muted-foreground">No live tokens yet. Approve a request and one appears here.</p>
+        <EmptyState title="No live tokens" as="p">
+          Approve a request and its token appears here.
+        </EmptyState>
       ) : (
         <ul className="divide-y rounded-lg border">
           {live.map((t) => (
@@ -99,18 +102,13 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
         </ul>
       )}
       {past.length > 0 && (
-        <div className="mt-2">
-          <button type="button" onClick={() => setShowPast((v) => !v)} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" aria-expanded={showPast}>
-            {showPast ? "Hide" : "Show"} {past.length} revoked or expired
-          </button>
-          {showPast && (
-            <ul className="mt-2 divide-y rounded-lg border">
-              {past.map((t) => (
-                <Row key={t.id} t={t} />
-              ))}
-            </ul>
-          )}
-        </div>
+        <Disclosure label={`${past.length} revoked or expired`} className="mt-2">
+          <ul className="divide-y rounded-lg border">
+            {past.map((t) => (
+              <Row key={t.id} t={t} />
+            ))}
+          </ul>
+        </Disclosure>
       )}
     </div>
   );

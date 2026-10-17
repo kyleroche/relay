@@ -6,6 +6,8 @@ import { useState, useTransition } from "react";
 import { decideAccessAction, type TokenActionResult } from "@/app/tokens/actions";
 import { Scopes } from "@/components/tokens/bits";
 import { Button } from "@/components/ui/button";
+import { Disclosure } from "@/components/ui/collapsible";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { cn } from "@/lib/utils";
 
@@ -35,7 +37,6 @@ export function AccessRequests({ requests, canWrite }: { requests: RequestView[]
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const [showPast, setShowPast] = useState(false);
   const [pending, start] = useTransition();
   const live = requests.filter(isLive);
   const past = requests.filter((r) => !isLive(r));
@@ -104,7 +105,9 @@ export function AccessRequests({ requests, canWrite }: { requests: RequestView[]
         </p>
       )}
       {live.length === 0 ? (
-        <p className="text-sm text-muted-foreground">Nothing is waiting. A bot or CLI that asks for access shows up here with its code.</p>
+        <EmptyState title="Nothing is waiting" as="p">
+          A bot or CLI that asks for access shows up here with its code.
+        </EmptyState>
       ) : (
         <ul className="divide-y rounded-lg border">
           {live.map((r) => (
@@ -113,18 +116,13 @@ export function AccessRequests({ requests, canWrite }: { requests: RequestView[]
         </ul>
       )}
       {past.length > 0 && (
-        <div className="mt-2">
-          <button type="button" onClick={() => setShowPast((v) => !v)} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" aria-expanded={showPast}>
-            {showPast ? "Hide" : "Show"} {past.length} decided in the last day
-          </button>
-          {showPast && (
-            <ul className="mt-2 divide-y rounded-lg border">
-              {past.map((r) => (
-                <Row key={r.user_code} r={r} />
-              ))}
-            </ul>
-          )}
-        </div>
+        <Disclosure label={`${past.length} decided in the last day`} className="mt-2">
+          <ul className="divide-y rounded-lg border">
+            {past.map((r) => (
+              <Row key={r.user_code} r={r} />
+            ))}
+          </ul>
+        </Disclosure>
       )}
     </div>
   );

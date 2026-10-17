@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Circle, Pause, Power, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import { getWorkers } from "@/lib/data";
@@ -37,12 +38,12 @@ export default async function WorkersPage() {
           Your machines running <code className="rounded bg-muted px-1 font-mono text-xs">relay work</code>: their lanes, what they are on, when they last checked in.
         </PageIntro>
       </section>
-      {workers.length === 0 ? (
-        <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
-          No worker has registered yet. On a machine with the vendor logins, run <code className="rounded bg-muted px-1 font-mono text-xs">relay setup --site</code> and then{" "}
-          <code className="rounded bg-muted px-1 font-mono text-xs">relay work --install --yes</code>.
-        </p>
-      ) : null}
+      {workers.length === 0 && (
+        <EmptyState title="No workers yet" command={`npx @kyleroche/relay setup --site <this site>
+npx @kyleroche/relay work --install --yes`}>
+          A worker is a machine with your vendor logins running relay work. Join one with these two commands; it appears here on its first heartbeat.
+        </EmptyState>
+      )}
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {workers.map((w) => {
           const s = STATUS[w.status];

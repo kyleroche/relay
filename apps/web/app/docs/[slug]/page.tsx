@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { notFound } from "next/navigation";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { DOCS, docMarkdown, renderMarkdown } from "@/lib/docs";
 import { REPO_URL, SITE_URL } from "@/lib/data";
 
@@ -28,17 +28,16 @@ export default async function DocPage({ params }: Props) {
   if (!entry || !md) notFound();
   return (
     <article className="mx-auto max-w-3xl py-10 sm:py-14">
-      <p className="mb-6 text-xs text-muted-foreground">
-        <Link href="/docs" className="hover:text-foreground">Docs</Link> / {entry.title}
+      <Breadcrumb items={[{ label: "Docs", href: "/docs" }, { label: entry.title }]} className="mb-6">
         {entry.file && (
           <>
-            {" · "}
-            <a href={`${REPO_URL}/blob/main/${entry.file}`} className="hover:text-foreground" rel="noopener noreferrer">
+            <span aria-hidden="true">·</span>
+            <a href={`${REPO_URL}/blob/main/${entry.file}`} className="font-mono hover:text-foreground" rel="noopener noreferrer">
               {entry.file}
             </a>
           </>
         )}
-      </p>
+      </Breadcrumb>
       <div className="prose-relay" dangerouslySetInnerHTML={{ __html: renderMarkdown(md) }} />
     </article>
   );

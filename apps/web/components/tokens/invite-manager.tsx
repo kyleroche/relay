@@ -7,6 +7,7 @@ import { createInviteAction, revokeInviteAction, type TokenActionResult } from "
 import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Disclosure } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -134,7 +135,6 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
 export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWrite: boolean }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
-  const [showSpent, setShowSpent] = useState(false);
   const [pending, start] = useTransition();
   const live = invites.filter((i) => !i.spent);
   const spent = invites.filter((i) => i.spent);
@@ -187,18 +187,13 @@ export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWr
         </ul>
       )}
       {spent.length > 0 && (
-        <div className={live.length > 0 ? "mt-2" : ""}>
-          <button type="button" onClick={() => setShowSpent((v) => !v)} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" aria-expanded={showSpent}>
-            {showSpent ? "Hide" : "Show"} {spent.length} used, expired or revoked
-          </button>
-          {showSpent && (
-            <ul className="mt-2 divide-y rounded-lg border">
-              {spent.map((i) => (
-                <Row key={i.id} i={i} />
-              ))}
-            </ul>
-          )}
-        </div>
+        <Disclosure label={`${spent.length} used, expired or revoked`} className={live.length > 0 ? "mt-2" : ""}>
+          <ul className="divide-y rounded-lg border">
+            {spent.map((i) => (
+              <Row key={i.id} i={i} />
+            ))}
+          </ul>
+        </Disclosure>
       )}
     </div>
   );

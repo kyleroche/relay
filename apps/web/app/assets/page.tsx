@@ -3,6 +3,8 @@ import Link from "next/link";
 import { AssetCard } from "@/components/assets/asset-card";
 import { AssetFilters } from "@/components/assets/asset-filters";
 import { PageIntro } from "@/components/page-intro";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Kbd } from "@/components/ui/kbd";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getAssets, getProjects } from "@/lib/data";
 import { ASSET_KINDS, ASSET_STATUSES, type Asset, type AssetKind, type AssetStatus } from "@/lib/types";
@@ -63,22 +65,14 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
       <div className="flex flex-col gap-6">
         <AssetFilters filters={{ project, status, kind }} projects={projects.map((p) => p.slug)} />
 
-        {assets.length === 0 && (
-          <div className="rounded-md border border-dashed p-6 sm:p-10">
-            <h2 className="text-base font-medium">{anyFilter ? "Nothing matches these filters" : "No assets yet"}</h2>
-            <p className="mt-2 max-w-prose text-sm text-muted-foreground">
-              {anyFilter
-                ? "Widen the filters. Rejected and superseded versions are kept for the retention window, then removed."
-                : "Assets arrive from the CLI, the API, or an agent's MCP tool. Each upload writes an asset.uploaded event and lands here as pending."}
-            </p>
-            {!anyFilter && (
-              <pre className="mt-4 overflow-x-auto rounded-md border bg-card p-3 font-mono text-xs leading-5">
-                <code className="language-bash">{`pnpm relay asset put ./render.png --project <slug> --issue 42 --title "Hero render"
-curl -X POST -H "Authorization: Bearer $TOKEN" -F file=@render.png -F project=<slug> -F issue=42 /api/v1/assets`}</code>
-              </pre>
-            )}
-          </div>
-        )}
+        {assets.length === 0 &&
+          (anyFilter ? (
+            <EmptyState title="Nothing matches these filters">Widen the filters. Rejected and superseded versions are kept for the retention window, then removed.</EmptyState>
+          ) : (
+            <EmptyState title="No assets yet" command={`relay asset put ./render.png --project <slug> --issue 42 --title "Hero render"`}>
+              Assets arrive from the CLI, the API, or an agent&apos;s MCP tool. Each upload writes an asset.uploaded event and lands here as pending.
+            </EmptyState>
+          ))}
 
         {pending.length > 0 && (
           <section aria-labelledby="pending-h">
@@ -88,7 +82,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -F file=@render.png -F project=<s
               className="mb-2"
               action={
                 <>
-                  open one, then <kbd className="rounded border bg-muted px-1 font-mono">a</kbd> approve / <kbd className="rounded border bg-muted px-1 font-mono">r</kbd> reject
+                  open one, then <Kbd>a</Kbd> approve / <Kbd>r</Kbd> reject
                 </>
               }
             >

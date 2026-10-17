@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
 import { publishAction, reviewAction, type ActionResult } from "@/app/assets/[id]/actions";
 import { Button } from "@/components/ui/button";
+import { Kbd } from "@/components/ui/kbd";
 import type { Asset } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -83,7 +84,7 @@ export function ReviewControls({ asset }: { asset: Asset }) {
           <div className="flex flex-wrap items-center gap-2">
             <Button size="sm" onClick={() => submit("approved")} disabled={pending} className="gap-1.5">
               <Check className="size-3.5" aria-hidden="true" /> Approve
-              <kbd className="ml-1 rounded border border-primary-foreground/30 px-1 font-mono text-[10px] opacity-80">a</kbd>
+              <Kbd className="ml-1 border-primary-foreground/30 bg-transparent text-primary-foreground/80">a</Kbd>
             </Button>
             <Button
               size="sm"
@@ -98,7 +99,7 @@ export function ReviewControls({ asset }: { asset: Asset }) {
               className="gap-1.5"
             >
               <X className="size-3.5" aria-hidden="true" /> {rejecting ? "Reject with note" : "Reject"}
-              {!rejecting && <kbd className="ml-1 rounded border px-1 font-mono text-[10px] opacity-80">r</kbd>}
+              {!rejecting && <Kbd className="ml-1 bg-transparent">r</Kbd>}
             </Button>
             {pending && <span className="text-xs text-muted-foreground">saving…</span>}
           </div>
@@ -113,7 +114,7 @@ export function ReviewControls({ asset }: { asset: Asset }) {
               className="w-full rounded-md border bg-background px-2 py-1.5 font-sans text-sm text-foreground outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
             />
             <span className="text-[11px]">
-              <kbd className="rounded border bg-muted px-1 font-mono">⌘/Ctrl</kbd> + <kbd className="rounded border bg-muted px-1 font-mono">Enter</kbd> submits
+              <Kbd>⌘/Ctrl</Kbd> + <Kbd>Enter</Kbd> submits
             </span>
           </label>
         </>

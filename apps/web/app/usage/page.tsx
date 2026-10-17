@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { MeterBar } from "@/components/meters/plan-meters";
 import { PageIntro } from "@/components/page-intro";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AvgContextOverTime, CostByDay } from "@/components/usage/charts";
+import { WindowSwitcher } from "@/components/usage/window-switcher";
 import { getUsage } from "@/lib/data";
 import { fmtCost, fmtInt, fmtTokens } from "@/lib/format";
 import { SERIES } from "@/lib/series";
@@ -88,18 +88,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
               {fmtInt(totalCalls)} calls, {fmtCost(totalCost)} cost equivalent in the last {WINDOWS.find((w) => w.id === window)?.label}.
             </p>
           </div>
-          <nav aria-label="Window" className="flex rounded-md border p-0.5 text-xs">
-            {WINDOWS.map((w) => (
-              <Link
-                key={w.id}
-                href={`/usage?window=${w.id}${baseline !== DEFAULT_BASELINE ? `&baseline=${baseline}` : ""}`}
-                aria-current={w.id === window ? "true" : undefined}
-                className={cn("rounded px-2.5 py-1", w.id === window ? "bg-accent text-accent-foreground font-medium" : "text-muted-foreground hover:text-foreground")}
-              >
-                {w.label}
-              </Link>
-            ))}
-          </nav>
+          <WindowSwitcher value={window} options={WINDOWS.map((w) => ({ ...w, href: `/usage?window=${w.id}${baseline !== DEFAULT_BASELINE ? `&baseline=${baseline}` : ""}` }))} />
         </div>
         <div className="mt-4 overflow-x-auto rounded-md border">
           <Table>
