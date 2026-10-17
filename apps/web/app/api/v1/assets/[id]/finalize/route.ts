@@ -1,9 +1,10 @@
 import { finalizeFromKey, IngestError, parseUploadKey, repo } from "@relay/core";
-import { api, callerGrant, json, problem } from "@/lib/api";
+import { api, json, problem } from "@/lib/api";
 import { absoluteAsset, afterUpload } from "@/lib/asset-hooks";
 import { getStore, toAsset } from "@/lib/assets";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { writerActor } from "@/lib/integrations";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +12,8 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * operationId: finalizeAsset. After a presigned PUT: probe the uploaded object and create the row. Body is the
- * `finalize_body` the presign response returned (key, project, issue, pr, title, description, replaces, tags, by).
+ * `finalize_body` the presign response returned (key, project, issue, pr, title, description, replaces, tags). The
+ * creator is the caller, never a field in the body.
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
@@ -33,7 +35,7 @@ export const POST = api<Ctx>(
     if (await repo.getAsset(db, id)) return problem(409, "Conflict", `Asset '${id}' was already finalized.`, instance);
     const int = (k: string) => (typeof body[k] === "number" && Number.isInteger(body[k]) ? (body[k] as number) : undefined);
     const str = (k: string) => (typeof body[k] === "string" && body[k] ? (body[k] as string) : undefined);
-    const grant = await callerGrant(req);
+    const createdBy = await writerActor(req);
     try {
       const row = await finalizeFromKey(db, getStore(), {
         key,
@@ -44,7 +46,7 @@ export const POST = api<Ctx>(
         description: str("description"),
         replaces: str("replaces") ?? null,
         tags: Array.isArray(body.tags) ? (body.tags as unknown[]).filter((t): t is string => typeof t === "string") : undefined,
-        createdBy: str("by") ?? grant?.actor ?? "token:unknown",
+        createdBy,
       });
       const asset = absoluteAsset(await toAsset(row));
       await afterUpload(asset);

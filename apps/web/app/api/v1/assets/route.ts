@@ -1,9 +1,10 @@
 import { ingestFile, repo, sniffMime, ulid, uploadKeyFor, safeFilename, type AssetKind, type AssetStatus } from "@relay/core";
-import { api, callerGrant, json, problem } from "@/lib/api";
+import { api, json, problem } from "@/lib/api";
 import { absoluteAsset, afterUpload } from "@/lib/asset-hooks";
 import { getStore, publicUploadUrl, toAsset, UPLOAD_TTL } from "@/lib/assets";
 import { dataMode, getAssets } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { writerActor } from "@/lib/integrations";
 import { ASSET_KINDS, ASSET_STATUSES } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -44,7 +45,6 @@ interface Meta {
   description?: string;
   replaces?: string;
   tags?: string[];
-  by?: string;
 }
 
 function readMeta(get: (k: string) => unknown): Meta | string {
@@ -71,14 +71,14 @@ function readMeta(get: (k: string) => unknown): Meta | string {
     ...(str("description") ? { description: str("description") as string } : {}),
     ...(str("replaces") ? { replaces: str("replaces") as string } : {}),
     ...(tags ? { tags } : {}),
-    ...(str("by") ? { by: str("by") as string } : {}),
   };
 }
 
 /**
  * operationId: createAsset. Two bodies:
- *   multipart/form-data with a `file` part (plus project, issue, pr, title, description, replaces, tags, by): the
+ *   multipart/form-data with a `file` part (plus project, issue, pr, title, description, replaces, tags): the
  *     bytes are ingested here and the asset is created in one call (201, the asset).
+ * The creator is the caller (`writerActor`: the token's name or the signed-in login), never a field in the body.
  *   application/json { presign: true, project, filename, content_type?, ... }: returns a one-time upload URL and the
  *     asset id (201); PUT the bytes there, then POST /api/v1/assets/{id}/finalize with the same metadata.
  */
@@ -86,8 +86,7 @@ export const POST = api(
   async (req) => {
     const instance = req.nextUrl.pathname;
     if (dataMode() !== "db") return problem(501, "Not Implemented", "Uploads need a database and an asset store (RELAY_DATA=db). Mock mode serves demo assets only.", instance);
-    const grant = await callerGrant(req);
-    const actorDefault = grant?.actor ?? "token:unknown";
+    const actor = await writerActor(req);
     const db = await getDb();
     const store = getStore();
     const ctype = req.headers.get("content-type") ?? "";
@@ -110,7 +109,7 @@ export const POST = api(
         title: meta.title,
         description: meta.description,
         replaces: meta.replaces ?? null,
-        createdBy: meta.by ?? actorDefault,
+        createdBy: actor,
         tags: meta.tags,
       });
       const asset = absoluteAsset(await toAsset(row));
@@ -152,7 +151,6 @@ export const POST = api(
           ...(meta.description ? { description: meta.description } : {}),
           ...(meta.replaces ? { replaces: meta.replaces } : {}),
           ...(meta.tags ? { tags: meta.tags } : {}),
-          ...(meta.by ? { by: meta.by } : {}),
         },
       },
       { status: 201 },

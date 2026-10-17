@@ -430,7 +430,6 @@ export function GET() {
             description: { type: "string" },
             replaces: { type: "string", description: "Asset id this upload supersedes; the new row becomes the next version." },
             tags: { type: "array", items: { type: "string" }, description: "In multipart form, a comma-separated string." },
-            by: { type: "string", description: "Creator actor; defaults to the token's name." },
           },
         },
         AssetUploadForm: { allOf: [{ $ref: "#/components/schemas/AssetMetadata" }, { type: "object", required: ["file"], properties: { file: { type: "string", format: "binary" } } }] },
@@ -465,7 +464,6 @@ export function GET() {
           properties: {
             decision: { type: "string", enum: ["approved", "rejected"] },
             note: { type: "string", description: "Required for a rejection." },
-            by: { type: "string", description: "Reviewer actor; defaults to the token's name." },
           },
         },
         ...integrationSchemas,
