@@ -9,15 +9,55 @@
  *   relay work --install       print the LaunchAgent (macOS) or systemd user unit (Linux); --yes writes and starts it
  *   relay work --uninstall     stop and remove the service; --yes to do it
  *   relay work status          the service, this site's workers, the log tail
+ *
+ * Isolation tier 2 (docs/WORKERS.md, "Isolation"): `--isolation container` runs the whole worker inside one
+ * persistent Linux container made with Apple's `container` CLI. `--install` builds the image, creates the container
+ * with a named volume at /home/relay, runs `relay setup --site` inside (the device flow's code streams to this
+ * terminal), prints the login commands and installs a service that keeps the container running.
+ * `relay work container shell|status|stop|start|rm|logs` wrap the container commands. Inside the container the image
+ * sets RELAY_ISOLATION=container and `relay work` adds the labels `isolation:container` and `sandbox:on` or
+ * `sandbox:container`, waits for the site and the logins instead of exiting, and names itself `<host>-container`.
  */
 import type { Command } from "commander";
-import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { detectGitHub, httpWorkApi, laneRunner, localWorkApi, MAX_IDLE_MS, NO_SANDBOX_LABEL, POLL_MS, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
-import { log, openReady } from "./_common.ts";
-import { detectLanes } from "./probes.ts";
+import {
+  CONTAINER_CPUS,
+  CONTAINER_IMAGE,
+  CONTAINER_MEMORY,
+  CONTAINER_LOGIN_STEPS,
+  CONTAINER_NAME,
+  CONTAINER_SANDBOX_LABEL,
+  CONTAINER_VOLUME,
+  CONTAINER_WORKER_HOST_ENV,
+  CONTAINER_WORKER_NAME_ENV,
+  containerPlan,
+  containerStateFrom,
+  containerWorkerName,
+  detectGitHub,
+  httpWorkApi,
+  ISOLATION_LABEL,
+  ISOLATIONS,
+  laneRunner,
+  localWorkApi,
+  MAX_IDLE_MS,
+  NO_SANDBOX_LABEL,
+  POLL_MS,
+  readSiteConfig,
+  relayHome,
+  runtimePaths,
+  runWorker,
+  SANDBOX_ON_LABEL,
+  servicePlan,
+  type ContainerPlan,
+  type Isolation,
+  type WorkApi,
+  type WorkerView,
+} from "@relay/core";
+import { log, onPath, openReady } from "./_common.ts";
+import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.ts";
 
 interface WorkOptions {
   once?: boolean;
@@ -34,6 +74,21 @@ interface WorkOptions {
   install?: boolean;
   uninstall?: boolean;
   yes?: boolean;
+  isolation?: string;
+  site?: string;
+  invite?: string;
+  memory?: string;
+  cpus?: string;
+}
+
+/** What the command runs on the machine; tests substitute recorders. */
+export interface WorkDeps {
+  /** Run and capture (non-interactive). */
+  sh: (words: string[], opts?: { timeoutMs?: number }) => { ok: boolean; out: string };
+  /** Run with this terminal's stdio (interactive: the device flow, a shell, a long build). Returns the exit code. */
+  run: (words: string[], opts?: { cwd?: string }) => number;
+  onPath: (bin: string) => string | undefined;
+  platform: NodeJS.Platform;
 }
 
 const LANES = ["claude", "codex", "grok"];
@@ -60,8 +115,8 @@ async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () =
   return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>) {
-  const platform = process.platform === "darwin" ? "darwin" : "linux";
+/** The `relay work` arguments an install bakes into the service (host) or the container's command. */
+export function bakedArgs(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>): string[] {
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
   if (o.labels) args.push("--labels", o.labels);
@@ -69,19 +124,43 @@ function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxIn
   if (o.name) args.push("--name", o.name);
   if (o.maxInterval) args.push("--max-interval", o.maxInterval);
   if (o.sandbox === false) args.push("--no-sandbox");
+  return args;
+}
+
+function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>, deps: WorkDeps, containerBin?: string) {
+  const platform = deps.platform === "darwin" ? "darwin" : "linux";
   const rp = runtimePaths();
   // extra hosts for the Claude lane's sandbox travel with the service when set at install time
   const domains = process.env.RELAY_LANE_ALLOWED_DOMAINS;
-  return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}), ...(domains ? { env: { RELAY_LANE_ALLOWED_DOMAINS: domains } } : {}) });
+  return servicePlan({
+    platform,
+    node: process.execPath,
+    cliArgv: rp.cliArgv,
+    args: bakedArgs(o),
+    home: relayHome(),
+    userHome: homedir(),
+    path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
+    ...(process.getuid ? { uid: process.getuid() } : {}),
+    ...(domains ? { env: { RELAY_LANE_ALLOWED_DOMAINS: domains } } : {}),
+    ...(containerBin ? { isolation: { kind: "container" as const, bin: containerBin } } : {}),
+  });
 }
 
-const sh = (words: string[]): { ok: boolean; out: string } => {
-  try {
-    return { ok: true, out: execFileSync(words[0]!, words.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30_000 }).trim() };
-  } catch (e) {
-    const err = e as { stderr?: string; stdout?: string; message: string };
-    return { ok: false, out: (err.stderr || err.stdout || err.message).toString().trim() };
-  }
+export const defaultDeps: WorkDeps = {
+  sh(words, opts) {
+    try {
+      return { ok: true, out: execFileSync(words[0]!, words.slice(1), { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: opts?.timeoutMs ?? 30_000 }).trim() };
+    } catch (e) {
+      const err = e as { stderr?: string; stdout?: string; message: string };
+      return { ok: false, out: (err.stderr || err.stdout || err.message).toString().trim() };
+    }
+  },
+  run(words, opts) {
+    const r = spawnSync(words[0]!, words.slice(1), { stdio: "inherit", ...(opts?.cwd ? { cwd: opts.cwd } : {}) });
+    return r.status ?? (r.error ? 1 : 0);
+  },
+  onPath,
+  platform: process.platform,
 };
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
@@ -102,10 +181,51 @@ function maxIntervalMs(flag: string | undefined, pollMs: number): number {
   return Math.max(pollMs, Number.isFinite(n) ? n * 1000 : MAX_IDLE_MS);
 }
 
-export function registerWork(program: Command, version: string): void {
+export function isolationOf(flag: string | undefined): Isolation {
+  const v = (flag ?? "host").trim().toLowerCase();
+  if (!(ISOLATIONS as readonly string[]).includes(v)) throw new Error(`--isolation: '${flag}' is not one of ${ISOLATIONS.join(", ")}`);
+  return v as Isolation;
+}
+
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((res) => {
+    if (signal?.aborted) return res();
+    const t = setTimeout(done, ms);
+    function done() {
+      clearTimeout(t);
+      signal?.removeEventListener("abort", done);
+      res();
+    }
+    signal?.addEventListener("abort", done, { once: true });
+  });
+
+/**
+ * Inside the container the process must stay up for `container exec` to reach it, so instead of exiting on "no
+ * lanes" the worker waits for the site token (`relay setup --site` inside) and the logins, re-probing every 30 s.
+ */
+async function waitForReadiness(out: (m: string) => void, forced: string[] | undefined, signal: AbortSignal): Promise<string[]> {
+  let said = "";
+  for (;;) {
+    const site = readSiteConfig();
+    const d = forced ? { lanes: forced, reasons: [] as string[] } : await detectLanes();
+    const missing: string[] = [];
+    if (!site.site || !site.token) missing.push("no site yet: on the Mac run `relay work --isolation container --install`, or inside: relay setup --site <url>");
+    if (!d.lanes.length) missing.push(`no lanes yet: ${d.reasons.join("; ")}; log in with: relay work container shell`);
+    if (!missing.length) return d.lanes;
+    const msg = `waiting: ${missing.join(" | ")}`;
+    if (msg !== said) out(msg);
+    said = msg;
+    await sleep(30_000, signal);
+    if (signal.aborted) return [];
+  }
+}
+
+export function registerWork(program: Command, version: string, deps: WorkDeps = defaultDeps): void {
   const work = program
     .command("work")
     .description("Make this machine a relay worker: claim queued tasks for the lanes its logins allow, run them, open PRs, report usage (docs/WORKERS.md)")
+    // `work --yes` is this command's; `work container rm --yes` is the subcommand's (needs the whole chain positional)
+    .enablePositionalOptions()
     .option("--once", "drain the queue once, then exit")
     .option("--lanes <list>", "force the lanes to serve (default: detected from logins), e.g. claude,codex")
     .option("--labels <list>", "capabilities this worker advertises, matched against a project's lane.labels preference, e.g. gpu,xcode")
@@ -116,18 +236,35 @@ export function registerWork(program: Command, version: string): void {
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
     .option("--no-sandbox", `run the Claude lane's Bash without Claude Code's OS sandbox (allowlist only); logged, and advertised as the label ${NO_SANDBOX_LABEL}`)
-    .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it")
-    .option("--uninstall", "stop and remove that service; --yes to do it")
+    .option("--isolation <tier>", `host (this user, Claude's OS sandbox around the lane) or container (the whole worker in the ${CONTAINER_NAME} container made with Apple's container CLI; the Mac's home is never mounted; docs/WORKERS.md "Isolation")`, "host")
+    .option("--site <url>", "container mode: the hosted relay the worker inside joins (default: the site this machine is in)")
+    .option("--invite <code>", "container mode: redeem an invite inside instead of the device flow")
+    .option("--memory <size>", `container mode: the VM's memory (default ${CONTAINER_MEMORY}; the runtime's 1G default is too little for PGlite)`)
+    .option("--cpus <n>", `container mode: the VM's CPUs (default ${CONTAINER_CPUS})`)
+    .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it. With --isolation container: build the image, create the container, join the site inside, install the service that keeps it running")
+    .option("--uninstall", "stop and remove that service (and, with --isolation container, the container; the volume with the logins stays); --yes to do it")
     .option("--yes", "write files and start/stop the service")
     .action(async (o: WorkOptions) => {
-      if (o.install || o.uninstall) return installOrRemove(o);
+      const isolation = isolationOf(o.isolation);
+      if (o.install || o.uninstall) return isolation === "container" ? containerInstallOrRemove(o) : installOrRemove(o);
+      if (isolation === "container") return containerForeground();
       const lanes = o.lanes ? list(o.lanes) : undefined;
       if (lanes) for (const l of lanes) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
       const jobs = Math.max(1, Number(o.jobs) || 1);
-      const name = o.name ?? hostname().split(".")[0]!.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64);
+      const inside = inContainer();
+      const host = (inside ? process.env[CONTAINER_WORKER_HOST_ENV] : undefined) || hostname();
+      const name: string = o.name ?? (inside ? process.env[CONTAINER_WORKER_NAME_ENV] || containerWorkerName(host) : host.split(".")[0]!.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(0, 64));
       const out = fileLog(workLogPath());
+      const ac = new AbortController();
+      const stop = () => ac.abort();
+      process.once("SIGINT", stop);
+      process.once("SIGTERM", stop);
       let serving = lanes;
-      if (!serving) {
+      if (inside) {
+        // the container's process must stay alive for `container exec`; wait for the site and the logins instead of exiting
+        serving = await waitForReadiness(out, lanes, ac.signal);
+        if (ac.signal.aborted) return;
+      } else if (!serving) {
         const d = await detectLanes();
         serving = d.lanes;
         if (!serving.length) throw new Error(`no lanes to serve: ${d.reasons.join("; ")}. Log in, or force with --lanes.`);
@@ -137,22 +274,29 @@ export function registerWork(program: Command, version: string): void {
       const maxIdleMs = maxIntervalMs(o.maxInterval, pollMs);
       const debug = process.env.RELAY_DEBUG ? (m: string) => out(`debug: ${m}`) : undefined;
       const labels = list(o.labels);
-      if (!o.sandbox) {
+      let sandbox = o.sandbox;
+      if (inside) {
+        if (!labels.includes(ISOLATION_LABEL)) labels.push(ISOLATION_LABEL);
+        // the nested sandbox: Claude Code's bubblewrap inside the VM when the runtime lets it start; otherwise the
+        // container is the boundary and the label says so (never `sandbox:off`, which means a bare host)
+        const probe = sandbox ? await bwrapProbe() : { ok: false, detail: "--no-sandbox" };
+        if (!probe.ok) {
+          sandbox = false;
+          out(`nested sandbox off (${probe.detail}): the Claude lane's Bash runs with the allowlist alone inside this container, which is the boundary; advertised as ${CONTAINER_SANDBOX_LABEL}`);
+          if (!labels.includes(CONTAINER_SANDBOX_LABEL)) labels.push(CONTAINER_SANDBOX_LABEL);
+        } else if (!labels.includes(SANDBOX_ON_LABEL)) labels.push(SANDBOX_ON_LABEL);
+      } else if (!sandbox) {
         // loud on purpose: this machine's Claude jobs run Bash with the rights of this OS user, boxed by the allowlist alone
         out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers").`);
         if (!labels.includes(NO_SANDBOX_LABEL)) labels.push(NO_SANDBOX_LABEL);
       }
       const { api, where, close } = await openWorkApi();
-      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, sandbox ${o.sandbox ? "on" : "OFF"}, log ${workLogPath()}`);
-      const ac = new AbortController();
-      const stop = () => ac.abort();
-      process.once("SIGINT", stop);
-      process.once("SIGTERM", stop);
+      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, sandbox ${sandbox ? "on" : inside ? "container" : "OFF"}, log ${workLogPath()}`);
       try {
         const r = await runWorker({
           api,
           name,
-          host: hostname(),
+          host,
           lanes: serving,
           labels,
           version,
@@ -163,7 +307,7 @@ export function registerWork(program: Command, version: string): void {
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox: o.sandbox }) },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox }) },
         });
         out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed` : ""}`);
         if (r.results.some((x) => x.outcome === "failed")) process.exitCode = 1;
@@ -179,9 +323,12 @@ export function registerWork(program: Command, version: string): void {
     .option("--json")
     .description("The service on this machine, the workers the site knows, and the last lines of work.log")
     .action(async (o: { json?: boolean }) => {
-      const p = plan({ jobs: "1" });
+      const p = plan({ jobs: "1" }, deps);
       const installed = existsSync(p.path);
-      const loaded = installed ? sh(p.status).ok : false;
+      const loaded = installed ? deps.sh(p.status).ok : false;
+      // the container-mode service runs `container start --attach`; the host-mode one runs relay itself
+      const mode = installed && /--attach/.test(readFileSync(p.path, "utf8")) ? "container" : "host";
+      const container = deps.platform === "darwin" && !inContainer() && deps.onPath("container") ? await containerReport({ withDoctor: false }) : undefined;
       const { api, where, close } = await openWorkApi();
       let workers: WorkerView[] = [];
       let error: string | undefined;
@@ -194,10 +341,11 @@ export function registerWork(program: Command, version: string): void {
       }
       const logTail = existsSync(p.logPath) ? readFileSync(p.logPath, "utf8").trimEnd().split("\n").slice(-10) : [];
       if (o.json) {
-        console.log(JSON.stringify({ service: { path: p.path, installed, loaded }, where, workers, error: error ?? null, log: logTail }, null, 2));
+        console.log(JSON.stringify({ service: { path: p.path, installed, loaded, mode }, container: container?.container ?? null, where, workers, error: error ?? null, log: logTail }, null, 2));
         return;
       }
-      console.log(`service:  ${installed ? (loaded ? "installed and loaded" : "installed, not loaded") : "not installed"} (${p.path})`);
+      console.log(`service:  ${installed ? (loaded ? "installed and loaded" : "installed, not loaded") : "not installed"}${installed ? ` (${mode} mode)` : ""} (${p.path})`);
+      if (container) console.log(`container: ${container.container.exists ? `${CONTAINER_NAME} ${container.container.state ?? "unknown"}${container.container.image ? ` (${container.container.image})` : ""}; relay work container status for the lanes inside` : `no ${CONTAINER_NAME} container (relay work --isolation container --install)`}`);
       console.log(`backend:  ${where}`);
       if (error) console.log(`workers:  unavailable (${error})`);
       else if (!workers.length) console.log("workers:  none registered yet; run `relay work` or `relay work --install --yes`");
@@ -212,15 +360,116 @@ export function registerWork(program: Command, version: string): void {
       }
     });
 
+  // ---------- relay work container <shell|status|stop|start|rm|logs> ----------
+  const container = work
+    .command("container")
+    .enablePositionalOptions()
+    .description(`The ${CONTAINER_NAME} container (relay work --isolation container): a shell inside, its status, stop/start/rm, logs (docs/WORKERS.md "Isolation")`);
+  container
+    .command("shell")
+    .description(`a shell inside ${CONTAINER_NAME} as the relay user (container exec -it); log in to claude, gh and fx here`)
+    .action(() => {
+      const c = needContainer();
+      process.exitCode = deps.run(c.plan.shell);
+    });
+  container
+    .command("status")
+    .description(`whether ${CONTAINER_NAME} exists and runs, then \`relay doctor\` inside and the lanes it would serve`)
+    .action(async () => {
+      needContainer();
+      const r = await containerReport();
+      if (!r.container.exists) return console.log(`container: no ${CONTAINER_NAME} (relay work --isolation container --install)`);
+      console.log(`container: ${CONTAINER_NAME} ${r.container.state ?? "unknown"}${r.container.image ? ` (${r.container.image})` : ""}`);
+      if (!r.container.running) return console.log("start it with: relay work container start");
+      if (r.doctor) console.log(r.doctor.replace(/^/gm, "  "));
+      console.log(r.lanes === undefined ? "lanes:     unknown (no lanes line from relay doctor inside)" : r.lanes.length ? `lanes:     ${r.lanes.join(", ")} (the container worker serves these)` : "lanes:     none yet; log in with: relay work container shell");
+    });
+  container
+    .command("stop")
+    .description(`stop ${CONTAINER_NAME} (and unload the service that keeps it running, so it stays stopped)`)
+    .action(() => {
+      const c = needContainer();
+      const p = plan({ jobs: "1" }, deps, c.bin);
+      if (existsSync(p.path) && deps.sh(p.status).ok) {
+        const r = deps.sh(p.unload[0]!);
+        log(`${r.ok ? "unloaded" : "could not unload"} the service (${p.path})`);
+      }
+      const r = deps.sh(c.plan.stop, { timeoutMs: 60_000 });
+      if (!r.ok) throw new Error(`container stop failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`${CONTAINER_NAME} stopped; start again with: relay work container start`);
+    });
+  container
+    .command("start")
+    .description(`start ${CONTAINER_NAME}: through the service when it is installed, else detached`)
+    .action(() => {
+      const c = needContainer();
+      const p = plan({ jobs: "1" }, deps, c.bin);
+      if (existsSync(p.path)) {
+        for (const w of p.load) {
+          const r = deps.sh(w);
+          if (!r.ok && !/already|in progress|service already loaded/i.test(r.out)) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
+        }
+        return log(`service loaded (${p.path}); it runs: ${c.plan.attach.join(" ")}`);
+      }
+      const r = deps.sh(c.plan.start, { timeoutMs: 120_000 });
+      if (!r.ok) throw new Error(`container start failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`${CONTAINER_NAME} started (no service installed; relay work --isolation container --install --yes adds one)`);
+    });
+  container
+    .command("rm")
+    .description(`remove ${CONTAINER_NAME} (stops it first); the ${CONTAINER_VOLUME} volume with the logins stays unless --volume`)
+    .option("--volume", `also delete the ${CONTAINER_VOLUME} volume: every login inside is gone`)
+    .option("--yes", "do it")
+    .action((o: { volume?: boolean; yes?: boolean }) => {
+      const c = needContainer();
+      const words = [c.plan.stop, c.plan.remove, ...(o.volume ? [[c.bin, "volume", "delete", CONTAINER_VOLUME]] : [])];
+      for (const w of words) console.log(`would run   ${w.join(" ")}`);
+      if (!o.yes) return console.log("\nre-run with --yes to do it");
+      for (const w of words) {
+        const r = deps.sh(w, { timeoutMs: 60_000 });
+        log(`${r.ok ? "ran" : "failed"}: ${w.join(" ")}${r.ok || !r.out ? "" : ` (${r.out.split("\n")[0]})`}`);
+      }
+    });
+  container
+    .command("logs")
+    .option("-f, --follow", "keep printing")
+    .option("-n <lines>", "lines from the end", "50")
+    .description(`the worker's output inside ${CONTAINER_NAME} (container logs)`)
+    .action((o: { follow?: boolean; n: string }) => {
+      const c = needContainer();
+      process.exitCode = deps.run(c.plan.logs(!!o.follow, Number(o.n) || undefined));
+    });
+
+  /** The container CLI, checked, and the plan for this machine (no site needed for the wrappers). */
+  function needContainer(): { bin: string; plan: ContainerPlan } {
+    const bin = deps.onPath("container");
+    if (!bin) throw new Error("Apple's container CLI is not on PATH. Install it from https://github.com/apple/container/releases, then: container system start");
+    const host = hostname();
+    return { bin, plan: containerPlan({ bin, image: `${CONTAINER_IMAGE}:${version}`, context: join(relayHome(), "container"), site: readSiteConfig().site ?? "", workerName: containerWorkerName(host), host }) };
+  }
+
+  /** Foreground container mode: keep this process attached to the container (what the service runs). */
+  function containerForeground(): void {
+    const c = needContainer();
+    const state = containerStateFrom(deps.sh([c.bin, "list", "--all", "--format", "json"]).out);
+    if (!state.exists) throw new Error(`no ${CONTAINER_NAME} container; create it with: relay work --isolation container --install --yes`);
+    if (state.running) {
+      log(`${CONTAINER_NAME} is already running; following its log (Ctrl-C leaves it running)`);
+      process.exitCode = deps.run(c.plan.logs(true));
+      return;
+    }
+    process.exitCode = deps.run(c.plan.attach);
+  }
+
   function installOrRemove(o: WorkOptions): void {
     if (o.lanes) for (const l of list(o.lanes)) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
-    const p = plan(o);
+    const p = plan(o, deps);
     if (o.uninstall) {
       console.log(`would remove ${p.path}${existsSync(p.path) ? "" : " (not present)"}`);
       for (const w of p.unload) console.log(`would run    ${w.join(" ")}`);
       if (!o.yes) return console.log("\nre-run with --yes to stop the service and remove the file");
       for (const w of p.unload) {
-        const r = sh(w);
+        const r = deps.sh(w);
         log(`${r.ok ? "ran" : "failed"}: ${w.join(" ")}${r.ok || !r.out ? "" : ` (${r.out.split("\n")[0]})`}`);
       }
       if (existsSync(p.path)) rmSync(p.path);
@@ -232,19 +481,154 @@ export function registerWork(program: Command, version: string): void {
     if (o.sandbox === false) console.log(`WARNING     the service will run the Claude lane's Bash without Claude Code's OS sandbox (--no-sandbox is baked in; label ${NO_SANDBOX_LABEL})`);
     for (const w of p.load) console.log(`would run   ${w.join(" ")}`);
     console.log(`log file    ${p.logPath}`);
-    if (process.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");
+    if (deps.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");
     if (!o.yes) return console.log("\nre-run with --yes to write the file and start the service");
     mkdirSync(dirname(p.path), { recursive: true });
     mkdirSync(dirname(p.logPath), { recursive: true });
     writeFileSync(p.path, p.content);
     log(`wrote ${p.path}`);
     // a reload: stop the previous registration first so bootstrap does not refuse the duplicate
-    if (process.platform === "darwin") sh(p.unload[0]!);
+    if (deps.platform === "darwin") deps.sh(p.unload[0]!);
     for (const w of p.load) {
-      const r = sh(w);
+      const r = deps.sh(w);
       if (!r.ok) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
       log(`ran ${w.join(" ")}`);
     }
     log(`service running; follow it with: tail -f ${p.logPath}; check with: relay work status`);
+  }
+
+  /**
+   * `relay work --isolation container --install`: image, volume, container, `relay setup --site` inside, the service.
+   * Everything is printed first; --yes does it. `--uninstall` removes the service and the container, never the volume.
+   */
+  function containerInstallOrRemove(o: WorkOptions): void {
+    if (inContainer()) throw new Error("already inside the relay container; run this on the Mac");
+    if (o.lanes) for (const l of list(o.lanes)) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
+    const bin = deps.onPath("container");
+    if (!bin) throw new Error("Apple's container CLI is not on PATH. Install it from https://github.com/apple/container/releases, then: container system start");
+    const sys = deps.sh([bin, "system", "status"]);
+    if (!sys.ok || !/^status\s+running/m.test(sys.out)) throw new Error("container services are not running; run: container system start");
+    const host = hostname();
+    const workerName = o.name ?? containerWorkerName(host);
+    const rp = runtimePaths();
+    const context = join(relayHome(), "container");
+    const service = plan({ jobs: "1" }, deps, bin);
+    const stateNow = containerStateFrom(deps.sh([bin, "list", "--all", "--format", "json"]).out);
+
+    if (o.uninstall) {
+      console.log(`would remove ${service.path}${existsSync(service.path) ? "" : " (not present)"}`);
+      for (const w of service.unload) console.log(`would run    ${w.join(" ")}`);
+      if (stateNow.exists) {
+        console.log(`would run    ${bin} stop ${CONTAINER_NAME}`);
+        console.log(`would run    ${bin} delete ${CONTAINER_NAME}`);
+      } else console.log(`             (no ${CONTAINER_NAME} container)`);
+      console.log(`keeps        the ${CONTAINER_VOLUME} volume with the logins inside; delete it with: container volume delete ${CONTAINER_VOLUME}`);
+      if (!o.yes) return console.log("\nre-run with --yes to stop the service and remove the container");
+      for (const w of service.unload) {
+        const r = deps.sh(w);
+        log(`${r.ok ? "ran" : "failed"}: ${w.join(" ")}${r.ok || !r.out ? "" : ` (${r.out.split("\n")[0]})`}`);
+      }
+      if (existsSync(service.path)) {
+        rmSync(service.path);
+        log(`removed ${service.path}`);
+      }
+      if (stateNow.exists) {
+        for (const w of [[bin, "stop", CONTAINER_NAME], [bin, "delete", CONTAINER_NAME]]) {
+          const r = deps.sh(w, { timeoutMs: 60_000 });
+          log(`${r.ok ? "ran" : "failed"}: ${w.join(" ")}${r.ok || !r.out ? "" : ` (${r.out.split("\n")[0]})`}`);
+        }
+      }
+      log(`the ${CONTAINER_VOLUME} volume is kept (logins); container volume delete ${CONTAINER_VOLUME} removes it`);
+      return;
+    }
+
+    const site = o.site ?? readSiteConfig().site;
+    if (!site) throw new Error("container mode joins a hosted relay (the container cannot see this machine's local database): pass --site <url>, or put this machine in site mode first with relay setup --site <url>");
+    const env: Record<string, string> = {};
+    for (const k of ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_WORK_MAX_INTERVAL", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"]) if (process.env[k]) env[k] = process.env[k]!;
+    // the inner worker gets its name from the environment; the rest of the arguments ride along (`--no-sandbox` inside
+    // means the allowlist alone, advertised as sandbox:container)
+    const { name: _name, ...rest } = o;
+    void _name;
+    const args = bakedArgs(rest);
+    const image = `${CONTAINER_IMAGE}:${version}`;
+    const cpus = o.cpus === undefined ? undefined : Number(o.cpus);
+    if (cpus !== undefined && (!Number.isInteger(cpus) || cpus < 1)) throw new Error(`--cpus: '${o.cpus}' is not a whole number`);
+    if (o.memory !== undefined && !/^\d+[KMGT]?$/i.test(o.memory)) throw new Error(`--memory: '${o.memory}' is not a size such as 4G or 2048M`);
+    const c = containerPlan({ bin, image, context, ...(rp.layout === "package" ? { relaySpec: `@kyleroche/relay@${version}` } : {}), site, ...(o.invite ? { invite: o.invite } : {}), workerName, host, args, env, ...(o.memory ? { memory: o.memory } : {}), ...(cpus !== undefined ? { cpus } : {}) });
+    const volumes = deps.sh([bin, "volume", "list"]).out;
+    const haveVolume = new RegExp(`^${CONTAINER_VOLUME}\\b`, "m").test(volumes);
+
+    console.log(`image       ${image}: ${rp.layout === "checkout" ? "relay built from this checkout (pnpm --filter @kyleroche/relay build, npm pack into the context)" : `relay from npm (@kyleroche/relay@${version})`}`);
+    console.log(`context     ${context} (Dockerfile and relay-entry from ${rp.containerDir})`);
+    console.log(`would run   ${c.build.join(" ")}`);
+    console.log(`would run   ${c.volumeCreate.join(" ")}${haveVolume ? "  (exists; kept, with its logins)" : ""}`);
+    if (stateNow.exists) console.log(`would run   ${bin} stop ${CONTAINER_NAME}; ${bin} delete ${CONTAINER_NAME}  (recreated from the new image; the volume keeps the logins)`);
+    console.log(`would run   ${c.create.join(" ")}`);
+    console.log(`would run   ${c.start.join(" ")}`);
+    console.log(`would run   ${c.setup.join(" ")}  (interactive: the device flow prints its code here)`);
+    console.log(`would run   ${c.stop.join(" ")}  (the service attaches to a stopped container)`);
+    console.log(`would write ${service.path}:\n`);
+    console.log(service.content.replace(/^/gm, "    "));
+    for (const w of service.load) console.log(`would run   ${w.join(" ")}`);
+    console.log(`log file    ${service.logPath} (the container's output; inside: ${CONTAINER_NAME}:/home/relay/.harness/work.log)`);
+    console.log(`then        log in inside, in this order:`);
+    for (const s of CONTAINER_LOGIN_STEPS) console.log(`              ${s.cmd.padEnd(36)} ${s.why}`);
+    if (deps.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");
+    if (!o.yes) return console.log("\nre-run with --yes to build the image, create the container and install the service");
+
+    // 1. the build context: the shipped Dockerfile and entry script, plus this checkout's tarball when relay runs from one
+    rmSync(context, { recursive: true, force: true });
+    mkdirSync(context, { recursive: true });
+    for (const f of ["Dockerfile", "relay-entry"]) copyFileSync(join(rp.containerDir, f), join(context, f));
+    if (rp.layout === "checkout") {
+      log("building @kyleroche/relay from this checkout for the image…");
+      if (deps.run(["pnpm", "--filter", "@kyleroche/relay", "build"], { cwd: rp.root }) !== 0) throw new Error("pnpm --filter @kyleroche/relay build failed");
+      if (deps.run(["npm", "pack", "--ignore-scripts", "--pack-destination", context], { cwd: join(rp.root, "packages", "cli") }) !== 0) throw new Error("npm pack failed");
+    }
+    // 2. the image
+    log(`building ${image} (a minute or two the first time)…`);
+    if (deps.run(c.build) !== 0) throw new Error(`${bin} build failed`);
+    // 3. the volume (kept across rebuilds: it holds the logins)
+    if (!haveVolume) {
+      const r = deps.sh(c.volumeCreate, { timeoutMs: 60_000 });
+      if (!r.ok) throw new Error(`${c.volumeCreate.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`created volume ${CONTAINER_VOLUME}`);
+    } else log(`volume ${CONTAINER_VOLUME} exists; kept`);
+    // 4. the container, replacing an older one (the service is unloaded first so it does not fight the recreate)
+    if (existsSync(service.path)) deps.sh(service.unload[0]!);
+    if (stateNow.exists) {
+      deps.sh([bin, "stop", CONTAINER_NAME], { timeoutMs: 60_000 });
+      const r = deps.sh([bin, "delete", CONTAINER_NAME], { timeoutMs: 60_000 });
+      if (!r.ok) throw new Error(`${bin} delete ${CONTAINER_NAME} failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`removed the previous ${CONTAINER_NAME}`);
+    }
+    {
+      const r = deps.sh(c.create, { timeoutMs: 120_000 });
+      if (!r.ok) throw new Error(`${bin} create failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`created ${CONTAINER_NAME} from ${image} (worker ${workerName}, volume ${CONTAINER_VOLUME} at /home/relay, no host mounts)`);
+    }
+    // 5. start it so exec can reach it, join the site inside (interactive), then stop it for the service to attach
+    {
+      const r = deps.sh(c.start, { timeoutMs: 120_000 });
+      if (!r.ok) throw new Error(`${bin} start failed: ${r.out.split("\n")[0] ?? ""}`);
+    }
+    log(`joining ${site} from inside the container (approve the code it prints)…`);
+    const setupCode = deps.run(c.setup);
+    if (setupCode !== 0) log(`relay setup --site inside exited ${setupCode}; the worker waits for it. Retry with: relay work container shell, then relay setup --site ${site}`);
+    deps.sh(c.stop, { timeoutMs: 60_000 });
+    // 6. the service that keeps the container running
+    mkdirSync(dirname(service.path), { recursive: true });
+    mkdirSync(dirname(service.logPath), { recursive: true });
+    writeFileSync(service.path, service.content);
+    log(`wrote ${service.path}`);
+    for (const w of service.load) {
+      const r = deps.sh(w);
+      if (!r.ok) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
+      log(`ran ${w.join(" ")}`);
+    }
+    console.log(`\n${CONTAINER_NAME} is running as worker ${workerName} and waits for logins. Log in inside, in this order:\n`);
+    for (const s of CONTAINER_LOGIN_STEPS) console.log(`  ${s.cmd.padEnd(36)} ${s.why}`);
+    console.log(`\nThe logins land in the ${CONTAINER_VOLUME} volume, never on this Mac's home. Check with: relay work container status; the worker's log: relay work container logs -f`);
   }
 }

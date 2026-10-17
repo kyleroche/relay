@@ -23,13 +23,15 @@ import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { openReady } from "./commands/_common.ts";
-import { lanesFromChecks, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { containerCheck, containerReport, inContainer, lanesFromChecks, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 // ../package.json is packages/cli/package.json from src/ and the package root from the bundled dist/relay.js.
 const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
-const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version(version);
+// positional options: an option after a subcommand belongs to that subcommand (`relay work container rm --yes` is rm's
+// --yes, not work's); the root has only --version and --help, which nobody puts after a command
+const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version(version).enablePositionalOptions();
 registerAssetCommands(program);
 registerToken(program);
 registerInvite(program);
@@ -68,7 +70,7 @@ program
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, whether the database or site is reachable, how this machine authenticates, and (site mode) which linked repos still lack the GitHub App")
+  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, the container worker tier (macOS), whether the database or site is reachable, how this machine authenticates, and (site mode) which linked repos still lack the GitHub App")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);
@@ -78,7 +80,9 @@ program
     checks.push(...tools);
     const lanes = lanesFromChecks(tools);
     checks.push({ status: lanes.lanes.length ? "ok" : "warn", name: "lanes", detail: lanes.lanes.length ? `${lanes.lanes.join(", ")} (relay work would serve these)${lanes.reasons.length ? `; not: ${lanes.reasons.join("; ")}` : ""}` : `none: ${lanes.reasons.join("; ")}` });
-    checks.push(sandboxCheck());
+    checks.push(await sandboxCheck());
+    // the container tier (docs/WORKERS.md, "Isolation"): on a Mac, is Apple's container CLI here and is relay-work up
+    if (process.platform === "darwin" && !inContainer()) checks.push(containerCheck(await containerReport()));
 
     const cfg = loadConfig();
     const siteMode = !!cfg.site && !!cfg.siteToken;
