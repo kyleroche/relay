@@ -13,7 +13,21 @@ import { localWorkApi, type WorkApi } from "../src/work/api.ts";
 import type { JobResult } from "../src/work/job.ts";
 import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
 import { servicePlan } from "../src/work/service.ts";
-import { CONTAINER_NAME, CONTAINER_VOLUME, containerPlan, containerStateFrom, containerWorkerName, lanesFromDoctorOutput } from "../src/work/container.ts";
+import {
+  CONTAINER_LOGIN_STEPS,
+  CONTAINER_NAME,
+  CONTAINER_VOLUME,
+  containerLoginSteps,
+  containerPlan,
+  containerSettingsFrom,
+  containerStateFrom,
+  containerWorkerName,
+  fmtMemory,
+  imageStatus,
+  lanesFromDoctorOutput,
+  loginStatesFromDoctorOutput,
+  tokenNameFromDoctorOutput,
+} from "../src/work/container.ts";
 import { runWorker } from "../src/work/worker.ts";
 
 let db: Db;
@@ -317,6 +331,88 @@ describe("container plan (relay work --isolation container)", () => {
     expect(lanesFromDoctorOutput("ok    node          v24.1.0\nok    lanes         claude, codex (relay work would serve these); not: grok: no grok CLI or fx login\nok    sandbox       x")).toEqual(["claude", "codex"]);
     expect(lanesFromDoctorOutput("warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it")).toEqual([]);
     expect(lanesFromDoctorOutput("ok    node          v24.1.0")).toBeUndefined();
+  });
+  it("probes the site token in the volume and tells relay-entry which login ports to forward", () => {
+    const p = containerPlan(spec);
+    expect(p.credentials).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "relay-work", "test", "-f", "/home/relay/.harness/credentials.json"]);
+    expect(p.create.join(" ")).toContain("--env RELAY_LOGIN_PORTS=3000 1455");
+  });
+
+  const DOCTOR_INSIDE = [
+    "ok    node          v24.11.0",
+    "ok    cli:claude    /usr/local/bin/claude",
+    "ok    login:claude  logged in (max)",
+    "warn  cli:codex     not on PATH",
+    "ok    cli:fx        /usr/local/bin/fx",
+    "ok    login:fx      connected: codex",
+    "warn  cli:grok      not on PATH",
+    "ok    cli:gh        /usr/bin/gh",
+    "fail  login:gh      not logged in; run: gh auth login",
+    "warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it",
+    "ok    mode          site: https://relay.example.com (memory, feed, token, invite, task and webhook commands and the hooks use it)",
+    "ok    auth          approved on /activate (device flow) as oauth:relay-cli@mac-container, expires 2026-11-16T22:10:02.000Z; renews itself with a refresh token",
+  ].join("\n");
+
+  it("reads the logins from `relay doctor` output inside: fx covers codex and grok, an expired fx counts as missing", () => {
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE)).toEqual({ claude: true, gh: false, codex: true, grok: false });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in"))).toEqual({ claude: true, gh: true, codex: true, grok: true });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "warn  login:fx      connected: codex; token expired and not refreshable, run: fx login"))).toEqual({ claude: true, gh: false, codex: false, grok: false });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("warn  cli:grok      not on PATH", "ok    cli:grok      /usr/local/bin/grok")).grok).toBe(true);
+    expect(loginStatesFromDoctorOutput("")).toEqual({ claude: false, gh: false, codex: false, grok: false });
+  });
+  it("reads the token's name from doctor's auth line", () => {
+    expect(tokenNameFromDoctorOutput(DOCTOR_INSIDE)).toBe("oauth:relay-cli@mac-container");
+    expect(tokenNameFromDoctorOutput("ok    auth          pasted with --token as ci, no expiry")).toBe("ci");
+    expect(tokenNameFromDoctorOutput("ok    auth          pasted with --token, no expiry")).toBeUndefined();
+    expect(tokenNameFromDoctorOutput("")).toBeUndefined();
+  });
+  it("marks the login steps the volume already holds as kept; without doctor output every step is an instruction", () => {
+    const unknown = containerLoginSteps();
+    expect(unknown.allKept).toBe(false);
+    expect(unknown.steps.map((s) => s.cmd)).toEqual(CONTAINER_LOGIN_STEPS.map((s) => s.cmd));
+    expect(unknown.steps.every((s) => s.kept === undefined)).toBe(true);
+    const some = containerLoginSteps(DOCTOR_INSIDE);
+    expect(some.allKept).toBe(false);
+    expect(some.steps.map((s) => [s.cmd, s.kept])).toEqual([
+      ["relay work container shell", undefined],
+      ["claude", true],
+      ["gh auth login && gh auth setup-git", false],
+      ["fx login codex", true],
+      ["fx login --no-browser grok", false],
+      ["exit", undefined],
+    ]);
+    const all = containerLoginSteps(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in"));
+    expect(all.allKept).toBe(true);
+    expect(all.steps.filter((s) => s.kept).map((s) => s.login)).toEqual(["claude", "gh", "codex", "grok"]);
+  });
+  it("reads the settings an update carries over from the container's row: the baked arguments, the passthrough env, the name, the size", () => {
+    const row = {
+      configuration: {
+        id: "relay-work",
+        image: { reference: "relay-worker:0.1.0" },
+        initProcess: {
+          arguments: ["relay", "work", "--lanes", "claude", "--jobs", "2"],
+          environment: ["PATH=/usr/local/bin:/usr/bin", "RELAY_HOME=/home/relay/.harness", "RELAY_ISOLATION=container", "RELAY_WORKER_NAME=mac-container", "RELAY_WORKER_HOST=mac.local", "RELAY_LANE_ALLOWED_DOMAINS=pkg.example", "RELAY_LOGIN_PORTS=3000 1455", "NODE_VERSION=24.11.0"],
+        },
+        resources: { cpuOverhead: 1, cpus: 6, memoryInBytes: 8 * 2 ** 30 },
+      },
+      status: { state: "running" },
+    };
+    expect(containerSettingsFrom(JSON.stringify([row]))).toEqual({ args: ["--lanes", "claude", "--jobs", "2"], env: { RELAY_LANE_ALLOWED_DOMAINS: "pkg.example" }, workerName: "mac-container", host: "mac.local", memory: "8G", cpus: 6 });
+    expect(containerSettingsFrom(JSON.stringify([{ configuration: { id: "relay-work", initProcess: { arguments: ["sleep", "infinity"] } } }]))).toEqual({ args: [], env: {} });
+    expect(containerSettingsFrom("[]")).toBeUndefined();
+    expect(containerSettingsFrom("nope")).toBeUndefined();
+    expect(fmtMemory(4 * 2 ** 30)).toBe("4G");
+    expect(fmtMemory(1536 * 2 ** 20)).toBe("1536M");
+    expect(fmtMemory(2 ** 10)).toBe("1K");
+    expect(fmtMemory(1000)).toBe("1000");
+  });
+  it("says whether the container runs this relay's image", () => {
+    expect(imageStatus("relay-worker:0.2.0", "relay-worker:0.2.0")).toEqual({ current: true, line: "relay-worker:0.2.0 (this relay's build)" });
+    const stale = imageStatus("relay-worker:0.1.0", "relay-worker:0.2.0");
+    expect(stale.current).toBe(false);
+    expect(stale.line).toContain("rebuild with relay work container update");
+    expect(imageStatus(undefined, "relay-worker:0.2.0").current).toBe(false);
   });
 });
 

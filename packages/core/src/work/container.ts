@@ -19,6 +19,10 @@ export const CONTAINER_IMAGE = "relay-worker";
 export const CONTAINER_USER = "relay";
 export const CONTAINER_HOME = "/home/relay";
 export const CONTAINER_RELAY_HOME = `${CONTAINER_HOME}/.harness`;
+/** The site token `relay setup --site` inside writes; present in the volume means the container has joined already. */
+export const CONTAINER_CREDENTIALS = `${CONTAINER_RELAY_HOME}/credentials.json`;
+/** Host environment `--install` passes into the container when set, and `update` carries over from the container. */
+export const CONTAINER_PASSTHROUGH_ENV = ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_WORK_MAX_INTERVAL", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"] as const;
 /** Set in the image; `relay work` inside reads it to know it is the container worker. */
 export const CONTAINER_ENV = "RELAY_ISOLATION";
 /** The worker name and host the container worker registers with (set on the container at create time). */
@@ -71,8 +75,14 @@ export const CONTAINER_MEMORY = "4G";
 export const FX_CALLBACK_PORT = 3000;
 /** Codex's own OAuth listener, which `fx login codex` hands off to (`http://localhost:1455/auth/callback`). */
 export const CODEX_CALLBACK_PORT = 1455;
-/** Every login callback port the container publishes to the Mac's loopback. */
+/**
+ * Every login callback port the container publishes to the Mac's loopback. The published port delivers to the
+ * container's eth0 address while the login servers bind its loopback, so relay-entry runs one socat per port
+ * (eth0 → 127.0.0.1); the list reaches it as LOGIN_PORTS_ENV. Grok's login picks a random port and cannot be
+ * published: inside, `fx login --no-browser grok` with the callback address pasted back is the way.
+ */
 export const LOGIN_CALLBACK_PORTS = [FX_CALLBACK_PORT, CODEX_CALLBACK_PORT] as const;
+export const LOGIN_PORTS_ENV = "RELAY_LOGIN_PORTS";
 export const CONTAINER_CPUS = 4;
 
 export interface ContainerPlan {
@@ -90,6 +100,8 @@ export interface ContainerPlan {
   shell: string[];
   /** `relay doctor` inside, non-interactive. */
   doctor: string[];
+  /** Exit 0 when the site token is in the volume (`test -f /home/relay/.harness/credentials.json`): no device flow needed. */
+  credentials: string[];
   logs: (follow: boolean, lines?: number) => string[];
   /** `container exec --user relay …` for any command inside. */
   exec: (argv: string[], interactive?: boolean) => string[];
@@ -105,6 +117,8 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
     [CONTAINER_ENV]: "container",
     [CONTAINER_WORKER_NAME_ENV]: s.workerName,
     [CONTAINER_WORKER_HOST_ENV]: s.host,
+    // relay-entry forwards these from the container's eth0 address to its loopback, where the login servers listen
+    [LOGIN_PORTS_ENV]: LOGIN_CALLBACK_PORTS.join(" "),
     ...(s.env ?? {}),
   };
   return {
@@ -146,25 +160,162 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
     setup: exec(["relay", "setup", "--site", s.site, "--name", `relay-cli@${s.workerName}`, ...(s.invite ? ["--invite", s.invite] : [])], true),
     shell: exec(["bash"], true),
     doctor: exec(["relay", "doctor"]),
+    credentials: exec(["test", "-f", CONTAINER_CREDENTIALS]),
     logs: (follow, lines) => [s.bin, "logs", ...(follow ? ["--follow"] : []), ...(lines ? ["-n", String(lines)] : []), CONTAINER_NAME],
     exec,
   };
 }
 
-/** The login commands the operator runs inside after `--install`, in order; printed by the CLI and the docs. */
-export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string }> = [
+/**
+ * The login commands the operator runs inside after `--install`, in order; printed by the CLI and the docs. `login`
+ * names the login the step makes, so `update` can mark the ones the volume already holds as kept.
+ */
+export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; login?: keyof LoginStates }> = [
   { cmd: "relay work container shell", why: "a shell inside the container, as the relay user" },
-  { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back)" },
-  { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as" },
-  { cmd: "fx login codex", why: "optional: the codex lane" },
-  { cmd: "fx login grok", why: "optional: the grok lane" },
+  { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back)", login: "claude" },
+  { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as", login: "gh" },
+  { cmd: "fx login codex", why: "optional: the codex lane (the browser's redirect to localhost:1455 reaches the container through the published port)", login: "codex" },
+  {
+    cmd: "fx login --no-browser grok",
+    why: "optional: the grok lane; open the printed address on this Mac, and when the browser ends on a 127.0.0.1:<port>/callback page that cannot load, paste that full address (or the code xAI shows) back into the fx prompt",
+    login: "grok",
+  },
   { cmd: "exit", why: "then on the Mac: relay work container status" },
 ];
 
+/** Which logins `relay doctor` inside reports as present (the volume holds them). */
+export interface LoginStates {
+  claude: boolean;
+  gh: boolean;
+  /** The codex CLI's login, or an fx Codex login. */
+  codex: boolean;
+  /** The grok CLI, or an fx Grok login. */
+  grok: boolean;
+}
+
+/** One `<status> <name> <detail>` line of `relay doctor`. */
+function doctorLine(text: string, name: string): { status: string; detail: string } | undefined {
+  const m = new RegExp(`^(ok|warn|fail)\\s+${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s+(.*)$`, "m").exec(text);
+  return m ? { status: m[1]!, detail: m[2]!.trim() } : undefined;
+}
+
+/**
+ * The logins `relay doctor` (inside the container) reports. An fx line that is `warn` (token expired and not
+ * refreshable) counts as missing, since its lanes would fail.
+ */
+export function loginStatesFromDoctorOutput(text: string): LoginStates {
+  const fxLine = doctorLine(text, "login:fx");
+  const fx = fxLine?.status === "ok" ? (/connected: (.+)$/.exec(fxLine.detail)?.[1] ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean) : [];
+  return {
+    claude: doctorLine(text, "login:claude")?.status === "ok",
+    gh: doctorLine(text, "login:gh")?.status === "ok",
+    codex: doctorLine(text, "login:codex")?.status === "ok" || fx.includes("codex"),
+    grok: doctorLine(text, "cli:grok")?.status === "ok" || fx.includes("grok"),
+  };
+}
+
+/** The token's name from doctor's `auth` line inside (`… as oauth:relay-cli@mac-container, expires …`). */
+export function tokenNameFromDoctorOutput(text: string): string | undefined {
+  const line = doctorLine(text, "auth");
+  const m = line ? /\bas (\S+?),?(?:\s|$)/.exec(line.detail) : null;
+  return m?.[1];
+}
+
+export interface LoginStep {
+  cmd: string;
+  why: string;
+  /** The login the step makes; absent on the shell and exit lines. */
+  login?: keyof LoginStates;
+  /** true: this login is in the volume; false: missing; undefined: not a login (the shell and exit lines), or unknown. */
+  kept?: boolean;
+}
+
+/**
+ * The login sequence with what the volume already holds marked `kept`, from `relay doctor` output inside; without it
+ * (the container is not running yet) every step is an instruction. `allKept` means one summary line can replace the list.
+ */
+export function containerLoginSteps(doctorText?: string): { steps: LoginStep[]; allKept: boolean } {
+  const states = doctorText === undefined ? undefined : loginStatesFromDoctorOutput(doctorText);
+  const steps: LoginStep[] = CONTAINER_LOGIN_STEPS.map(({ cmd, why, login }) => ({ cmd, why, ...(login ? { login } : {}), ...(login && states ? { kept: states[login] } : {}) }));
+  return { steps, allKept: !!states && steps.every((s) => s.kept !== false) };
+}
+
+/**
+ * What `--install` chose for the container and `update` keeps: the `relay work` arguments baked into its command, the
+ * passthrough environment, the worker's name and host, the VM's size. From the row of `container list --all --format
+ * json`; undefined when the container is not there.
+ */
+export interface ContainerSettings {
+  /** The arguments after `relay work` (`--lanes claude --jobs 2`). */
+  args: string[];
+  /** Only the CONTAINER_PASSTHROUGH_ENV keys; the image's own variables and relay's fixed ones are not settings. */
+  env: Record<string, string>;
+  workerName?: string;
+  host?: string;
+  /** As `--memory` spells it (`4G`, `2048M`). */
+  memory?: string;
+  cpus?: number;
+}
+
+/** Bytes as the size `--memory` takes: whole gigabytes, else megabytes, else kilobytes, else bytes. */
+export function fmtMemory(bytes: number): string {
+  for (const [unit, size] of [
+    ["G", 2 ** 30],
+    ["M", 2 ** 20],
+    ["K", 2 ** 10],
+  ] as const) {
+    if (bytes >= size && bytes % size === 0) return `${bytes / size}${unit}`;
+  }
+  return String(bytes);
+}
+
+export function containerSettingsFrom(listJson: string, name: string = CONTAINER_NAME): ContainerSettings | undefined {
+  const row = listRow(listJson, name);
+  if (!row) return undefined;
+  const argv = row.configuration?.initProcess?.arguments ?? [];
+  const out: ContainerSettings = { args: argv[0] === "relay" && argv[1] === "work" ? argv.slice(2) : [], env: {} };
+  for (const kv of row.configuration?.initProcess?.environment ?? []) {
+    const eq = kv.indexOf("=");
+    if (eq < 0) continue;
+    const k = kv.slice(0, eq);
+    const v = kv.slice(eq + 1);
+    if ((CONTAINER_PASSTHROUGH_ENV as readonly string[]).includes(k)) out.env[k] = v;
+    else if (k === CONTAINER_WORKER_NAME_ENV && v) out.workerName = v;
+    else if (k === CONTAINER_WORKER_HOST_ENV && v) out.host = v;
+  }
+  const res = row.configuration?.resources;
+  if (res?.memoryInBytes && res.memoryInBytes > 0) out.memory = fmtMemory(res.memoryInBytes);
+  if (res?.cpus && res.cpus > 0) out.cpus = res.cpus;
+  return out;
+}
+
+/** `relay work container status`: does the container run the image this relay would build? */
+export function imageStatus(running: string | undefined, current: string): { current: boolean; line: string } {
+  if (!running) return { current: false, line: `unknown (no image reference from container list); rebuild with relay work container update` };
+  if (running === current) return { current: true, line: `${running} (this relay's build)` };
+  return { current: false, line: `${running}; this relay would build ${current}: rebuild with relay work container update` };
+}
+
 /** One container row as `container list --all --format json` prints it; only what the CLI reads. */
 export interface ContainerListRow {
-  configuration?: { id?: string; image?: { reference?: string } };
+  configuration?: {
+    id?: string;
+    image?: { reference?: string };
+    /** The command the container was created with (`relay work …`, after the image's entry point) and its `--env` list. */
+    initProcess?: { arguments?: string[]; environment?: string[] };
+    resources?: { cpus?: number; memoryInBytes?: number };
+  };
   status?: { state?: string; startedDate?: string };
+}
+
+function listRow(listJson: string, name: string): ContainerListRow | undefined {
+  try {
+    const parsed = JSON.parse(listJson) as unknown;
+    if (!Array.isArray(parsed)) return undefined;
+    return (parsed as ContainerListRow[]).find((r) => r.configuration?.id === name);
+  } catch {
+    return undefined;
+  }
 }
 
 export interface ContainerState {
@@ -176,14 +327,7 @@ export interface ContainerState {
 
 /** The state of `relay-work` from the JSON of `container list --all --format json`. */
 export function containerStateFrom(listJson: string, name: string = CONTAINER_NAME): ContainerState {
-  let rows: ContainerListRow[] = [];
-  try {
-    const parsed = JSON.parse(listJson) as unknown;
-    if (Array.isArray(parsed)) rows = parsed as ContainerListRow[];
-  } catch {
-    return { exists: false, running: false };
-  }
-  const row = rows.find((r) => r.configuration?.id === name);
+  const row = listRow(listJson, name);
   if (!row) return { exists: false, running: false };
   const state = row.status?.state ?? "unknown";
   const out: ContainerState = { exists: true, running: state === "running", state };

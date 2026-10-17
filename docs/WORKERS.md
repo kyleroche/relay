@@ -289,11 +289,21 @@ does anything:
    relay work container shell                 # a shell inside, as the relay user (container exec -it relay-work bash)
    claude                                     # then /login: the OAuth paste-code flow (open the URL on the Mac, paste the code back)
    gh auth login && gh auth setup-git         # the account the worker clones, pushes and opens PRs as
-   fx login codex                             # optional: the codex lane
-   fx login grok                              # optional: the grok lane
+   fx login codex                             # optional: the codex lane (the browser's redirect to localhost:1455 reaches the container)
+   fx login --no-browser grok                 # optional: the grok lane; open the printed address on the Mac, paste the callback address back
    exit
    relay work container status                # relay doctor inside, and the lanes the container worker serves
    ```
+
+   The browser-redirect logins work through two published ports: `--publish 127.0.0.1:3000:3000` (fx's own
+   callback) and `127.0.0.1:1455:1455` (Codex's OAuth listener, which `fx login codex` hands off to). A published
+   port delivers to the container's eth0 address, while those login servers bind the container's loopback only, so
+   the redirect would be dropped; `relay-entry` therefore starts one `socat` forwarder per port at container boot
+   (eth0 → `127.0.0.1`, as the relay user, in the background; the list comes in as `RELAY_LOGIN_PORTS`), and a
+   forwarder with no login running just waits. Grok's login picks a random localhost port that no published port
+   can serve: inside, use `fx login --no-browser grok`, open the printed address on the Mac, and when the browser
+   ends on a `127.0.0.1:<port>/callback?...` page that cannot load, paste that full address from the address bar
+   (or the code xAI shows) back into the fx prompt; the login completes.
 
 Inside, `relay work` knows it is the container worker (`RELAY_ISOLATION=container`): it registers as
 `<hostname>-container` on the Mac's hostname, so the workers page and the flow map show it as a separate machine; it
@@ -310,20 +320,39 @@ the allowlist; without them bubblewrap fails with "Can't mount proc".
 Day to day:
 
 ```text
-relay work container status      # relay-work running?, then relay doctor inside, and the lanes it would serve
+relay work container status      # relay-work running?, the image it runs (and whether this relay would build another), relay doctor inside, the lanes it would serve
 relay work container shell       # exec into it as the relay user (logins, a look at a clone kept with --keep)
 relay work container logs -f     # the worker's output (container logs)
 relay work container stop        # stop it and unload the service that would restart it
 relay work container start       # the service when installed, else `container start`
+relay work container update      # after git pull or a package upgrade: new image, the container recreated on the same volume; --yes does it
 relay work container rm --yes    # remove the container; --volume also deletes the volume, that is, every login inside
 relay work --isolation container --uninstall --yes   # service and container gone; the volume stays
 relay doctor                     # on the Mac: a `container` line (CLI, services, relay-work, the lanes inside)
 ```
 
-Rebuilding after a relay upgrade is `relay work --isolation container --install --yes` again: new image, the same
-volume, the same logins. The host and the container worker use the same service label, so one Mac runs one or the
-other, not both. Credentials never leave the machine: the logins exist only in the volume, created on this Mac, and
-`relay work container rm --volume` is how they are destroyed.
+**Updating.** The image is built once, from the checkout or package at that moment, so when relay moves on (`git
+pull`, a package upgrade) the container keeps the old relay until it is rebuilt. `relay work container update` is the
+command for that: it prints the plan and `--yes` does it. It builds `relay-worker:<version>` from this relay first
+(the running container is untouched until the build succeeds), unloads the service, stops and deletes the container
+(never the volume), recreates it with exactly the flags `--install` would use today (new defaults such as published
+ports apply), carrying over what the old container was created with (the baked `relay work` arguments, the
+passthrough environment, the worker name, `--memory` and `--cpus`; the last two can be overridden), starts it, and
+checks the volume: `/home/relay/.harness/credentials.json` there means the site is already joined, so `relay setup
+--site` is skipped and the plan says `site: joined as <name> (kept)`; otherwise the device flow runs as at install
+(`--site`, `--invite`). It then reads `relay doctor` inside and prints the login list with `kept` for the logins the
+volume holds, so only what is missing is an instruction; when everything is there it prints one line. Then the
+service is reloaded. `relay work --isolation container --install --yes` over an existing container converges to the
+same thing (no second device flow, no login list for logins already made); `update` differs in taking its settings
+from the container instead of flags. `relay work container status` shows the image the container runs and says
+`rebuild with relay work container update` when this relay would build a different tag; the tag follows the package
+version, so after a `git pull` that did not bump it, run `update` anyway. While the container is stopped the volume
+cannot be probed, so the plan prints the setup step as conditional and the full login list; the decision is made
+after the start.
+
+The host and the container worker use the same service label, so one Mac runs one or the other, not both.
+Credentials never leave the machine: the logins exist only in the volume, created on this Mac, and `relay work
+container rm --volume` is how they are destroyed.
 
 ## Run it as a service
 
