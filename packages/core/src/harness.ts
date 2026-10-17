@@ -49,6 +49,18 @@ export const defaultActor = (): string => `human:${process.env.RELAY_ACTOR ?? pr
 export async function refreshSiteTokenIfStale(cfg: HarnessConfig, now: number = Date.now()): Promise<HarnessConfig> {
   if (!cfg.site || !cfg.siteToken || !cfg.siteRefreshToken || !tokenIsStale(cfg.siteTokenExpiresAt, now)) return cfg;
   if (cfg.siteTokenSource === "env") return cfg;
+  return refreshSiteToken(cfg, now);
+}
+
+/** True when the credential can be renewed from here: a refresh token from the device flow or an invite, not RELAY_TOKEN. */
+export const canRefreshSiteToken = (cfg: HarnessConfig): boolean => !!cfg.site && !!cfg.siteRefreshToken && cfg.siteTokenSource !== "env";
+
+/**
+ * Trade the refresh token for a new pair now, whatever the expiry says (the site answered 401 to a token that
+ * looked valid: revoked, or rotated by another process). Stores the new credential and returns the config with it.
+ */
+export async function refreshSiteToken(cfg: HarnessConfig, now: number = Date.now()): Promise<HarnessConfig> {
+  if (!cfg.site || !cfg.siteRefreshToken) throw new SiteModeError("refreshing the site token", `no refresh token is stored; run \`relay setup --site ${cfg.site ?? "<url>"}\` to approve this machine again`);
   try {
     const r = await refreshAccessToken({ site: cfg.site, refreshToken: cfg.siteRefreshToken });
     const c = credentialsFromToken(r, now);
