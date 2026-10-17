@@ -6,13 +6,14 @@ import { CopyButton } from "@/components/copy-button";
 import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
 import { RelayMark } from "@/components/shell/relay-mark";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ACCESS_ALTERNATIVES, ACCESS_INTRO, ACCESS_STEPS, ACCOUNTS, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, LICENSE, LINK_REPO_INTRO, LINK_REPO_PROMPT, LINK_REPO_STEPS, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
+import { ACCOUNTS, CONTRIBUTE, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
 import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
 
 /**
- * The public landing: what relay is, the five rules, how a task flows, install, accounts, the agent surface, who
+ * The public landing: what relay is, the five rules, how a task flows, install, accounts, a pointer for agents, who
  * makes it. Served at / to anonymous visitors and at /info for everyone (canonical /). `lib/content/info.ts` is the
- * single source for this page and its Markdown mirror.
+ * single source for this page and its Markdown mirror; the step-by-step agent instructions live in the mirror and in
+ * /docs/api, not on this page.
  */
 
 export const LANDING_METADATA: Metadata = {
@@ -41,7 +42,6 @@ export function Landing() {
           <p className="mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">
             relay is a developer tool for macOS and Linux that turns the Claude Code, Codex and Grok subscriptions you already pay for into one system. It costs nothing and runs on your own machines.
           </p>
-          <AgenticScore />
           <div className="mt-6 flex flex-wrap gap-2">
             <a href="#install" className="inline-flex h-9 items-center rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground hover:bg-primary/90">
               Install
@@ -149,58 +149,27 @@ export function Landing() {
         <section aria-labelledby="agents" className="mt-14">
           <h2 id="agents" className="text-xl font-semibold tracking-tight">For agents</h2>
           <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
-            This site is built to be read by agents as well as people. Every page is server-rendered, this page and the docs are served as Markdown on request (<code className="rounded bg-muted px-1 font-mono text-xs">Accept: text/markdown</code>), and the API and MCP server are described in machine-readable form. The MCP server answers <code className="rounded bg-muted px-1 font-mono text-xs">initialize</code> and <code className="rounded bg-muted px-1 font-mono text-xs">tools/list</code> without a token.
+            This site is built to be read by agents as well as people: every page is server-rendered and served as Markdown on request, the API and MCP server are described in machine-readable form, and an agent gets access by asking for it, with one approval from a person.
           </p>
-          <div className="mt-5 rounded-lg border p-4">
-            <h3 className="text-sm font-medium">Getting access as an agent</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{ACCESS_INTRO}</p>
-            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
-              {ACCESS_STEPS.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ol>
-            <p className="mt-2 text-xs text-muted-foreground">{ACCESS_ALTERNATIVES}</p>
-          </div>
-          <div className="mt-4 rounded-lg border p-4">
-            <h3 className="text-sm font-medium">Link a repository</h3>
-            <p className="mt-1 text-sm text-muted-foreground">{LINK_REPO_INTRO}</p>
-            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
-              {LINK_REPO_STEPS.map((s) => (
-                <li key={s}>{s}</li>
-              ))}
-            </ol>
-            <p className="mt-3 text-xs text-muted-foreground">Or paste this into the agent:</p>
-            <div className="relative mt-1">
-              <pre className="whitespace-pre-wrap break-words rounded-md border bg-card p-3 pr-12 text-xs leading-5">
-                <code className="language-text">{LINK_REPO_PROMPT}</code>
-              </pre>
-              <CopyButton text={LINK_REPO_PROMPT} className="absolute right-2 top-2" />
-            </div>
-          </div>
-          <ul className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-            {[
-              ["/docs/api#access", "How to get access (device flow, invite, consent)"],
-              ["/.well-known/oauth-authorization-server", "OAuth 2.1 authorization server metadata"],
-              ["/docs/api", "REST API and MCP guide"],
-              ["/openapi.json", "OpenAPI 3.1 description"],
-              ["/mcp", "MCP server, Streamable HTTP"],
-              ["/llms.txt", "llms.txt"],
-              ["/.well-known/agent-skills/index.json", "Agent skill: install relay"],
-              ["/.well-known/ai-catalog.json", "AI catalog"],
-            ].map(([href, label]) => (
-              <li key={href}>
-                <a href={href} className="flex items-center justify-between gap-2 rounded-md border px-3 py-2 hover:border-primary/50">
-                  <span>{label}</span>
-                  <span className="truncate font-mono text-[11px] text-muted-foreground">{href}</span>
-                </a>
-              </li>
-            ))}
+          <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm">
+            <li>
+              <Link href="/docs/api" className="text-primary underline underline-offset-4">
+                API and MCP guide
+              </Link>
+            </li>
+            <li>
+              <a href="/llms.txt" className="text-primary underline underline-offset-4">
+                llms.txt
+              </a>
+            </li>
           </ul>
         </section>
 
         <section aria-labelledby="maker" className="mt-14">
           <h2 id="maker" className="text-xl font-semibold tracking-tight">Who makes it</h2>
-          <p className="mt-3 text-[15px] leading-7 text-muted-foreground">{MAKER}</p>
+          <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
+            {MAKER} {CONTRIBUTE}
+          </p>
           <ul className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-sm">
             <li>
               <a href={AUTHOR.url} className="text-primary underline underline-offset-4" rel="noopener noreferrer">
@@ -208,32 +177,21 @@ export function Landing() {
               </a>
             </li>
             <li>
+              <a href={REPO_URL} className="text-primary underline underline-offset-4" rel="noopener noreferrer">
+                Source
+              </a>
+            </li>
+            <li>
               <a href={ISSUES_URL} className="text-primary underline underline-offset-4" rel="noopener noreferrer">
                 Issues and support
               </a>
             </li>
-            <li>
-              <Link href="/about" className="text-primary underline underline-offset-4">About</Link>
-            </li>
-            <li>
-              <Link href="/contact" className="text-primary underline underline-offset-4">Contact</Link>
-            </li>
-            <li>
-              <Link href="/privacy" className="text-primary underline underline-offset-4">Privacy</Link>
-            </li>
           </ul>
         </section>
 
-        <section aria-labelledby="license" className="mt-14">
-          <h2 id="license" className="text-xl font-semibold tracking-tight">License</h2>
-          <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
-            {LICENSE}{" "}
-            <a href={REPO_URL} className="text-primary underline underline-offset-4" rel="noopener noreferrer">
-              Source on GitHub
-            </a>
-            .
-          </p>
-        </section>
+        <div className="mt-14 border-t">
+          <AgenticScore />
+        </div>
       </article>
     </>
   );

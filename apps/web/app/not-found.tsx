@@ -39,9 +39,14 @@ export default function NotFound() {
         ))}
       </ul>
       <p className="mt-6 text-sm text-muted-foreground">
-        The feed, projects, usage, workers and assets are for the people who run this relay and need a signed-in session. Agents call{" "}
-        <code className="rounded bg-muted px-1 font-mono text-xs">/api/v1</code> and <code className="rounded bg-muted px-1 font-mono text-xs">/mcp</code> with a bearer token
-        instead. Think a page is missing? <a href={`${REPO_URL}/issues`} className="text-primary underline underline-offset-4" rel="noopener noreferrer">Open an issue</a>.
+        <Link href="/sign-in" className="text-primary underline underline-offset-4">
+          Sign in
+        </Link>{" "}
+        to see this relay&apos;s feed and decide on its tasks. Think a page is missing?{" "}
+        <a href={`${REPO_URL}/issues`} className="text-primary underline underline-offset-4" rel="noopener noreferrer">
+          Open an issue
+        </a>
+        .
       </p>
       <div className="mt-8 flex flex-wrap gap-2">
         <Button asChild>

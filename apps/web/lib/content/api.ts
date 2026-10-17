@@ -1,5 +1,6 @@
 import { SITE_URL } from "@/lib/data";
 import { RATE_LIMIT } from "@/lib/api";
+import { LINK_REPO_INTRO, LINK_REPO_PROMPT, LINK_REPO_STEPS } from "@/lib/content/info";
 
 /** The API and MCP guide at /docs/api, generated so it cannot drift from the handlers. */
 export function apiMarkdown(): string {
@@ -260,5 +261,17 @@ pnpm relay usage --days 7
 \`\`\`
 
 A machine without the database can use this site instead: \`pnpm relay setup --site ${SITE_URL}\` prints a code, you approve it at [/activate](/activate) (or with \`--invite <code>\` from \`relay invite create\`, no approval), and the CLI stores a token that renews itself. From then on the memory, feed, token, invite, task and webhook commands and the session hooks call \`/api/v1\` and \`/mcp\` here; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)). \`relay doctor\` shows the token's name, source and expiry.
+
+## Link a repository
+
+${LINK_REPO_INTRO}
+
+${LINK_REPO_STEPS.map((s, i) => `${i + 1}. ${s}`).join("\n")}
+
+Prompt for the agent:
+
+\`\`\`text
+${LINK_REPO_PROMPT}
+\`\`\`
 `;
 }

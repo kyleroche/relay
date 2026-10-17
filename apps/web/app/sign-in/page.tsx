@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { Alert } from "@/components/alert";
 import { GitHubMark } from "@/components/shell/github-mark";
 import { Button } from "@/components/ui/button";
 import { safeNextPath } from "@/lib/access";
 import { oauthConfig } from "@/lib/github-oauth";
 import { getSession } from "@/lib/session";
-import { REPO_URL } from "@/lib/site";
 import { parseAllowedUsers } from "@/lib/session-token";
 
 export const metadata: Metadata = {
@@ -51,20 +51,12 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
     <section className="mx-auto flex max-w-sm flex-col gap-6 py-20 sm:py-28">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
-        <p className="mt-2 text-sm text-muted-foreground">The feed, projects, usage, workers and assets are for the people who run this relay.</p>
+        <p className="mt-2 text-sm text-muted-foreground">Sign in to see this relay&apos;s feed and decide on its tasks.</p>
       </div>
 
-      {waiting && (
-        <p role="status" className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
-          {waiting === "device" ? "A CLI or bot is waiting for you to approve its access code. Sign in and you will see what it asks for." : "An application is asking for access to relay. Sign in to see what it asks for and decide."}
-        </p>
-      )}
+      {waiting && <Alert tone="primary">{waiting === "device" ? "A CLI or bot is waiting for you to approve its access code. Sign in and you will see what it asks for." : "An application is asking for access to relay. Sign in to see what it asks for and decide."}</Alert>}
 
-      {error && (
-        <p role="alert" className="rounded-md border border-bad/40 bg-bad/5 p-3 text-sm">
-          {error}
-        </p>
-      )}
+      {error && <Alert tone="bad">{error}</Alert>}
 
       <Button asChild size="lg" className="w-full">
         <a href={`/auth/github/start?next=${encodeURIComponent(next)}`}>
@@ -74,22 +66,22 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       </Button>
 
       <div className="flex flex-col gap-2 text-xs text-muted-foreground">
-        <p>
-          Only the GitHub logins listed in <code className="rounded bg-muted px-1 font-mono">RELAY_ALLOWED_USERS</code> can sign in; relay asks GitHub for{" "}
-          <code className="rounded bg-muted px-1 font-mono">read:user</code> and keeps nothing but a signed session cookie.
-        </p>
         {setup && (
-          <p className="rounded-md border border-warn/40 bg-warn/5 p-2 text-foreground">
+          <Alert tone="warn" className="text-xs text-foreground">
             <span className="font-medium">Setup: </span>
             {setup} See{" "}
-            <a href={`${REPO_URL}/blob/main/docs/HOSTING.md`} className="underline underline-offset-4" rel="noopener">
-              the hosting guide
-            </a>
+            <Link href="/docs/hosting" className="underline underline-offset-4">
+              Hosting
+            </Link>
             .
-          </p>
+          </Alert>
         )}
         <p>
-          Agents, workers and the CLI do not sign in here. They request access themselves (<code className="rounded bg-muted px-1 font-mono">POST /oauth/device</code>, or <code className="rounded bg-muted px-1 font-mono">relay setup --site</code>) and a signed-in person approves the code once. <Link href="/docs/api#access" className="underline underline-offset-4">How access works</Link>.
+          Agents and the CLI do not sign in here; they ask for access and a signed-in person approves once.{" "}
+          <Link href="/docs/api#access" className="underline underline-offset-4">
+            How access works
+          </Link>
+          .
         </p>
       </div>
     </section>

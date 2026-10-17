@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { DOCS, docMarkdown, renderMarkdown } from "@/lib/docs";
+import { DOCS } from "@/lib/docs";
 import { SITE_URL } from "@/lib/data";
 
 export const metadata: Metadata = {
@@ -9,13 +9,7 @@ export const metadata: Metadata = {
   alternates: { canonical: "/docs", types: { "text/markdown": `${SITE_URL}/docs` } },
 };
 
-/** Embed the policy under this page's own heading: drop its H1 and demote the rest one level. */
-function embedded(md: string): string {
-  return md.replace(/^#\s+.+\n/, "").replace(/^(#{2,5})\s/gm, (_m, h: string) => `${h}# `);
-}
-
 export default function DocsIndex() {
-  const versioning = docMarkdown("versioning");
   return (
     <article className="mx-auto max-w-3xl py-10 sm:py-14">
       <h1 className="text-3xl font-semibold tracking-tight">Docs</h1>
@@ -34,17 +28,6 @@ export default function DocsIndex() {
           </li>
         ))}
       </ul>
-
-      <section id="versioning" aria-labelledby="versioning-h" className="mt-16 scroll-mt-24">
-        <h2 id="versioning-h" className="text-2xl font-semibold tracking-tight">Versioning and deprecation</h2>
-        {versioning ? (
-          <div className="prose-relay mt-2" dangerouslySetInnerHTML={{ __html: renderMarkdown(embedded(versioning)) }} />
-        ) : (
-          <p className="mt-2 text-muted-foreground">
-            See <Link href="/docs/versioning" className="text-primary underline underline-offset-4">the policy</Link>.
-          </p>
-        )}
-      </section>
     </article>
   );
 }
