@@ -16,12 +16,13 @@
 export const SANDBOX_DEFAULT_DOMAINS = ["registry.npmjs.org", "registry.yarnpkg.com", "github.com", "objects.githubusercontent.com", "codeload.github.com", "pypi.org", "files.pythonhosted.org", "crates.io", "static.crates.io", "proxy.golang.org"] as const;
 
 /**
- * Paths no sandboxed process and no Read/Edit tool call may touch: relay's own home, every vendor CLI's login and
+ * Paths no sandboxed process and no Read/Edit tool call may touch: relay's own secrets and database, every vendor CLI's login and
  * config, SSH and cloud credentials, gh, netrc, npmrc (registry tokens) and the global git config (credential
  * helpers, URL rewrites). `~` is home-relative in Claude Code settings.
  */
-export const SANDBOX_DENIED_DIRS = ["~/.harness", "~/.claude", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh"] as const;
-export const SANDBOX_DENIED_FILES = ["~/.claude.json", "~/.netrc", "~/.npmrc", "~/.gitconfig"] as const;
+export const SANDBOX_DENIED_DIRS = ["~/.harness/relay.pglite", "~/.claude", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh"] as const;
+/** relay's own home is NOT denied wholesale: the worker clones into `~/.harness/work/<repo>`, which the lane must read. Its secrets are named one by one. */
+export const SANDBOX_DENIED_FILES = ["~/.harness/credentials.json", "~/.harness/config.json", "~/.harness/work.log", "~/.claude.json", "~/.netrc", "~/.npmrc", "~/.gitconfig"] as const;
 export const SANDBOX_DENIED_PATHS = [...SANDBOX_DENIED_DIRS, ...SANDBOX_DENIED_FILES] as const;
 
 /**

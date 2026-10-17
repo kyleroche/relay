@@ -42,7 +42,7 @@ describe("claudeSandboxSettings", () => {
 
   it("denies every credential path three ways: sandbox denyRead, credentials.files, and Read/Edit permission rules", () => {
     const s = claudeSandboxSettings();
-    for (const p of ["~/.harness", "~/.claude", "~/.claude.json", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.gitconfig"]) expect(SANDBOX_DENIED_PATHS).toContain(p);
+    for (const p of ["~/.harness/credentials.json", "~/.harness/config.json", "~/.harness/relay.pglite", "~/.claude", "~/.claude.json", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.gitconfig"]) expect(SANDBOX_DENIED_PATHS).toContain(p);
     expect(s.sandbox.filesystem.denyRead).toEqual([...SANDBOX_DENIED_PATHS]);
     expect(s.sandbox.credentials.files).toEqual(SANDBOX_DENIED_PATHS.map((path) => ({ path, mode: "deny" })));
     for (const d of SANDBOX_DENIED_DIRS) {
@@ -55,6 +55,9 @@ describe("claudeSandboxSettings", () => {
     }
     expect(s.permissions.deny).toHaveLength(SANDBOX_DENIED_PATHS.length * 2);
     expect(s.permissions.blockReadsOutsideWorkingDirectories).toBe(true);
+    // the clone lives under ~/.harness/work; denying the whole directory once hid the checkout from the lane
+    expect(SANDBOX_DENIED_PATHS).not.toContain("~/.harness");
+    expect(s.permissions.deny.some((r) => r.startsWith("Read(~/.harness/**"))).toBe(false);
   });
 
   it("lets pnpm and npm write their stores and caches, and nothing else outside the clone", () => {
