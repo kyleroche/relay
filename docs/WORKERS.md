@@ -104,7 +104,8 @@ database.
 - Before each claim the server releases every lease that ran out (`outcome = expired`). The task is `queued` again;
   if a `run.started` was recorded under that lease with no finish, the derivation says `queued`, not `running`.
 - Task states (docs/INTEGRATIONS.md): `queued` → `claimed` (a live lease, no run yet) → `running` → `review` or
-  `failed` → `done`. `relay task ls --state claimed` shows what workers are holding.
+  `failed` → `done`; a reviewer's "request changes" sends `review` back to `queued`. `relay task ls --state claimed`
+  shows what workers are holding.
 
 ## What a job does on the machine
 
@@ -124,6 +125,25 @@ database.
 The usage block in the PR comment is marked `"source": "relay-work"`; the GitHub webhook shows it to humans but does
 not count it again, because the release already wrote the `step.usage` row. One worker runs one job at a time by
 default; `--jobs 2` allows two, and the lane adapters still serialize per vendor login.
+
+### What happens after the PR
+
+The worker is done when `release` is reported; the rest is the review step (`packages/core/src/tasks/review.ts`):
+
+1. Vercel (or the repository's deployment) builds the branch; `preview.ready` arrives with the URL and the task's
+   `preview_url` points at it (`relay task get <id>`, the task page, `relay_task_get`). A later push marks it
+   `building` until the next deployment.
+2. A person on the task page, or a bot the person answers in chat, approves or requests changes. Approve: relay
+   squash-merges the PR as `<title> (#<pr>)`, deletes `relay/<lane>-<issue>` and writes `task.approved`; the task is
+   `done`. Request changes: the note is posted on the PR (`relay: changes requested by <actor>:`) and written as
+   `task.changes_requested`; the task is `queued` and the doorbell rings.
+3. The next worker to claim it runs the same job: fresh clone, the same branch from the tip of the base, and a brief
+   whose first section is "Review feedback" with the note. `--force-with-lease` replaces the branch, `gh pr view`
+   finds the open PR and it is reused, and a new usage comment lands. The PR's `preview_url` refreshes when Vercel
+   rebuilds.
+
+A bot may decide only when its token holds `tasks:write`, and never on a PR its own lane produced; a merge GitHub
+refuses (conflicts, required checks) is `task.merge_failed` with GitHub's reason, and the task stays in review.
 
 ### What a job may run
 

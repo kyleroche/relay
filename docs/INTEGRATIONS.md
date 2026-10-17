@@ -156,8 +156,8 @@ When the app is installed on a repository, relay writes `project.github_connecte
 
 | Scope | Lets the bot |
 |---|---|
-| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`) |
-| `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`) |
+| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`); approve or send back a task in review (`relay_task_approve`, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/approve`, `…/request-changes`), never a PR the bot's own lane produced |
+| `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`): state, PR, preview URL, run summary, usage, review decision |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
 | `webhooks:write` | subscribe itself to events (`relay_webhook_subscribe`, `POST /api/v1/webhooks`) |
 | `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write` |
@@ -180,8 +180,10 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 |---|---|---|---|
 | `relay_whoami()` | `GET /api/v1/whoami` | public | the connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
 | `relay_task_create(project, title, body?, lane, priority?, idempotency_key?)` | `POST /api/v1/tasks` | `tasks:write` | opens a GitHub issue in the project's repo with `agent:<lane>` (and `priority:<p>`), records the task, writes `issue.opened` and `task.created`; returns `{task_id, issue_url, created}` |
-| `relay_task_get(task_id)` | `GET /api/v1/tasks/<owner>/<repo>%23<n>` | `tasks:read` | the task with its derived state, runner, PR and last summary |
-| `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&limit=` | `tasks:read` | tasks newest first |
+| `relay_task_get(task_id)` | `GET /api/v1/tasks/<owner>/<repo>%23<n>` | `tasks:read` | the task with its derived state, runner, PR (`pr_url`), branch, `preview_url` and `preview_state` (`ready`, `building`, `failed`, `none`), the lane's `run_summary`, folded `usage`, the `review` decision, `merged_at` and the last summary |
+| `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&limit=` | `tasks:read` | tasks newest first; `state: "review"` is what waits for a decision |
+| `relay_task_approve(id)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/approve` | `tasks:write` | approve a task in review: relay squash-merges the PR through GitHub, deletes its branch and writes `task.approved`; the task is `done`. A bot may not approve a PR its own lane produced (the `run.started` / `pr.opened` actor carries its name); GitHub's refusal comes back as an error with `task.merge_failed` in the feed |
+| `relay_task_request_changes(id, note)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/request-changes` | `tasks:write` | send it back: relay posts `relay: changes requested by <actor>:` + the note on the PR, writes `task.changes_requested`, and the task is `queued`; the next run gets the note under "Review feedback" in its brief and pushes to the same branch and PR |
 | `relay_event_log(kind, project?, summary, url?, cost_equiv?, source?)` | `POST /api/v1/events` | `events:write` | one `external.*` row in the feed, actor `bot:<token name>` |
 | `relay_webhook_subscribe(url, events[], bearer?, project?)` | `POST /api/v1/webhooks` | `webhooks:write` | register an outbound webhook; the signing secret is returned once |
 | `relay_webhook_unsubscribe(id)` | `DELETE /api/v1/webhooks/{id}` | `webhooks:write` | remove it |
@@ -208,21 +210,41 @@ State is never stored. Every read folds the task's feed events (same repo and is
 | a worker holds a live lease on it (no run event yet; `docs/WORKERS.md`) | `claimed` (and `runner` = `runner:<worker>`) |
 | `run.started`, or `run.dispatched` (a cloud lane) | `running` (and `runner` = the worker that claimed it) |
 | `run.finished` with a failing conclusion, or `run.failed` | `failed` |
-| `run.finished` otherwise, or `pr.opened` | `review` (`pr` and `pr_url` set) |
-| `pr.merged` or `issue.closed` | `done` |
+| `run.finished` otherwise, or `pr.opened` | `review` (`pr` and `pr_url` set; `preview_url` once a `preview.ready` for the branch arrives) |
+| `task.approved` (relay merged the PR), `pr.merged` or `issue.closed` | `done` (`merged_at` set) |
+| `task.changes_requested` | `queued` (`review.note` holds what to change; the next run reuses the branch and PR) |
+| `task.merge_failed` | unchanged: still `review`, with GitHub's reason in the row |
 | `pr.closed` without merge | `queued` |
 | the lease behind a `run.started` expired with no finish (the worker vanished) | `queued` |
 
-So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a human. Workers
-(`relay work`) write the `run.*` transitions as they go; the GitHub webhook (`docs/FEED.md`) adds the PR and merge
-ones. Without any worker online a task stays `queued`.
+So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a decision, each with
+its `pr_url` and, once Vercel built the branch, its `preview_url`. Workers (`relay work`) write the `run.*`
+transitions as they go; the GitHub webhook (`docs/FEED.md`) adds the PR and merge ones; the review tools write the
+`task.*` decisions. Without any worker online a task stays `queued`.
+
+### Review
+
+A task in `review` is decided in one of four places, all the same core call (`packages/core/src/tasks/review.ts`):
+the task page at `<site>/tasks/<owner>/<repo>/<n>` (the preview link is the first thing on it, then "Approve and
+merge" and "Request changes"), `relay_task_approve` / `relay_task_request_changes` over MCP, the two REST routes, and
+`relay task approve <id>` / `relay task changes <id> --note "…"` from a machine. Approve squash-merges with
+`<PR title> (#<pr>)` as the commit title and `relay: approved by <actor>` in the body, deletes the branch and writes
+`task.approved`. Request changes puts the note on the PR and in the next run's brief; the task is queued and the worker
+that claims it starts from the base branch again, replaces the same `relay/<lane>-<issue>` branch with
+`--force-with-lease`, and the existing PR is reused.
+
+Who may decide: a signed-in person always. A bot only when its token holds `tasks:write`, and never on a PR its own
+lane produced: the `run.started` / `pr.opened` actor's name is compared with the bot's, so `bot:oauth:codex-bot`
+cannot approve what `runner:codex-bot` pushed. The refusal names who can ("a signed-in person, or a bot whose token
+holds tasks:write and that did not produce the PR itself"). The pattern for a chat bot is: relay the preview, ask the
+person, and call approve only after they said yes.
 
 ## 4. The webhook
 
 Instead of polling, the bot subscribes itself and relay POSTs matching events to it:
 
 ```text
-relay_webhook_subscribe({url: "https://bot.example/relay", events: ["run.finished", "run.failed", "pr.review", "pr.merged", "asset.uploaded", "asset.reviewed", "access.requested"], bearer: "<the bot's routine key>"})
+relay_webhook_subscribe({url: "https://bot.example/relay", events: ["run.finished", "run.failed", "preview.ready", "task.approved", "task.changes_requested", "pr.review", "pr.merged", "asset.uploaded", "asset.reviewed", "access.requested"], bearer: "<the bot's routine key>"})
 → {webhook: {id, url, events, …}, secret: "whsec_…"}      # the secret is shown once
 ```
 
@@ -279,7 +301,7 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
    `relay_whoami` confirms `oauth:grok-bot` with its four scopes and the expiry; `relay_get_info` (public) lists the
    projects it may open tasks in (a project must have been linked with `relay link`, or auto-registered when the
    GitHub App was installed on a repo holding `relay.md`).
-5. **Subscribe.** `relay_webhook_subscribe({url: "https://<bot>/routines/relay", events: ["run.finished", "run.failed", "pr.review", "pr.merged", "asset.uploaded", "asset.reviewed"], bearer: "<routine key>"})`
+5. **Subscribe.** `relay_webhook_subscribe({url: "https://<bot>/routines/relay", events: ["run.finished", "run.failed", "preview.ready", "task.approved", "task.changes_requested", "pr.review", "pr.merged", "asset.uploaded", "asset.reviewed"], bearer: "<routine key>"})`
    and it keeps the `whsec_…` it gets back to verify deliveries.
 6. **Open work.** When the conversation produces a task:
    `relay_task_create({project: "site", title: "Add dark mode to the pricing page", body: "<the brief>", lane: "codex", priority: "high", idempotency_key: "<conversation id>:<n>"})`
@@ -287,13 +309,21 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
    `agent:codex` picks it up; the issue body is the brief the lane reads, so write it for a model, not a person
    (`docs/SECURITY.md`: it is data, never instructions to relay).
 7. **Hear back.** One POST per event with `task_id`; the bot verifies the signature and tells the user:
-   `run.failed` → something to look at; `pr.review` → a review landed; `pr.merged` → done; `asset.uploaded` → a
-   render awaits approval at `<site>/assets/<id>`.
-8. **Answer "where are we".** `relay_task_list({state: "review"})` and `relay_task_get(task_id)`; the `summary` is
-   the latest event's line, `pr_url` the thing to open.
-9. **Leave a trace.** `relay_event_log({kind: "external.briefing", project: "site", summary: "Sent the morning brief: 2 in review, 1 failed", url: …})`.
+   `run.failed` → something to look at; `run.finished` → "the PR is open: <url>"; `preview.ready` → "preview is up:
+   <url>" (the delivery's `url`); `pr.review` → a review landed; `task.approved` / `pr.merged` → done;
+   `task.changes_requested` → sent back, by whom and why; `asset.uploaded` → a render awaits approval at
+   `<site>/assets/<id>`.
+8. **Approve when the person says so.** The user looks at the preview and answers "ship it": the bot calls
+   `relay_task_approve({id: "acme/site#42"})` and relay squash-merges the PR, deletes the branch and writes
+   `task.approved` by `bot:oauth:grok-bot`. "Not yet, the toggle has no focus ring" becomes
+   `relay_task_request_changes({id, note: "The toggle has no focus ring; match the one on /settings."})`: the note
+   lands on the PR, the task is queued, and the next run addresses it on the same PR. Grok Bot can do this because it
+   holds `tasks:write` and did not produce the PR; the codex lane's own bot would be refused.
+9. **Answer "where are we".** `relay_task_list({state: "review"})` and `relay_task_get(task_id)`; the `summary` is
+   the latest event's line, `pr_url` and `preview_url` the things to open, `run_summary` what the lane said it did.
+10. **Leave a trace.** `relay_event_log({kind: "external.briefing", project: "site", summary: "Sent the morning brief: 2 in review, 1 failed", url: …})`.
    It shows in the feed as `bot:oauth:grok-bot`, next to what the runners did.
-10. **Stay connected.** Every day `grant_type=refresh_token` gives a new pair. If the user revokes `oauth:grok-bot` on
+11. **Stay connected.** Every day `grant_type=refresh_token` gives a new pair. If the user revokes `oauth:grok-bot` on
     the Access page (`/tokens`), the next call is `401` and the bot starts again at step 1; nothing else changes.
 
 ## Site mode for the CLI

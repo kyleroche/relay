@@ -55,8 +55,15 @@ the worker lanes for people who already operate them.
 4. The result is committed as `relay-agent` and pushed; a PR opens with `Closes #N` and the usage line as a comment;
    the worker reports `run.finished` with tokens and cost (`review`). A lane that fails or changes nothing reports
    `run.failed` (`failed`). A worker that vanishes loses its lease and the task is `queued` again.
-5. Vercel or the repo's CI builds the preview. A review lane, on a different model, comments.
-6. The human approves. On merge, a job extracts decisions into memory and regenerates the rules file (`done`).
+5. Vercel or the repo's CI builds the preview; `preview.ready` lands with the URL and the task page shows it first.
+   A review lane, on a different model, comments.
+6. Someone decides, on the task page (`/tasks/<owner>/<repo>/<n>`), from chat through `relay_task_approve` /
+   `relay_task_request_changes`, over REST, or with `relay task approve` / `relay task changes`. Approve: relay
+   squash-merges the PR through GitHub, deletes the branch and writes `task.approved` (`done`; GitHub's `pr.merged`
+   confirms it). Request changes: the note goes on the PR and into `task.changes_requested`; the task is `queued`
+   again, the next run reads the note under "Review feedback" in its brief and pushes to the same branch and PR. A bot
+   may decide only with `tasks:write` and never on a PR its own lane produced. On merge, a job extracts decisions into
+   memory and regenerates the rules file.
 7. Every step above is a row in the feed.
 
 ## What relay deliberately does not do

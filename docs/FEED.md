@@ -22,8 +22,11 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `pr.opened` | GitHub webhook `pull_request` (opened) from a `relay/` branch, or from a cloud lane's `claude/` or `codex/` branch (below) | `agent:<lane>` (lane from branch name) | repo, issue (from branch or `Closes #n`), pr, lane, url, payload.cloud for cloud lanes | PR title |
 | `pr.reviewed` | GitHub webhook `issue_comment` carrying a review from a lane, or `pull_request_review` | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged) | `human:<login>` | repo, issue, pr, url | PR title |
-| `preview.ready` | Vercel webhook `deployment.succeeded` for a `relay/` branch | `bot:vercel` | repo, pr, url (preview URL) | project and branch |
-| `preview.failed` | Vercel webhook `deployment.error` | `bot:vercel` | repo, pr, url | project and branch |
+| `preview.ready` | Vercel webhook `deployment.succeeded` / `deployment.ready`, or GitHub webhook `deployment_status` (success) | `bot:vercel` (or `bot:<deployer>`) | repo, issue (when the branch is `relay/<lane>-<issue>`), pr (Vercel's `githubPrId`), url (the preview URL), payload.ref (the branch), commit / sha. A task's view matches these rows by issue, PR or ref (`preview_url`, `preview_state`) | project and branch |
+| `preview.failed` | Vercel webhook `deployment.error` / `deployment.failed`, or `deployment_status` failure | `bot:vercel` | repo, issue, pr, url (the build), payload.ref | project and branch |
+| `task.approved` | "Approve and merge" on the task page, `relay_task_approve`, `POST /api/v1/tasks/{id}/approve`, `relay task approve` (`approveTask` in `packages/core/src/tasks/review.ts`) after GitHub merged | `human:<login>` or `bot:<token name>` | project, repo, issue, pr, lane, url (the PR), payload.merged (true), merge_sha, method (`squash`), branch, branch_deleted, pr_title | `Approved and merged #<pr> (<sha>)` |
+| `task.changes_requested` | "Request changes" on the task page, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/request-changes`, `relay task changes`, after the note was posted on the PR | `human:<login>` or `bot:<token name>` | project, repo, issue, pr, lane, url (the PR comment), payload.note, comment_id, comment_url, branch. The task is `queued`; the next run's brief carries the note | `Changes requested on #<pr>: <first line>` |
+| `task.merge_failed` | an approval whose merge GitHub refused (conflicts, required checks, permissions) | who approved | project, repo, issue, pr, lane, url (the PR), payload.error (GitHub's message), status, method, head_sha. The task stays in `review` | `Merge of #<pr> refused: <message>` |
 | `decision.captured` | session-end hook (`relay capture`), `relay decide`, the `relay_decide` tool, or the post-merge job | `agent:<cli>` or `human:<login>` | project, payload.decision_id, payload.source, payload.superseded | the decision text |
 | `preference.set` | `relay prefer` or the `relay_prefer` tool | `human:<login>` or `agent:<cli>` | project (project scope only), payload.key/value/scope/scope_id | `key = value (scope: id)` |
 | `project.linked` | `relay link` | `human:<login>` | project, repo, payload.path | repo and path |
@@ -131,11 +134,14 @@ The parser lives in `apps/web/lib/webhooks/usage.ts`; the handler for every GitH
 Any row written through the web app (the GitHub and Vercel ingest, the API event writers, the MCP tools) or the stdio
 MCP server is offered to the registered webhooks (`webhooks` table, migration 005). A hook names a URL, the event kinds
 it wants (exact kinds, a prefix ending in `.`, or `*`), optionally one project, a signing secret and an optional bearer.
-Register one with `relay webhook add --url <url> --events run.finished,run.failed,pr.review,pr.merged,asset.uploaded,asset.reviewed [--project <slug>] [--bearer <key>] [--secret <s>]`
+Register one with `relay webhook add --url <url> --events run.finished,run.failed,preview.ready,task.approved,task.changes_requested,pr.merged,asset.uploaded,asset.reviewed [--project <slug>] [--bearer <key>] [--secret <s>]`
 (the secret is generated and shown once when omitted), list with `relay webhook ls`, remove with `relay webhook rm
 <id>`, and send a signed `test.ping` with `relay webhook test <id>`; the same four operations live under
 `/api/v1/webhooks` (scope `webhooks:write`). Kinds supported out of the box: `run.finished`, `run.failed`, `pr.review`,
-`pr.merged`, `asset.uploaded`, `asset.reviewed`; any kind in the table above works too.
+`pr.merged`, `preview.ready`, `preview.failed`, `task.approved`, `task.changes_requested`, `task.merge_failed`,
+`asset.uploaded`, `asset.reviewed`; any kind in the table above works too. A chat bot that wants to say "preview is
+up: <url>" subscribes to `preview.ready` (the delivery's `url` is the preview and `task_id` the task) and to
+`task.approved` / `task.changes_requested` to report decisions, whoever made them.
 
 Each delivery is one `POST` with a JSON body:
 

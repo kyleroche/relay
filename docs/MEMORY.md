@@ -48,14 +48,15 @@ cap:
 
 | Section | Content | Atomicity |
 |---|---|---|
+| `review` | the notes reviewers left with "Request changes" on this issue's PR (`task.changes_requested` rows; only when `issue.number` is given) | whole or omitted |
 | `summary` | the project's ≤2K-token summary | whole or omitted |
 | `preferences` | merged preferences for the project (and lane / model when given), rendered as hard rules | whole or omitted |
 | `decisions` | current decisions matching the issue text and intent (`searchDecisions`, vector when `AI_GATEWAY_API_KEY` is set, else full text), topped up with the most recent and a few global ones | whole items until the budget; omitted when none fits |
 | `guidance` | vendor guidance for `model` matching the query (`vectorSearchGuidance` or `textSearchGuidance`) | whole chunks until the budget; omitted when none fits |
 
-Sections are allocated in the order preferences, decisions, summary, guidance (binding and cheap first, the big
-summary after, guidance last) and rendered in the order summary, preferences, decisions, guidance so every brief
-reads the same way. Nothing is ever cut mid-sentence; a section that does not fit is reported in `omitted`. Tokens
+Sections are allocated in the order review, preferences, decisions, summary, guidance (the reviewer's notes are why a
+re-run exists, then binding and cheap first, the big summary after, guidance last) and rendered in the order review,
+summary, preferences, decisions, guidance so every brief reads the same way. Nothing is ever cut mid-sentence; a section that does not fit is reported in `omitted`. Tokens
 are the ≈4-chars/token estimate from `approxTokens`; the ledger records real counts.
 
 ## How recall reaches a model
