@@ -4,7 +4,8 @@
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState } from "@relay/core";
+import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
+import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
 export type Status = "ok" | "warn" | "fail";
@@ -213,3 +214,23 @@ export function lanesFromChecks(checks: Check[]): { lanes: string[]; reasons: st
 }
 
 export const detectLanes = async (): Promise<{ lanes: string[]; reasons: string[] }> => lanesFromChecks(await probeTools());
+
+/**
+ * The `mcp` line of `relay doctor`: which mode the installed MCP entry (`relay-mcp`, the stdio server the CLIs'
+ * configs point at) runs in. It follows the machine's site/local decision exactly as the CLI does
+ * (packages/mcp/src/stdio.ts), so in site mode one `tools/list` against the site with this machine's token is the
+ * proof the bridge will answer; in local mode the entry serves the database here.
+ */
+export async function mcpCheck(cfg: HarnessConfig, opts: { entry: string; listTools?: typeof listSiteTools; now?: () => number }): Promise<Check> {
+  const name = "mcp";
+  if (!(cfg.site && cfg.siteToken)) return { status: "ok", name, detail: `local mode: ${opts.entry} serves ${cfg.databaseUrl ? "postgres via DATABASE_URL" : `pglite at ${cfg.dbFile}`}` };
+  const now = opts.now ?? Date.now;
+  const t0 = now();
+  const where = `site mode: ${opts.entry} forwards to ${cfg.site} as ${tokenLabel(cfg)}`;
+  try {
+    const { tools } = await (opts.listTools ?? listSiteTools)({ site: cfg.site, token: cfg.siteToken });
+    return { status: "ok", name, detail: `${where}; tools/list answered with ${tools.length} tools, ${now() - t0} ms` };
+  } catch (e) {
+    return { status: "fail", name, detail: `${where}; tools/list failed: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}` };
+  }
+}
