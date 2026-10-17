@@ -135,7 +135,33 @@ The app pages are behind the GitHub sign-in (step 4) in production, since the fe
 spend; the info page, the docs and the agent-readiness files stay public. Enable Vercel Authentication (Deployment
 Protection) for previews, which have no OAuth app of their own.
 
-## 8. Checklist
+## 8. Publishing the CLI to npm
+
+The `relay` command ships as `@kyleroche/relay` (`packages/cli`, built with `tsup` into `dist/`: the CLI, the stdio
+MCP server, the hook scripts and the SQL migrations, plus the workflow templates). `.github/workflows/release.yml`
+publishes it when a `v*` tag is pushed whose version matches `packages/cli/package.json`; it typechecks, tests, runs
+`scripts/check-package.sh` (pack, install into an empty directory, run `relay` and `relay-mcp`), then
+`pnpm publish --provenance --access public`.
+
+Authentication is npm **trusted publishing** (OIDC), so no npm token is stored in GitHub. npm only lets you
+configure a trusted publisher on a package that already exists, so the very first version is published by hand:
+
+1. From a machine with `npm login` done: `pnpm --filter @kyleroche/relay build && cd packages/cli && pnpm publish --access public`.
+2. On npmjs.com → the package → Settings → **Trusted Publisher** → GitHub Actions: organization or user `kyleroche`,
+   repository `relay`, workflow filename `release.yml`, environment left empty. Save.
+3. Optional but recommended, same page: set publishing access to *Require two-factor authentication and disallow
+   tokens*, so only the workflow (and 2FA-protected humans) can publish.
+4. Release: bump `version` in `packages/cli/package.json`, commit, `git tag v<version> && git push --tags`. The job
+   presents its GitHub identity to npm; npm matches it against the trusted publisher and accepts the publish with a
+   provenance attestation shown on the package page.
+
+The published manifest lists the runtime dependencies (`pg`, `@electric-sql/pglite`, the MCP SDK, `commander`, and
+so on; `sharp` optional) and no workspace packages: `@relay/core` and `@relay/mcp` are bundled into `dist/relay.js`.
+Node 24 or newer is required (`engines`). A `relay setup` run from the installed package records
+`<package>/dist/hooks/*.mjs` and `<package>/dist/relay-mcp.js` in the CLIs' configs, so `npm update -g` keeps them
+valid; a checkout records its `packages/cli/hooks` and `packages/mcp/bin` paths instead.
+
+## 9. Checklist
 
 - [ ] Project imported with root directory `apps/web`
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview

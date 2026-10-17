@@ -1,0 +1,58 @@
+# Publish @kyleroche/relay to npm when a v* tag is pushed. The tag must equal the version in packages/cli/package.json.
+# Authentication is npm trusted publishing (OIDC): the job presents its GitHub identity, npm checks it against the
+# trusted publisher configured on the package, and no token is stored anywhere (docs/HOSTING.md, "Publishing the CLI").
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        # pnpm version comes from "packageManager" in package.json
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Tag matches the package version
+        run: |
+          version="$(jq -r .version packages/cli/package.json)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match packages/cli/package.json version $version"; exit 1
+          fi
+          echo "publishing @kyleroche/relay@$version"
+
+      - name: Typecheck
+        run: pnpm -r typecheck
+
+      - name: Test
+        run: pnpm -r test
+
+      - name: Build, pack, install the tarball into an empty directory and run it
+        run: scripts/check-package.sh
+
+      - name: Publish
+        working-directory: packages/cli
+        # pnpm rewrites the workspace:* devDependencies to versions and hands the rest to npm publish; --provenance
+        # attaches the SLSA attestation npm shows on the package page. No NODE_AUTH_TOKEN: the OIDC token is used.
+        run: pnpm publish --provenance --access public --no-git-checks
