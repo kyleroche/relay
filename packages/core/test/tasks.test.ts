@@ -111,6 +111,9 @@ function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: st
     async request() {
       return {};
     },
+    async createComment(repo, issue) {
+      return { id: 1, html_url: `https://github.com/${repo}/issues/${issue}#issuecomment-1` };
+    },
   };
 }
 

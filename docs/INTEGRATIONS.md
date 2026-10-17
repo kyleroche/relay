@@ -5,6 +5,10 @@ a person approves it once, in the browser or from a chat reply; a machine the op
 invite code with no approval at all; GitHub is one app installed on the organization. After that the agent has four
 MCP tools (or their REST twins) and a webhook, and relay tells it when something happens.
 
+Everything here runs against a hosted relay (`docs/HOSTING.md`), reachable as `<site>`, for example
+`https://relay.kyro.house`. The bot never sees a vendor login, a worker, or the database: it talks to the site, the
+site talks to GitHub, and workers (`docs/WORKERS.md`) claim the work from the site.
+
 The site runs its own OAuth 2.1 authorization server (`<site>/.well-known/oauth-authorization-server`, RFC 8414).
 Every access token it issues is a row in the same `tokens` table as an operator-minted one, named
 `oauth:<client name>`, so the scopes below mean the same whichever way a token arrived. Access tokens last 24 hours,
@@ -141,8 +145,9 @@ When the app is installed on a repository, relay writes `project.github_connecte
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
 | `webhooks:write` | subscribe itself to events (`relay_webhook_subscribe`, `POST /api/v1/webhooks`) |
 | `tokens:write` | approve other devices' codes and mint invites (`POST /api/v1/access/<code>/approve`, `/api/v1/invites`) |
-| `feed:read` | optional: read the whole feed and the projects |
+| `feed:read` | optional: read the whole feed, the projects and the workers |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
+| `work:claim` | not for a bot: the scope a machine's `relay work` token carries to register, heartbeat, claim and report (`docs/WORKERS.md`) |
 
 Every write the bot makes is attributed to `bot:<token name>` in the feed (`bot:oauth:grok-bot` for a token the
 authorization server issued). The bot cannot choose another actor: the server derives it from the token, and the only
@@ -180,14 +185,17 @@ State is never stored. Every read folds the task's feed events (same repo and is
 | Event | State after it |
 |---|---|
 | none yet, or `issue.labeled` | `queued` |
-| `run.started` | `running` (and `runner` = the runner that claimed it) |
+| a worker holds a live lease on it (no run event yet; `docs/WORKERS.md`) | `claimed` (and `runner` = `runner:<worker>`) |
+| `run.started`, or `run.dispatched` (a cloud lane) | `running` (and `runner` = the worker that claimed it) |
 | `run.finished` with a failing conclusion, or `run.failed` | `failed` |
 | `run.finished` otherwise, or `pr.opened` | `review` (`pr` and `pr_url` set) |
 | `pr.merged` or `issue.closed` | `done` |
 | `pr.closed` without merge | `queued` |
+| the lease behind a `run.started` expired with no finish (the worker vanished) | `queued` |
 
-So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a human. The
-GitHub webhook (`docs/FEED.md`) is what feeds these transitions; without it a task stays `queued`.
+So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a human. Workers
+(`relay work`) write the `run.*` transitions as they go; the GitHub webhook (`docs/FEED.md`) adds the PR and merge
+ones. Without any worker online a task stays `queued`.
 
 ## 4. The webhook
 

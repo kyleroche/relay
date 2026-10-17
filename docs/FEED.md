@@ -11,9 +11,14 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 |---|---|---|---|---|
 | `issue.opened` | GitHub webhook `issues` (opened) | `human:<login>` or `bot:<login>` | repo, issue, url | issue title |
 | `issue.labeled` | GitHub webhook `issues` (labeled, `agent:*` labels only) | `human:<login>` | repo, issue, lane | `agent:<lane>` |
-| `run.started` | GitHub webhook `workflow_job` (in_progress) on a `relay run` job | `runner:<runner name>` | repo, issue, lane, url (job url) | lane and runner |
-| `run.finished` | GitHub webhook `workflow_job` (completed) | `runner:<runner name>` | repo, issue, lane, duration_ms, payload.conclusion | success, failure, cancelled, or "no changes" |
-| `step.usage` | GitHub webhook `issue_comment` on a PR, parsed from the runner's usage comment (below) | `agent:<lane>` | repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, url | model and tokens |
+| `worker.registered` | `POST /api/v1/workers` the first time a machine runs `relay work` (docs/WORKERS.md) | `runner:<worker name>` | payload.worker (id), host, lanes, labels, version | name and lanes |
+| `worker.online` | `POST /api/v1/workers` when a worker comes back after an offline report | `runner:<worker name>` | payload.worker, host, lanes, labels, version | name and lanes |
+| `worker.offline` | `POST /api/v1/workers/{id}/heartbeat` with `status: offline` (a clean shutdown) | `runner:<worker name>` | payload.worker, host | name |
+| `run.started` | `POST /api/v1/work/{task}/start` from a worker holding the lease (or GitHub webhook `workflow_job` in_progress on an optional Actions runner) | `runner:<worker name>` | repo, issue, lane, url (issue), payload.worker, branch, labels, claim | lane and worker |
+| `run.finished` | `POST /api/v1/work/{task}/release` with `outcome: finished` (or `workflow_job` completed) | `runner:<worker name>` | repo, issue, pr, lane, url (the PR), duration_ms, payload.conclusion, payload.claim | the lane's first summary line |
+| `run.failed` | `POST /api/v1/work/{task}/release` with `outcome: failed` (the CLI failed, timed out, or changed nothing) | `runner:<worker name>` | repo, issue, lane, duration_ms, payload.error, payload.claim | the error |
+| `run.dispatched` | the site, when a task is opened with a cloud lane (`claude-cloud`, `codex-cloud`): after the mention comment is posted | `bot:<token name>` or `human:<login>` (whoever opened the task) | project, repo, issue, lane (the vendor), url (the comment), payload.lane, mention, comment_id, brief_tokens, routine | `Dispatched #<n> to the <lane> lane (@<vendor>)` |
+| `step.usage` | `POST /api/v1/work/{task}/release` carrying `usage` (one row per worker run); also GitHub webhook `issue_comment` on a PR, parsed from a usage comment (below) that does not say `"source": "relay-work"` | `agent:<lane>` | repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, url, payload.tool, worker, claim | model and tokens |
 | `pr.opened` | GitHub webhook `pull_request` (opened) from a `relay/` branch, or from a cloud lane's `claude/` or `codex/` branch (below) | `agent:<lane>` (lane from branch name) | repo, issue (from branch or `Closes #n`), pr, lane, url, payload.cloud for cloud lanes | PR title |
 | `pr.reviewed` | GitHub webhook `issue_comment` carrying a review from a lane, or `pull_request_review` | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged) | `human:<login>` | repo, issue, pr, url | PR title |
@@ -71,8 +76,8 @@ contributed.
 
 ## The usage comment
 
-`scripts/runner/run-lane.sh` posts exactly one comment per run on the PR. It ends with a marker and a fenced JSON
-block:
+A worker (`relay work`, `packages/core/src/work/job.ts`) and the optional `scripts/runner/run-lane.sh` post exactly
+one comment per run on the PR. It ends with a marker and a fenced JSON block:
 
 ````markdown
 ## Summary from the claude lane
@@ -81,9 +86,13 @@ block:
 
 <!-- relay:usage -->
 ```json
-{"relay":"step.usage","lane":"claude","mode":"code","tool":"claude","model":"claude-opus-5","issue":42,"tokens_in":18234,"tokens_out":2210,"cache_read":91200,"cache_write":4100,"duration_ms":412000}
+{"relay":"step.usage","lane":"claude","mode":"code","tool":"claude","model":"claude-opus-5","issue":42,"tokens_in":18234,"tokens_out":2210,"cache_read":91200,"cache_write":4100,"duration_ms":412000,"source":"relay-work","claim":"01J..."}
 ```
 ````
+
+A worker's block carries `"source": "relay-work"`: the worker already reported the same numbers through
+`POST /api/v1/work/{task}/release`, which wrote the `step.usage` row, so the webhook keeps the comment for humans and
+writes no second row. Blocks without that field (an Actions runner's) are ingested as below.
 
 How the GitHub webhook handler parses it, on `issue_comment` (created or edited) where the issue is a pull request:
 

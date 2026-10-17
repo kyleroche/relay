@@ -9,3 +9,4 @@ export * from "./tasks.ts";
 export * from "./webhooks.ts";
 export * from "./oauth.ts";
 export * from "./settings.ts";
+export * from "./workers.ts";

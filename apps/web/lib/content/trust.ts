@@ -21,7 +21,7 @@ function aboutMarkdown(): string {
 
 ## What relay is
 
-relay is an open-source harness for people who pay for more than one coding agent. It makes Claude Code, Codex and Grok Build work as one system: GitHub issues are the task bus, self-hosted runners on machines you already own run each vendor's own CLI under your own login, a Postgres database holds the shared memory and an append-only event feed, and this site is the read model over it. Credentials never leave the machine they were created on; no token is copied, proxied or stored in CI.
+relay is an open-source harness for people who pay for more than one coding agent. It makes Claude Code, Codex and Grok Build work as one system: GitHub issues are the task bus, workers on machines you already own (\`relay work\`) claim tasks from relay and run each vendor's own CLI under your own login, a Postgres database holds the shared memory and an append-only event feed, and this site is the read model over it. Credentials never leave the machine they were created on; no token is copied, proxied or stored in CI.
 
 ## Who makes it
 

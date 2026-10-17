@@ -63,7 +63,7 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_asset_request_upload", scope: "assets:write", description: "Reserve an asset id and get a one-time upload URL; PUT the bytes there, then call relay_asset_finalize." },
   { name: "relay_asset_finalize", scope: "assets:write", description: "Turn an uploaded object into an asset row (probe, thumbnail, record) after relay_asset_request_upload." },
   { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a GitHub issue in the project's repo with the agent:<lane> label (and priority:<p>); returns task_id and issue_url. Idempotent on idempotency_key." },
-  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, running, review, done or failed, plus runner, PR and last summary." },
+  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, claimed, running, review, done or failed, plus the worker, PR and last summary." },
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
@@ -164,7 +164,7 @@ export const METHODOLOGY = `relay: the five rules
 4. Official vendor sources only. Model guidance comes from the vendor's documentation and the skills the vendor publishes.
 5. Everything is an event. One append-only table records what every human, bot, and runner did, with tokens and cost. The ledger is a view over it.
 
-A task's life: open an issue and add a lane label (GitHub); a runner with that label claims it (your machine); the vendor CLI runs headless under the machine's own login (your machine); a branch and a PR appear with the usage line as a comment (GitHub); the preview builds and a second model reviews (Vercel, your machine); you merge and memory updates (Postgres). Every step above is a row in the feed.`;
+A task's life: open an issue with a lane label (GitHub, or relay_task_create); a worker that serves that lane claims it from relay under a lease (your machine, running \`relay work\`); the vendor CLI runs headless under the machine's own login (your machine); a branch and a PR appear with the usage line as a comment (GitHub); the preview builds and a second model reviews (Vercel, your machine); you merge and memory updates (Postgres). Every step above is a row in the feed.`;
 
 /** Scopes a connection holds given the options. */
 export function grantedScopes(opts: Pick<RelayServerOptions, "canWrite" | "scopes" | "publicRead">): Set<TokenScope> {

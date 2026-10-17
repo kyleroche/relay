@@ -27,7 +27,11 @@ export interface GitHubClient {
   getIssue(repo: string, issue: number): Promise<GitHubIssue>;
   /** Any REST call under /repos/{owner}/{repo}/… (comments, reopening an issue). Throws GitHubError on non-2xx. */
   request(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
+  /** Comment on an issue or pull request (the cloud-lane dispatch comment). */
+  createComment(repo: string, issue: number, body: string): Promise<{ id: number; html_url: string }>;
 }
+
+const toComment = (j: Record<string, unknown>): { id: number; html_url: string } => ({ id: Number(j.id ?? 0), html_url: String(j.html_url ?? "") });
 
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -77,6 +81,10 @@ export function githubFromToken(token: string, fetchImpl: GitHubFetch = (u, i) =
       return toIssue(await call("GET", `/repos/${repo}/issues/${issue}`));
     },
     request: (method, path, body) => call(method, path, body),
+    async createComment(repo, issue, body) {
+      assertRepo(repo);
+      return toComment(await call("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
+    },
   };
 }
 
@@ -136,6 +144,10 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
       return toIssue(await api("GET", `/repos/${repo}/issues/${issue}`));
     },
     request: (method, path, body) => api(method, path, body),
+    async createComment(repo, issue, body) {
+      assertRepo(repo);
+      return toComment(await api("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
+    },
   };
 }
 

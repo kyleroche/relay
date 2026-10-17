@@ -29,6 +29,8 @@ export interface ClaudeOptions {
   tools?: string[];
   allowedTools?: string[];
   maxBudgetUsd?: number;
+  /** `--max-turns`: a hard stop for agentic code runs (the worker passes 40). Omit for utility calls. */
+  maxTurns?: number;
 }
 
 interface ClaudeJson {
@@ -108,6 +110,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     if (req.jsonSchema) args.push("--json-schema", JSON.stringify(req.jsonSchema));
     if (opts.resume) args.push("--resume", opts.resume);
     if (opts.maxBudgetUsd) args.push("--max-budget-usd", String(opts.maxBudgetUsd));
+    if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
     args.push("--", req.prompt);
     const t0 = Date.now();
     const env = { ...process.env };

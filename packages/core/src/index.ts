@@ -9,7 +9,9 @@ export { TOKEN_SCOPES, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_PREFIX, isTokenScope, has
 export type { OAuthClientRow, DeviceCodeRow, RefreshTokenRow, InviteRow, DeviceStatus } from "./db/oauth.ts";
 export { sealValue, openValue, putSetting, getSetting, deleteSettings, listSettingKeys, type SettingRow } from "./db/settings.ts";
 export * from "./oauth/index.ts";
-export { TASK_STATES, isTaskState, parseTaskId, taskId, deriveTaskStatus, type TaskRow, type TaskState, type TaskStatus, type TaskView } from "./db/tasks.ts";
+export { TASK_STATES, isTaskState, parseTaskId, taskId, deriveTaskStatus, type TaskRow, type TaskState, type TaskStatus, type TaskView, type ClaimLike } from "./db/tasks.ts";
+export { LEASE_MS, WORKER_ONLINE_MS, WORKER_OFFLINE_MS, WORKER_NAME, workerState, requiredLabels, type WorkerRow, type WorkerView, type WorkerStatus, type WorkerInput, type ClaimRow, type ClaimOutcome, type LiveClaim, type Claimed } from "./db/workers.ts";
+export * from "./work/index.ts";
 export { WEBHOOK_EVENT_KINDS, publicWebhook, generateWebhookSecret, type WebhookRow, type PublicWebhook, type DeliveryRow } from "./db/webhooks.ts";
 export * from "./webhooks/dispatch.ts";
 export * from "./github/client.ts";

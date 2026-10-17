@@ -9,7 +9,7 @@ relay turns Claude Code, Codex, and Grok Build into a team that shares memory, p
 ## What you get
 
 - **One memory.** Decisions made in Codex show up in Claude and Grok. A generated rules file in each repo plus a small MCP server keep every tool on the same page.
-- **Work from anywhere.** File an issue from your phone, a chat bot, or a terminal. A runner on your own machine picks it up, opens a PR, and your deploy preview appears.
+- **Work from anywhere.** File an issue from your phone, a chat bot, or a terminal. A worker on your own machine claims it, opens a PR, and your deploy preview appears.
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
 
@@ -24,7 +24,9 @@ Set up relay from https://github.com/kyleroche/relay following its AGENTS.md "In
 Or by hand, with Node 24 or newer and no checkout:
 
 ```bash
-npx @kyleroche/relay doctor     # what is installed, logged in, and reachable
+npx @kyleroche/relay setup --site https://relay.example.com   # join a hosted relay (device flow or --invite <code>); skip for a single machine
+npx @kyleroche/relay doctor     # what is installed, logged in, reachable, and which lanes this machine can serve
+npx @kyleroche/relay work --install --yes   # this machine becomes a worker: a service that claims and runs tasks for those lanes
 npx @kyleroche/relay setup      # hooks + memory server into each CLI you have; --yes writes
 cd ~/code/some-repo && npx @kyleroche/relay link
 ```
@@ -88,7 +90,7 @@ See [docs/MEMORY.md](docs/MEMORY.md) for the data model, the brief compiler and 
 
 ## How it fits together
 
-Issues are tasks. Labels pick the lane. Self-hosted runners on your machines run the vendor CLI in a fresh worktree and open a PR. Postgres holds memory and the event feed. A small web app shows the feed, projects, and usage. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle.
+Issues are tasks. Labels pick the lane. Workers (your machines running `relay work`) claim tasks from relay, run the vendor CLI in a fresh clone and open a PR; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the feed, projects, workers, and usage. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, and [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker.
 
 ## Hosting
 

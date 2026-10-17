@@ -19,6 +19,7 @@ export const TOKEN_SCOPES = [
   "projects:write",
   "webhooks:write",
   "tokens:write",
+  "work:claim",
 ] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
@@ -38,6 +39,7 @@ export const TOKEN_SCOPE_DESCRIPTIONS: Record<TokenScope, string> = {
   "projects:write": "Register projects and upload digests and summaries (relay link in site mode).",
   "webhooks:write": "Add, list, remove and test outbound webhooks.",
   "tokens:write": "Mint, list and revoke tokens (relay token in site mode).",
+  "work:claim": "Register a worker, heartbeat, claim queued tasks and report runs (relay work); pair with memory:read for the brief.",
 };
 
 export interface TokenRow {

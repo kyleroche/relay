@@ -130,10 +130,13 @@ export interface Worker {
   host: string;
   labels: string[];
   lastSeen: string;
+  /** From last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
   status: WorkerStatus;
   lanes: Lane[];
+  /** relay CLI version the worker runs; "" when unknown. */
+  version: string;
   runsToday: number;
-  current: { project: string; issue: number; startedAt: string } | null;
+  current: { project: string; issue: number; startedAt: string; taskId?: string; leaseUntil?: string } | null;
 }
 
 export type AssetKind = "image" | "video" | "audio" | "pdf" | "html" | "file";

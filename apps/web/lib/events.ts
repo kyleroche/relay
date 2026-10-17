@@ -12,10 +12,15 @@ export const EVENT_KINDS = {
   "issue.opened": { group: "task", source: "github", label: "Issue opened", description: "A task entered the bus." },
   "issue.labeled": { group: "task", source: "github", label: "Lane assigned", description: "An agent:* label picked the lane." },
   "issue.closed": { group: "task", source: "github", label: "Issue closed", description: "The task is done or dropped." },
-  // Runner lifecycle (also from GitHub workflow_run)
-  "run.started": { group: "run", source: "runner", label: "Run started", description: "A runner claimed the job and checked out a fresh worktree." },
-  "run.finished": { group: "run", source: "runner", label: "Run finished", description: "The CLI exited; payload has the exit status." },
-  "run.failed": { group: "run", source: "runner", label: "Run failed", description: "The CLI exited non-zero or timed out." },
+  // Worker lifecycle (relay work, docs/WORKERS.md)
+  "worker.registered": { group: "run", source: "runner", label: "Worker registered", description: "A machine ran relay work for the first time; payload has its lanes and labels." },
+  "worker.online": { group: "run", source: "runner", label: "Worker online", description: "A worker came (back) online and is claiming tasks." },
+  "worker.offline": { group: "run", source: "runner", label: "Worker offline", description: "A worker shut down cleanly, or was marked offline after an hour of silence." },
+  // Run lifecycle (relay work; also from GitHub workflow_job on the optional Actions runners)
+  "run.started": { group: "run", source: "runner", label: "Run started", description: "A worker claimed the task, cloned the repo and is running the lane." },
+  "run.finished": { group: "run", source: "runner", label: "Run finished", description: "The lane finished; payload.conclusion and the PR are set." },
+  "run.failed": { group: "run", source: "runner", label: "Run failed", description: "The lane exited with an error, made no changes, or timed out." },
+  "run.dispatched": { group: "run", source: "web", label: "Dispatched to cloud", description: "The site handed a cloud-lane task to the vendor's hosted tier with a mention comment." },
   "step.usage": { group: "usage", source: "lane", label: "Model call", description: "One headless CLI call with tokens, cache and cost equivalent. The ledger is a view over these." },
   // GitHub webhook: pull requests, reviews, CI
   "pr.opened": { group: "pr", source: "github", label: "PR opened", description: "The runner pushed a branch and opened the result." },

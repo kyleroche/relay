@@ -201,6 +201,7 @@ export class GitHubApp {
       createIssue: async (repo, input): Promise<GitHubIssue> => (await perRepo(repo)).createIssue(repo, input),
       addLabels: async (repo, issue, labels) => (await perRepo(repo)).addLabels(repo, issue, labels),
       getIssue: async (repo, issue) => (await perRepo(repo)).getIssue(repo, issue),
+      createComment: async (repo, issue, body) => (await perRepo(repo)).createComment(repo, issue, body),
       request: async (method, path, body) => (await perRepo(repoOfPath(path))).request(method, path, body),
     };
   }

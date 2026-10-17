@@ -1,9 +1,11 @@
+import { repo } from "@relay/core";
 import { NextResponse, type NextRequest } from "next/server";
 import { problem } from "@/lib/api";
 import { dataMode, writeEvent } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { dispatchAfter } from "@/lib/dispatch";
 import { githubApp, githubWebhookSecrets } from "@/lib/github-app";
+import type { NewEvent } from "@/lib/types";
 import { githubEvents } from "@/lib/webhooks/github";
 import { installationEvents, isInstallationEvent } from "@/lib/webhooks/github-app";
 import { verifyGitHub } from "@/lib/webhooks/verify";
@@ -57,7 +59,24 @@ export async function POST(req: NextRequest) {
     written.push({ id: row?.id ?? null, kind: event.kind, deduped: row === null });
   }
   dispatchAfter(rows);
+  await Promise.all(events.map((e) => recordLabelledTask(e)));
   return NextResponse.json({ ok: true, events: written, ...(registered.length ? { registered } : {}) }, { status: 201 });
+}
+
+/**
+ * An `agent:<lane>` label put on an issue by hand (docs/WORKERS.md): the issue becomes a task row so a worker can
+ * claim it, exactly as if it had been opened through `relay task create`. Only repos linked as a project count.
+ */
+async function recordLabelledTask(e: NewEvent): Promise<void> {
+  if (e.kind !== "issue.labeled" || !e.repo || !e.issue || !e.lane || dataMode() !== "db") return;
+  try {
+    const db = await getDb();
+    const project = (await repo.listProjects(db)).find((p) => p.repo === e.repo);
+    if (!project) return;
+    await repo.createTask(db, { project: project.slug, repo: e.repo, issue: e.issue, createdBy: e.actor, lane: e.lane });
+  } catch (err) {
+    console.error(`[relay] task row for ${e.repo}#${e.issue}: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export function GET() {
