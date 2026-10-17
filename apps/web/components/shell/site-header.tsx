@@ -2,7 +2,6 @@ import Link from "next/link";
 import { PlanMeters } from "@/components/meters/plan-meters";
 import { Nav, NAV, PUBLIC_NAV } from "@/components/shell/nav";
 import { RelayMark } from "@/components/shell/relay-mark";
-import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { ViewerMenu } from "@/components/shell/viewer-menu";
 import { getUsage } from "@/lib/data";
 import { getSession } from "@/lib/session";
@@ -21,7 +20,6 @@ export async function SiteHeader() {
           </Link>
           <div className="flex items-center gap-2 sm:hidden">
             <ViewerMenu session={session} />
-            <ThemeToggle />
           </div>
         </div>
         <Nav items={session ? NAV : PUBLIC_NAV} className="-mx-1 sm:mx-0" />
@@ -33,7 +31,6 @@ export async function SiteHeader() {
           )}
           <div className="hidden items-center gap-2 sm:flex">
             <ViewerMenu session={session} />
-            <ThemeToggle />
           </div>
         </div>
       </div>
