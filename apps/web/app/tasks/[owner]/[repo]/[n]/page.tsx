@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CLOUD_LANES, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
 type EventRow = core.EventRow;
+import { ActorChip } from "@/components/feed/actor-chip";
 import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
@@ -83,7 +84,7 @@ export default async function TaskPage({ params }: Props) {
                 {t.repo}#{t.issue} <ArrowUpRight className="size-3" aria-hidden="true" />
               </a>
               {t.lane ? <Pill mono>{t.lane}</Pill> : <span className="text-xs">no lane</span>}
-              {t.runner && <span className="font-mono text-xs">{t.runner.replace(/^runner:/, "worker ")}</span>}
+              {t.runner && <ActorChip actor={t.runner} />}
               {t.branch && <span className="font-mono text-xs">{t.branch}</span>}
               <Link href={`/projects/${t.project}`} className="text-xs hover:text-foreground">
                 {t.project}
@@ -92,7 +93,11 @@ export default async function TaskPage({ params }: Props) {
           </div>
           <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
             <TaskStateBadge state={t.state} />
-            {t.updated_at && <p className="text-xs text-muted-foreground">{fmtAgo(t.updated_at, now)}</p>}
+            {t.updated_at && (
+              <time dateTime={t.updated_at} title={t.updated_at} className="text-xs text-muted-foreground">
+                {fmtAgo(t.updated_at, now)}
+              </time>
+            )}
           </div>
         </div>
       </section>
@@ -160,11 +165,25 @@ export default async function TaskPage({ params }: Props) {
             ) : (
               <p className="mt-1 text-sm text-muted-foreground">{t.state === "queued" || t.state === "claimed" || t.state === "running" ? "Opens when the run finishes." : "None."}</p>
             )}
-            {t.merged_at && <p className="mt-1 text-xs text-ok">merged {fmtAgo(t.merged_at, now)}</p>}
+            {t.merged_at && (
+              <p className="mt-1 text-xs text-ok">
+                merged{" "}
+                <time dateTime={t.merged_at} title={t.merged_at}>
+                  {fmtAgo(t.merged_at, now)}
+                </time>
+              </p>
+            )}
             {t.review.decided && (
               <p className="mt-1 text-xs text-muted-foreground">
-                {t.review.decided === "approved" ? "approved" : "changes requested"} by <span className="font-mono">{t.review.by}</span>
-                {t.review.at ? ` ${fmtAgo(t.review.at, now)}` : ""}
+                {t.review.decided === "approved" ? "approved" : "changes requested"} by {t.review.by && <ActorChip actor={t.review.by} className="align-middle" />}
+                {t.review.at && (
+                  <>
+                    {" "}
+                    <time dateTime={t.review.at} title={t.review.at}>
+                      {fmtAgo(t.review.at, now)}
+                    </time>
+                  </>
+                )}
               </p>
             )}
           </div>
@@ -214,8 +233,10 @@ export default async function TaskPage({ params }: Props) {
                 <li key={e.id} className="rounded-md border bg-card p-3 text-sm">
                   <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
                     <span className="font-mono">{e.kind}</span>
-                    <span className="font-mono">{e.actor}</span>
-                    <time dateTime={e.ts}>{fmtAgo(e.ts, now)}</time>
+                    <ActorChip actor={e.actor} />
+                    <time dateTime={e.ts} title={e.ts}>
+                      {fmtAgo(e.ts, now)}
+                    </time>
                     {e.url && (
                       <a href={e.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 hover:text-primary">
                         open <ArrowUpRight className="size-3" aria-hidden="true" />

@@ -4,8 +4,8 @@ import { CoverageBar } from "@/components/coverage-bar";
 import { PageIntro } from "@/components/page-intro";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { getProjects } from "@/lib/data";
-import { fmtAgo } from "@/lib/format";
 
 export const metadata: Metadata = {
   title: "Projects",
@@ -43,9 +43,7 @@ export default async function ProjectsPage() {
                   <h2 className="truncate text-base font-medium">{p.slug}</h2>
                   <p className="truncate font-mono text-xs text-muted-foreground">{p.repo}</p>
                 </div>
-                <span className="shrink-0 font-mono text-[11px] text-muted-foreground" title={p.lastActivity ?? ""}>
-                  {p.lastActivity ? fmtAgo(p.lastActivity, now) : "no activity"}
-                </span>
+                {p.lastActivity ? <RelTime iso={p.lastActivity} now={now} className="shrink-0 text-xs text-muted-foreground" /> : <span className="shrink-0 text-xs text-muted-foreground">no activity</span>}
               </div>
               {p.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{p.summary}</p>}
               <dl className="mt-auto grid grid-cols-3 gap-2 text-sm">

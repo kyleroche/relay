@@ -9,6 +9,7 @@ import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getAsset } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
@@ -77,7 +78,7 @@ export default async function AssetPage({ params }: Props) {
                         <Thumb asset={{ thumb_url: v.thumb_url, kind: asset.kind, title: asset.title, url: null }} className="aspect-[16/10] rounded-sm" />
                         <span className="flex items-center justify-between font-mono text-[11px]">
                           <span>v{v.version}</span>
-                          <span className="text-muted-foreground">{fmtAgo(v.created_at, now)}</span>
+                          <RelTime iso={v.created_at} now={now} className="text-muted-foreground" />
                         </span>
                         <AssetStatusBadge status={v.status} className="w-fit" />
                       </Link>
@@ -93,17 +94,26 @@ export default async function AssetPage({ params }: Props) {
           <ReviewControls asset={asset} />
           {asset.review_note && (
             <div className={cn("rounded-md border p-3 text-sm", asset.status === "rejected" ? "border-bad/40 bg-bad/5" : "bg-card")}>
-              <p className="text-[11px] text-muted-foreground">
-                {asset.status === "rejected" ? "Rejected" : "Reviewed"} by {asset.reviewed_by} {asset.reviewed_at ? fmtAgo(asset.reviewed_at, now) : ""}
+              <p className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+                {asset.status === "rejected" ? "Rejected" : "Reviewed"} by {asset.reviewed_by && <ActorChip actor={asset.reviewed_by} />}
+                {asset.reviewed_at && (
+                  <time dateTime={asset.reviewed_at} title={asset.reviewed_at}>
+                    {fmtAgo(asset.reviewed_at, now)}
+                  </time>
+                )}
               </p>
               <p className="mt-1">{asset.review_note}</p>
               {asset.status === "rejected" && <p className="mt-2 text-[11px] text-muted-foreground">Recorded as a project decision; the next attempt reads it in its brief.</p>}
             </div>
           )}
           {!asset.review_note && asset.reviewed_by && (
-            <p className="text-xs text-muted-foreground">
-              {asset.status === "approved" || asset.status === "published" ? "Approved" : "Reviewed"} by {asset.reviewed_by}
-              {asset.reviewed_at ? ` ${fmtAgo(asset.reviewed_at, now)}` : ""}.
+            <p className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+              {asset.status === "approved" || asset.status === "published" ? "Approved" : "Reviewed"} by <ActorChip actor={asset.reviewed_by} />
+              {asset.reviewed_at && (
+                <time dateTime={asset.reviewed_at} title={asset.reviewed_at}>
+                  {fmtAgo(asset.reviewed_at, now)}
+                </time>
+              )}
             </p>
           )}
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
@@ -142,7 +152,9 @@ export default async function AssetPage({ params }: Props) {
             {expires && (
               <>
                 <dt className="text-[11px] text-muted-foreground">Expires</dt>
-                <dd className="font-mono text-xs">{expires}</dd>
+                <dd className="font-mono text-xs" title={asset.expires_at ?? undefined}>
+                  {expires}
+                </dd>
               </>
             )}
             {asset.public_url && (

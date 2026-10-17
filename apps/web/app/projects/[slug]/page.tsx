@@ -8,9 +8,10 @@ import { ModelStatusBadge } from "@/components/model-status";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { getProject } from "@/lib/data";
-import { fmtAgo, fmtDate } from "@/lib/format";
+import { fmtDate } from "@/lib/format";
 import { dayKeyIn, dayLabelIn } from "@/lib/tz";
 import { viewerTimeZone } from "@/lib/tz-server";
 
@@ -62,7 +63,7 @@ export default async function ProjectPage({ params }: Props) {
           <dl className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-1">
             <div>
               <dt className="text-[11px] text-muted-foreground">Last activity</dt>
-              <dd className="font-mono tabular-nums">{p.lastActivity ? fmtAgo(p.lastActivity, now) : "—"}</dd>
+              <dd className="font-mono tabular-nums">{p.lastActivity ? <RelTime iso={p.lastActivity} now={now} /> : "—"}</dd>
             </div>
             <div>
               <dt className="text-[11px] text-muted-foreground">Open issues</dt>
@@ -134,7 +135,9 @@ export default async function ProjectPage({ params }: Props) {
                         </>
                       )}
                       <span>·</span>
-                      <time dateTime={d.valid_from}>{fmtDate(d.valid_from)}</time>
+                      <time dateTime={d.valid_from} title={d.valid_from}>
+                        {fmtDate(d.valid_from)}
+                      </time>
                     </p>
                   </li>
                 ))}
@@ -182,7 +185,12 @@ export default async function ProjectPage({ params }: Props) {
                   </div>
                   <p className="mt-2 font-mono text-[11px] text-muted-foreground">
                     {m.guidance_count} guidance · {m.skill_count} skills
-                    {m.onboarded_at && <> · onboarded {fmtAgo(m.onboarded_at, now)}</>}
+                    {m.onboarded_at && (
+                      <>
+                        {" "}
+                        · onboarded <RelTime iso={m.onboarded_at} now={now} />
+                      </>
+                    )}
                   </p>
                   <p className="mt-1 text-[11px] text-muted-foreground">lanes: {m.lanes.join(", ")}</p>
                 </li>

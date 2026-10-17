@@ -1,5 +1,6 @@
 "use client";
 
+import { ScopeCode } from "@/components/ui/scope-list";
 import { cn } from "@/lib/utils";
 
 export interface ScopeOption {
@@ -18,7 +19,7 @@ export function ScopePicker({ scopes, chosen, onToggle, disabled, idPrefix }: { 
             <label htmlFor={`${idPrefix}-${s.name}`} className={cn("flex cursor-pointer items-start gap-2 rounded-md border px-2.5 py-2 text-xs transition-colors hover:bg-accent/50", chosen.has(s.name) && "border-primary/60 bg-primary/5")}>
               <input id={`${idPrefix}-${s.name}`} type="checkbox" aria-label={s.name} className="mt-0.5 accent-primary" checked={chosen.has(s.name)} onChange={() => onToggle(s.name)} disabled={disabled} />
               <span className="min-w-0">
-                <code className="font-mono">{s.name}</code>
+                <ScopeCode>{s.name}</ScopeCode>
                 <span className="block text-muted-foreground">{s.description}</span>
               </span>
             </label>

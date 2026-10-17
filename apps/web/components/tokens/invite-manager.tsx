@@ -4,12 +4,13 @@ import { Check, Copy, Ticket, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createInviteAction, revokeInviteAction, type TokenActionResult } from "@/app/tokens/actions";
-import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
+import { ScopeList } from "@/components/ui/scope-list";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
@@ -19,9 +20,8 @@ export interface InviteView {
   scopes: string[];
   uses_left: number;
   max_uses: number;
-  /** Relative, made on the server: "in 23 h" */
-  expires: string;
-  created: string;
+  expires_at: string;
+  created_at: string;
   created_by: string;
   /** Revoked, expired or used up: shown greyed, no Revoke button. */
   spent: boolean;
@@ -132,7 +132,7 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
 }
 
 /** Invites that exist: live ones with Revoke, the spent ones under a toggle. Renders nothing when there are none. */
-export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWrite: boolean }) {
+export function InviteList({ invites, canWrite, now }: { invites: InviteView[]; canWrite: boolean; now: number }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
   const [pending, start] = useTransition();
@@ -158,10 +158,24 @@ export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWr
             {i.name}
           </span>
           {i.why && <Pill>{i.why}</Pill>}
-          <Scopes scopes={i.scopes} />
+          <ScopeList scopes={i.scopes} />
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {i.spent ? `created ${i.created}` : `${i.uses_left} of ${i.max_uses} use${i.max_uses === 1 ? "" : "s"} left · expires ${i.expires} · created ${i.created}`}
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+          {!i.spent && (
+            <>
+              <span>
+                {i.uses_left} of {i.max_uses} use{i.max_uses === 1 ? "" : "s"} left
+              </span>
+              <span>·</span>
+              <span>
+                expires <RelTime iso={i.expires_at} now={now} />
+              </span>
+              <span>·</span>
+            </>
+          )}
+          <span>
+            created <RelTime iso={i.created_at} now={now} />
+          </span>
         </p>
       </div>
       {!i.spent && (

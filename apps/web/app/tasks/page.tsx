@@ -8,9 +8,9 @@ import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
-import { fmtAgo } from "@/lib/format";
 import { requireSession } from "@/lib/session";
 import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath, TONE_TEXT } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -49,11 +49,7 @@ function Row({ t, now }: { t: TaskView; now: number }) {
           )}
         </p>
       </div>
-      {t.updated_at && (
-        <time dateTime={t.updated_at} className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-          {fmtAgo(t.updated_at, now)}
-        </time>
-      )}
+      {t.updated_at && <RelTime iso={t.updated_at} now={now} className="shrink-0 text-xs text-muted-foreground" />}
     </li>
   );
 }

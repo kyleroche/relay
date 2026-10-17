@@ -4,12 +4,13 @@ import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/tokens/actions";
-import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/collapsible";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
+import { ScopeList } from "@/components/ui/scope-list";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -22,22 +23,20 @@ export interface TokenRowView {
   name: string;
   scopes: string[];
   created_by: string;
-  /** Relative, made on the server: "2 h ago" */
-  created: string;
-  /** Relative or null: "5 min ago" */
-  last_used: string | null;
+  created_at: string;
+  last_used_at: string | null;
   revoked: boolean;
   /** True for an OAuth access token whose 24 h passed (its refresh token may still renew it). */
   expired: boolean;
-  /** Relative expiry for OAuth tokens ("in 23 h", or "2 h ago" once expired); null for hand-minted ones. */
-  expires: string | null;
+  /** Expiry of an OAuth token; null for hand-minted ones, which never expire. */
+  expires_at: string | null;
   origin: TokenOrigin;
 }
 
 const originLabel = (o: TokenOrigin): string => (o.kind === "oauth" ? "device flow" : o.kind === "invite" ? "invite" : "by hand");
 
 /** Grants: live tokens first, revoked and expired ones under a toggle. One line of metadata per row, no identifiers. */
-export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWrite: boolean }) {
+export function GrantList({ tokens, canWrite, now }: { tokens: TokenRowView[]; canWrite: boolean; now: number }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
   const [pending, start] = useTransition();
@@ -53,14 +52,34 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
     });
   };
 
-  const meta = (t: TokenRowView): string => {
-    const parts = [originLabel(t.origin), `created ${t.created}`];
-    if (t.revoked) parts.push("revoked");
-    else if (t.expires) parts.push(t.expired ? `expired ${t.expires}` : `expires ${t.expires}, renews itself`);
-    else parts.push("never expires");
-    parts.push(t.last_used ? `used ${t.last_used}` : "never used");
-    return parts.join(" · ");
-  };
+  const meta = (t: TokenRowView) => (
+    <>
+      <span>{originLabel(t.origin)}</span>
+      <span>·</span>
+      <span>
+        created <RelTime iso={t.created_at} now={now} />
+      </span>
+      <span>·</span>
+      {t.revoked ? (
+        <span>revoked</span>
+      ) : t.expires_at ? (
+        <span>
+          {t.expired ? "expired" : "expires"} <RelTime iso={t.expires_at} now={now} />
+          {!t.expired && ", renews itself"}
+        </span>
+      ) : (
+        <span>never expires</span>
+      )}
+      <span>·</span>
+      {t.last_used_at ? (
+        <span>
+          used <RelTime iso={t.last_used_at} now={now} />
+        </span>
+      ) : (
+        <span>never used</span>
+      )}
+    </>
+  );
 
   const Row = ({ t }: { t: TokenRowView }) => (
     <li className={cn("flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between", (t.revoked || t.expired) && "opacity-60")}>
@@ -71,9 +90,9 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
           </span>
           {t.revoked && <Pill>revoked</Pill>}
           {!t.revoked && t.expired && <Pill>expired</Pill>}
-          <Scopes scopes={t.scopes} />
+          <ScopeList scopes={t.scopes} />
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">{meta(t)}</p>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">{meta(t)}</p>
       </div>
       {!t.revoked && (
         <Button size="sm" variant="ghost" onClick={() => revoke(t.id)} disabled={!canWrite || pending} aria-label={`Revoke ${t.name}`}>

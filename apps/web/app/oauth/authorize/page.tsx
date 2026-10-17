@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { OAuthError, scopeDescriptions, validateAuthorizeRequest, type AuthorizeRequest } from "@relay/core";
 import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
+import { ScopeList } from "@/components/ui/scope-list";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -73,14 +74,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
 
       <div className="rounded-lg border p-4">
         <SectionHeading>It asks to</SectionHeading>
-        <ul className="mt-2 flex flex-col gap-1.5 text-sm">
-          {scopeDescriptions(request.scopes).map((s) => (
-            <li key={s.scope} className="flex items-start gap-2">
-              <code className="shrink-0 rounded bg-muted px-1 font-mono text-xs leading-5">{s.scope}</code>
-              <span className="text-muted-foreground">{s.description}</span>
-            </li>
-          ))}
-        </ul>
+        <ScopeList scopes={scopeDescriptions(request.scopes)} className="mt-2" />
         <p className="mt-3 text-xs text-muted-foreground">
           After you decide, the browser returns to <span className="font-mono">{redirectHost}</span>
           {request.resource ? <> for <span className="font-mono">{request.resource}</span></> : null}.

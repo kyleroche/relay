@@ -3,8 +3,8 @@ import Link from "next/link";
 import { Thumb } from "@/components/assets/asset-card";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { PreviewBadge } from "@/components/tasks/state-badge";
+import { RelTime } from "@/components/ui/rel-time";
 import { SectionHeading } from "@/components/ui/section-heading";
-import { fmtAgo } from "@/lib/format";
 import { taskPagePath } from "@/lib/tasks";
 import type { Asset, TaskView } from "@/lib/types";
 
@@ -42,7 +42,7 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
                       </span>
                     )}
                     <PreviewBadge state={t.preview_state} />
-                    {t.updated_at && <span className="ml-auto shrink-0">{fmtAgo(t.updated_at, now)}</span>}
+                    {t.updated_at && <RelTime iso={t.updated_at} now={now} className="ml-auto shrink-0" />}
                   </span>
                 </Link>
               </li>
@@ -69,7 +69,7 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
                       {a.project && <span>{a.project}</span>}
                       {(a.pr ?? a.issue) && <span>#{a.pr ?? a.issue}</span>}
                       <span>v{a.version}</span>
-                      <span className="ml-auto">{fmtAgo(a.created_at, now)}</span>
+                      <RelTime iso={a.created_at} now={now} className="ml-auto" />
                     </span>
                     <span className="mt-1 block">
                       <ActorChip actor={a.created_by} className="text-muted-foreground" />

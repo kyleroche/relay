@@ -5,6 +5,8 @@ import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Input } from "@/components/ui/input";
+import { RelTime } from "@/components/ui/rel-time";
+import { ScopeList } from "@/components/ui/scope-list";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -39,7 +41,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
   const pending: DeviceCodeRow[] = db ? await listPendingAccess(await getDb(), oauthOptions()) : [];
   const awaiting: AccessRequestView[] = db ? await listApprovedAwaitingPoll(await getDb(), oauthOptions()) : [];
   const normalized = normalizeUserCode(typed);
-  const utc = (iso: string): string => `${iso.slice(11, 16)} UTC`;
+  const now = Date.now();
 
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
@@ -72,17 +74,10 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
         <div className="rounded-lg border p-4">
           <SectionHeading>{request.client_name} asks for access</SectionHeading>
           <p className="mt-1 text-xs text-muted-foreground">
-            Code <span className="font-mono">{request.user_code}</span>, requested {new Date(request.created_at).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC
+            Code <span className="font-mono">{request.user_code}</span>, requested <RelTime iso={request.created_at} now={now} />
             {request.expired ? ", expired" : request.status !== "pending" ? `, already ${request.status}` : ""}.
           </p>
-          <ul className="mt-3 flex flex-col gap-1.5 text-sm">
-            {scopeDescriptions(request.scopes).map((s) => (
-              <li key={s.scope} className="flex items-start gap-2">
-                <code className="shrink-0 rounded bg-muted px-1 font-mono text-xs leading-5">{s.scope}</code>
-                <span className="text-muted-foreground">{s.description}</span>
-              </li>
-            ))}
-          </ul>
+          <ScopeList scopes={scopeDescriptions(request.scopes)} className="mt-3" />
           {request.status === "pending" && !request.expired ? (
             <form action={activateAction} className="mt-4 flex flex-col gap-3 sm:flex-row">
               <input type="hidden" name="code" value={request.user_code} />
@@ -145,7 +140,9 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
                 <span className="min-w-0 break-all">
                   <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-mono">{a.client_name}</span>
                 </span>
-                <span className="shrink-0 text-xs text-muted-foreground">token on its next poll; code expires {utc(a.expires_at)}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  token on its next poll; code expires <RelTime iso={a.expires_at} now={now} />
+                </span>
               </li>
             ))}
           </ul>

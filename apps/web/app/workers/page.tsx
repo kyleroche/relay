@@ -4,9 +4,9 @@ import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import { getWorkers } from "@/lib/data";
-import { fmtAgo } from "@/lib/format";
 import type { WorkerStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -62,7 +62,9 @@ npx @kyleroche/relay work --install --yes`}>
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <div>
                   <dt className="text-[11px] text-muted-foreground">Last seen</dt>
-                  <dd className="font-mono tabular-nums">{fmtAgo(w.lastSeen, now)}</dd>
+                  <dd>
+                    <RelTime iso={w.lastSeen} now={now} />
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-[11px] text-muted-foreground">Runs today</dt>
@@ -77,7 +79,9 @@ npx @kyleroche/relay work --install --yes`}>
                       {w.current.project}
                     </Link>{" "}
                     <span className="font-mono text-xs">#{w.current.issue}</span>
-                    <span className="ml-1 font-mono text-[11px] text-muted-foreground">since {fmtAgo(w.current.startedAt, now)}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      since <RelTime iso={w.current.startedAt} now={now} />
+                    </span>
                   </p>
                 ) : (
                   <p className="text-sm text-muted-foreground">
