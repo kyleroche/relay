@@ -29,7 +29,7 @@ export const GRANT_INVITE = "urn:relay:invite";
 export const GRANT_TYPES = [GRANT_AUTHORIZATION_CODE, GRANT_REFRESH_TOKEN, GRANT_DEVICE_CODE, GRANT_INVITE] as const;
 
 /** Event kinds the server writes so approvals can be relayed and audited (docs/FEED.md). */
-export const ACCESS_EVENT_KINDS = ["access.requested", "access.granted", "access.denied", "access.revoked"] as const;
+export const ACCESS_EVENT_KINDS = ["access.requested", "access.granted", "access.denied", "access.revoked", "access.invite_created", "access.invite_revoked", "access.client_removed", "access.purged"] as const;
 
 export type OAuthErrorCode =
   | "invalid_request"
@@ -358,9 +358,9 @@ async function mint(db: Db, o: OAuthServerOptions, input: { tokenName: string; s
   };
 }
 
-async function emit(db: Db, o: OAuthServerOptions, ev: { kind: (typeof ACCESS_EVENT_KINDS)[number]; actor: string; summary: string; payload: Record<string, unknown>; dedupe_key?: string }): Promise<void> {
+async function emit(db: Db, o: OAuthServerOptions | undefined, ev: { kind: (typeof ACCESS_EVENT_KINDS)[number]; actor: string; summary: string; payload: Record<string, unknown>; dedupe_key?: string }): Promise<void> {
   const row = await writeEvent(db, { ...ev, project: null }).catch(() => undefined);
-  if (row && o.onEvent) await Promise.resolve(o.onEvent(row)).catch(() => {});
+  if (row && o?.onEvent) await Promise.resolve(o.onEvent(row)).catch(() => {});
 }
 
 export const tokenNameFor = (clientName: string): string => `oauth:${clientName}`;
@@ -567,6 +567,83 @@ export async function decideDeviceRequest(db: Db, typed: string, decision: "appr
 
 export const listPendingAccess = (db: Db, o?: OAuthServerOptions): Promise<q.DeviceCodeRow[]> => q.listPendingDevices(db, o ? new Date(nowMs(o)) : new Date());
 
+/** Where a device request stands, as the Access page shows it. `expired` is a pending or approved code past its time. */
+export type AccessRequestState = "pending" | "approved" | "redeemed" | "denied" | "expired";
+
+export interface AccessRequestView extends q.DeviceRequestRow {
+  state: AccessRequestState;
+}
+
+export const RECENT_ACCESS_WINDOW_SECONDS = 24 * 60 * 60;
+
+/**
+ * Requests for the Access page: what needs a decision first, then approvals waiting for the poll, then the rest, each
+ * newest first. It covers live codes (pending, or approved and waiting for the client to poll
+ * `/oauth/token`) and every decision of the last `sinceSeconds` (default a day), each with its state and, once
+ * redeemed, the name of the token it became.
+ */
+export async function listRecentAccess(db: Db, o?: OAuthServerOptions, sinceSeconds = RECENT_ACCESS_WINDOW_SECONDS): Promise<AccessRequestView[]> {
+  const now = o ? new Date(nowMs(o)) : new Date();
+  const rows = await q.listRecentDevices(db, { since: new Date(now.getTime() - sinceSeconds * 1000), now });
+  const rank: Record<AccessRequestState, number> = { pending: 0, approved: 1, redeemed: 2, denied: 2, expired: 2 };
+  return rows
+    .map((d) => ({ ...d, state: ((d.status === "pending" || d.status === "approved") && new Date(d.expires_at).getTime() <= now.getTime() ? "expired" : d.status) as AccessRequestState }))
+    .sort((a, b) => rank[a.state] - rank[b.state] || b.created_at.localeCompare(a.created_at));
+}
+
+/** Approved codes the client has not redeemed yet: what /activate shows after an approval so the person sees it took. */
+export const listApprovedAwaitingPoll = async (db: Db, o?: OAuthServerOptions): Promise<AccessRequestView[]> => (await listRecentAccess(db, o)).filter((r) => r.state === "approved");
+
+// ---------- clients (the Access page) ----------
+
+export type { OAuthClientSummary } from "../db/oauth.ts";
+
+/** How a client came to exist: on the fly from `POST /oauth/device` (`client_name`), through `POST /oauth/register`, or as the label for an invite's tokens. */
+export type ClientOrigin = "device" | "registration" | "invite";
+
+export function clientOrigin(c: Pick<q.OAuthClientRow, "created_by" | "grant_types" | "client_id">): ClientOrigin {
+  if (c.created_by === "system:invite" || c.client_id.startsWith("rc_invite_")) return "invite";
+  if (c.created_by === "anon:device") return "device";
+  return "registration";
+}
+
+export const listClients = (db: Db, o?: OAuthServerOptions): Promise<q.OAuthClientSummary[]> => q.listClients(db, o ? new Date(nowMs(o)) : new Date());
+
+/** Remove a client nothing live depends on (the guard is in `deleteClient`); writes access.client_removed. */
+export async function removeClient(db: Db, clientId: string, actor: string, o?: OAuthServerOptions): Promise<q.OAuthClientRow> {
+  const now = o ? new Date(nowMs(o)) : new Date();
+  let row: q.OAuthClientRow | undefined;
+  try {
+    row = await q.deleteClient(db, clientId, now);
+  } catch (e) {
+    throw new OAuthError("invalid_request", e instanceof Error ? e.message : String(e));
+  }
+  if (!row) throw new OAuthError("invalid_client", "Unknown client_id.");
+  await emit(db, o, { kind: "access.client_removed", actor, summary: `${actor.replace(/^human:/, "")} removed client ${row.name}`, payload: { client_id: row.client_id, client_name: row.name, origin: clientOrigin(row) } });
+  return row;
+}
+
+// ---------- retention ----------
+
+export type { AccessPurgeResult } from "../db/oauth.ts";
+
+/** The retention sweep (`purgeExpiredAccess`), plus one access.purged feed row with the counts when anything went. */
+export async function purgeAccess(db: Db, o?: OAuthServerOptions, actor = "bot:relay"): Promise<q.AccessPurgeResult> {
+  const now = o ? new Date(nowMs(o)) : new Date();
+  const r = await q.purgeExpiredAccess(db, now, GRANT_DEVICE_CODE);
+  const total = r.device_codes + r.auth_codes + r.refresh_tokens + r.clients.length;
+  if (total > 0) {
+    const parts = [
+      r.device_codes ? `${r.device_codes} device code(s)` : "",
+      r.auth_codes ? `${r.auth_codes} authorization code(s)` : "",
+      r.refresh_tokens ? `${r.refresh_tokens} refresh token(s)` : "",
+      r.clients.length ? `${r.clients.length} orphan client(s)` : "",
+    ].filter(Boolean);
+    await emit(db, o, { kind: "access.purged", actor, summary: `Access retention removed ${parts.join(", ")}`, payload: { ...r } });
+  }
+  return r;
+}
+
 // ---------- RFC 7009 revocation ----------
 
 /** Revoke an access token (by plaintext) or a refresh token (and its access token). Unknown tokens succeed silently. */
@@ -611,8 +688,15 @@ export async function createInvite(db: Db, input: CreateInviteInput, o: OAuthSer
   if (!Number.isFinite(ttl) || ttl <= 0 || ttl > 365 * 86_400) throw new OAuthError("invalid_request", "expires must be between 1 second and 365 days.");
   const code = opaqueSecret("rin_", 24);
   const invite = await q.insertInvite(db, { code, name, scopes, uses, expires_at: after(o, ttl), created_by: input.createdBy });
+  await emit(db, o, { kind: "access.invite_created", actor: input.createdBy, summary: `${input.createdBy.replace(/^human:/, "")} created invite ${invite.id} for ${name} (${scopeString(scopes)}; ${uses} use(s))`, payload: { invite_id: invite.id, name, scopes, uses, expires_at: invite.expires_at } });
   return { code, invite };
 }
 
 export const listInvites = (db: Db, opts?: { includeSpent?: boolean; now?: Date }): Promise<q.InviteRow[]> => q.listInvites(db, opts);
-export const revokeInvite = (db: Db, idOrName: string): Promise<q.InviteRow | undefined> => q.revokeInvite(db, idOrName);
+
+/** Stop an unredeemed invite by id or name; writes access.invite_revoked. Undefined when nothing live matched. */
+export async function revokeInvite(db: Db, idOrName: string, actor?: string, o?: OAuthServerOptions): Promise<q.InviteRow | undefined> {
+  const row = await q.revokeInvite(db, idOrName);
+  if (row) await emit(db, o, { kind: "access.invite_revoked", actor: actor ?? row.created_by, summary: `Invite ${row.id} for ${row.name} revoked (${row.uses_left} use(s) left)`, payload: { invite_id: row.id, name: row.name, uses_left: row.uses_left } });
+  return row;
+}

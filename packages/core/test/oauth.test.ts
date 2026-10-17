@@ -17,8 +17,15 @@ import {
   GRANT_DEVICE_CODE,
   GRANT_INVITE,
   issueAuthorizationCode,
+  listApprovedAwaitingPoll,
+  listClients,
   listPendingAccess,
+  listRecentAccess,
   lookupDeviceRequest,
+  clientOrigin,
+  purgeAccess,
+  removeClient,
+  revokeInvite,
   OAuthError,
   protectedResourceMetadata,
   registerClient,
@@ -373,5 +380,120 @@ describe("sealed settings", () => {
     expect(await getSetting(db, "github_app.private_key", { secret: "s3cret-s3cret-s3cret" })).toBe("pem");
     expect(await getSetting(db, "github_app.private_key", { secret: "wrong-secret-value" })).toBeUndefined();
     expect(await getSetting(db, "github_app.private_key")).toBeUndefined();
+  });
+});
+
+describe("the Access page and retention", () => {
+  const scope = "feed:read";
+  it("listRecentAccess tells pending, approved-awaiting-poll, redeemed (with the token's name), denied and expired apart", async () => {
+    const expired = await deviceAuthorization(db, { client_name: "late-bot", scope }, o);
+    tick(DEVICE_CODE_TTL_SECONDS + 1);
+    const pending = await deviceAuthorization(db, { client_name: "pending-bot", scope }, o);
+    const approved = await deviceAuthorization(db, { client_name: "woodhouse", scope }, o);
+    const redeemed = await deviceAuthorization(db, { client_name: "redeemed-bot", scope }, o);
+    const denied = await deviceAuthorization(db, { client_name: "denied-bot", scope }, o);
+    await decideDeviceRequest(db, approved.user_code, "approve", "human:kyle", o);
+    await decideDeviceRequest(db, redeemed.user_code, "approve", "human:kyle", o);
+    await decideDeviceRequest(db, denied.user_code, "deny", "human:kyle", o);
+    const t = await exchangeToken(db, { grant_type: GRANT_DEVICE_CODE, device_code: redeemed.device_code, client_id: redeemed.client_id }, o);
+
+    const rows = await listRecentAccess(db, o);
+    const by = (code: string) => rows.find((r) => r.user_code === code);
+    expect(by(expired.user_code)?.state).toBe("expired");
+    expect(by(pending.user_code)?.state).toBe("pending");
+    expect(by(approved.user_code)?.state).toBe("approved");
+    expect(by(approved.user_code)?.token_name).toBeNull();
+    expect(by(redeemed.user_code)?.state).toBe("redeemed");
+    expect(by(redeemed.user_code)?.token_name).toBe(t.token_name);
+    expect(by(denied.user_code)?.state).toBe("denied");
+    expect(rows.findIndex((r) => r.user_code === denied.user_code)).toBeLessThan(rows.findIndex((r) => r.user_code === expired.user_code));
+    expect((await listApprovedAwaitingPoll(db, o)).map((r) => r.client_name)).toEqual(["woodhouse"]);
+    expect((await listPendingAccess(db, o)).map((r) => r.user_code)).toEqual([pending.user_code]);
+  });
+
+  it("listClients counts what is live and names how each client was registered", async () => {
+    const clients = await listClients(db, o);
+    const named = (n: string) => clients.find((c) => c.name === n)!;
+    expect(named("redeemed-bot")).toMatchObject({ live_tokens: 1, pending_codes: 0, live_refresh_tokens: 1 });
+    expect(named("woodhouse")).toMatchObject({ live_tokens: 0, pending_codes: 1, live_refresh_tokens: 0 });
+    expect(named("pending-bot").pending_codes).toBe(1);
+    expect(named("late-bot")).toMatchObject({ live_tokens: 0, pending_codes: 0, live_refresh_tokens: 0 });
+    expect(clientOrigin(named("late-bot"))).toBe("device");
+    const dcr = await registerClient(db, { client_name: "dcr-app", redirect_uris: ["https://app.example/cb"] }, o);
+    expect(clientOrigin((await listClients(db, o)).find((c) => c.client_id === dcr.client_id)!)).toBe("registration");
+    expect(clientOrigin(clients.find((c) => c.name === "woodhouse@mini" || c.client_id.startsWith("rc_invite_"))!)).toBe("invite");
+  });
+
+  it("removeClient refuses while a token, code or refresh token is live, then removes with its codes", async () => {
+    const clients = await listClients(db, o);
+    const redeemed = clients.find((c) => c.name === "redeemed-bot")!;
+    const e = await fails(removeClient(db, redeemed.client_id, "human:kyle", o), "invalid_request");
+    expect(e.description).toMatch(/1 live token/);
+    const approved = clients.find((c) => c.name === "woodhouse")!;
+    await fails(removeClient(db, approved.client_id, "human:kyle", o), "invalid_request");
+    await fails(removeClient(db, "rc_unknown", "human:kyle", o), "invalid_client");
+
+    const live = await repo.listTokens(db);
+    const tok = live.find((t) => t.client_id === redeemed.client_id)!;
+    const rt = await db.query<{ token_hash: string }>("SELECT token_hash FROM oauth_refresh_tokens WHERE client_id = $1", [redeemed.client_id]);
+    await repo.revokeRefreshToken(db, rt[0]!.token_hash);
+    await repo.revokeTokenById(db, tok.id);
+    events.length = 0;
+    const gone = await removeClient(db, redeemed.client_id, "human:kyle", o);
+    expect(gone.name).toBe("redeemed-bot");
+    expect(await repo.getClient(db, redeemed.client_id)).toBeUndefined();
+    expect((await db.query("SELECT 1 FROM oauth_device_codes WHERE client_id = $1", [redeemed.client_id])).length).toBe(0);
+    expect((await db.query("SELECT 1 FROM oauth_refresh_tokens WHERE client_id = $1", [redeemed.client_id])).length).toBe(0);
+    expect((await repo.getTokenById(db, tok.id))?.client_id).toBe(redeemed.client_id);
+    expect(events.map((x) => x.kind)).toEqual(["access.client_removed"]);
+  });
+
+  it("invites write access.invite_created and access.invite_revoked", async () => {
+    events.length = 0;
+    const { invite } = await createInvite(db, { name: "audited", scopes: ["feed:read"], createdBy: "human:kyle" }, o);
+    expect(events.map((x) => x.kind)).toEqual(["access.invite_created"]);
+    expect(events[0]!.payload.invite_id).toBe(invite.id);
+    expect(await revokeInvite(db, invite.id, "human:kyle", o)).toBeDefined();
+    expect(events.map((x) => x.kind)).toEqual(["access.invite_created", "access.invite_revoked"]);
+    expect(await revokeInvite(db, invite.id, "human:kyle", o)).toBeUndefined();
+    expect(events.length).toBe(2);
+  });
+
+  it("purgeAccess removes day-old expired codes and orphan device clients, keeps everything live, and logs once", async () => {
+    const smoke = await deviceAuthorization(db, { client_name: "relay-smoke-test", scope }, o);
+    const dcr = await registerClient(db, { client_name: "kept-dcr", redirect_uris: ["https://app.example/cb"] }, o);
+    const fresh = await deviceAuthorization(db, { client_name: "fresh-bot", scope }, o);
+    const dayAgo = new Date(clock - 2 * 86_400_000);
+    // created_at defaults to the database clock; pin the two old clients to the test clock
+    await db.query("UPDATE oauth_clients SET created_at = $2 WHERE client_id = ANY($1::text[])", [[smoke.client_id, dcr.client_id], dayAgo]);
+
+    events.length = 0;
+    const before = await purgeAccess(db, o);
+    expect(before).toEqual({ device_codes: 0, auth_codes: 0, refresh_tokens: 0, clients: [] });
+    expect(events.length).toBe(0);
+
+    tick(DEVICE_CODE_TTL_SECONDS + 86_400 + 1);
+    const r = await purgeAccess(db, o);
+    expect(r.device_codes).toBeGreaterThan(0);
+    expect(r.clients).toContain("relay-smoke-test");
+    expect(r.clients).not.toContain("kept-dcr");
+    expect(r.clients).not.toContain("fresh-bot");
+    expect(r.clients).not.toContain("woodhouse");
+    expect(await repo.getClient(db, smoke.client_id)).toBeUndefined();
+    expect(await repo.getClient(db, fresh.client_id)).toBeDefined();
+    expect((await db.query("SELECT 1 FROM oauth_device_codes WHERE client_id = $1", [fresh.client_id])).length).toBe(0);
+    expect(events.map((x) => x.kind)).toEqual(["access.purged"]);
+    expect(events[0]!.payload.clients).toContain("relay-smoke-test");
+
+    // fresh-bot is now a day older than its (deleted) code and nothing else refers to it: the next sweep takes it
+    await db.query("UPDATE oauth_clients SET created_at = $2 WHERE client_id = $1", [fresh.client_id, new Date(clock - 2 * 86_400_000)]);
+    expect((await purgeAccess(db, o)).clients).toEqual(["fresh-bot"]);
+
+    // refresh tokens go 30 days after they expire, not before
+    expect((await purgeAccess(db, o)).refresh_tokens).toBe(0);
+    tick(REFRESH_TOKEN_TTL_SECONDS + 30 * 86_400 + 1);
+    const late = await purgeAccess(db, o);
+    expect(late.refresh_tokens).toBeGreaterThan(0);
+    expect((await db.query("SELECT 1 FROM oauth_refresh_tokens")).length).toBe(0);
   });
 });

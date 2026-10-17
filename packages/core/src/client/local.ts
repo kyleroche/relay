@@ -129,7 +129,7 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
       return r;
     },
     listInvites: (o = {}) => listInvites(db, o),
-    revokeInvite: (idOrName) => revokeInvite(db, idOrName),
+    revokeInvite: (idOrName) => revokeInvite(db, idOrName, opts.actor),
     whoami: async () => ({ actor: opts.actor, name: opts.actor, scopes: [...TOKEN_SCOPES], expires_at: null, source: "local" }),
 
     async addWebhook(input) {

@@ -6,7 +6,7 @@ export { openDb, DbError, DEFAULT_PGLITE_FILE, type Db, type OpenDbOptions } fro
 export { migrate, currentVersion, loadMigrations, MIGRATIONS_DIR, type Migration } from "./db/migrate.ts";
 export * as repo from "./db/repo.ts";
 export { TOKEN_SCOPES, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_PREFIX, isTokenScope, hashToken, type TokenScope, type TokenRow } from "./db/tokens.ts";
-export type { OAuthClientRow, DeviceCodeRow, RefreshTokenRow, InviteRow, DeviceStatus } from "./db/oauth.ts";
+export type { OAuthClientRow, DeviceCodeRow, DeviceRequestRow, RefreshTokenRow, InviteRow, DeviceStatus } from "./db/oauth.ts";
 export { sealValue, openValue, putSetting, getSetting, deleteSettings, listSettingKeys, type SettingRow } from "./db/settings.ts";
 export * from "./oauth/index.ts";
 export { TASK_STATES, isTaskState, parseTaskId, taskId, deriveTaskStatus, type TaskRow, type TaskState, type TaskStatus, type TaskView, type ClaimLike } from "./db/tasks.ts";

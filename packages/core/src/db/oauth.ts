@@ -56,6 +56,53 @@ export async function getClient(db: Db, clientId: string): Promise<OAuthClientRo
   return r[0] ? toClient(r[0]) : undefined;
 }
 
+/** A client with what still hangs off it, for the Access page's Clients list and the removal guard. */
+export interface OAuthClientSummary extends OAuthClientRow {
+  /** Tokens issued to the client that are neither revoked nor expired. */
+  live_tokens: number;
+  /** Device codes still pending or approved-and-unredeemed, not yet expired. */
+  pending_codes: number;
+  /** Refresh tokens that could still mint an access token (unused, unrevoked, unexpired). */
+  live_refresh_tokens: number;
+}
+
+const toClientSummary = (r: Record<string, unknown>): OAuthClientSummary => ({ ...toClient(r), live_tokens: num(r.live_tokens), pending_codes: num(r.pending_codes), live_refresh_tokens: num(r.live_refresh_tokens) });
+
+const scols = `${ccols
+  .split(", ")
+  .map((c) => `c.${c}`)
+  .join(", ")},
+  (SELECT count(*) FROM tokens t WHERE t.client_id = c.client_id AND t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > $1)) AS live_tokens,
+  (SELECT count(*) FROM oauth_device_codes d WHERE d.client_id = c.client_id AND d.status IN ('pending', 'approved') AND d.expires_at > $1) AS pending_codes,
+  (SELECT count(*) FROM oauth_refresh_tokens r WHERE r.client_id = c.client_id AND r.used_at IS NULL AND r.revoked_at IS NULL AND r.expires_at > $1) AS live_refresh_tokens`;
+
+/** Every registered client, newest first, with live counts as of `now`. */
+export async function listClients(db: Db, now: Date = new Date()): Promise<OAuthClientSummary[]> {
+  const r = await db.query(`SELECT ${scols} FROM oauth_clients c ORDER BY c.created_at DESC`, [now]);
+  return r.map(toClientSummary);
+}
+
+export async function getClientSummary(db: Db, clientId: string, now: Date = new Date()): Promise<OAuthClientSummary | undefined> {
+  const r = await db.query(`SELECT ${scols} FROM oauth_clients c WHERE c.client_id = $2`, [now, clientId]);
+  return r[0] ? toClientSummary(r[0]) : undefined;
+}
+
+/**
+ * Remove a client that nothing live depends on. Its authorization and device codes cascade (migration 006); its
+ * refresh tokens have no foreign key and are deleted here; its `tokens` rows keep their `client_id` as history.
+ * Returns the row removed, undefined when unknown, and throws when live tokens, codes or refresh tokens remain.
+ */
+export async function deleteClient(db: Db, clientId: string, now: Date = new Date()): Promise<OAuthClientRow | undefined> {
+  const c = await getClientSummary(db, clientId, now);
+  if (!c) return undefined;
+  if (c.live_tokens || c.pending_codes || c.live_refresh_tokens) {
+    throw new Error(`client ${c.name} still has ${c.live_tokens} live token(s), ${c.pending_codes} pending code(s) and ${c.live_refresh_tokens} live refresh token(s); revoke them first`);
+  }
+  await db.query("DELETE FROM oauth_refresh_tokens WHERE client_id = $1", [clientId]);
+  await db.query("DELETE FROM oauth_clients WHERE client_id = $1", [clientId]);
+  return c;
+}
+
 /** Constant-time check of a confidential client's secret; false for public clients and unknown ids. */
 export async function clientSecretMatches(db: Db, clientId: string, secret: string | undefined | null): Promise<boolean> {
   if (!secret) return false;
@@ -175,6 +222,27 @@ export async function userCodeTaken(db: Db, userCode: string): Promise<boolean> 
 export async function listPendingDevices(db: Db, now: Date = new Date()): Promise<DeviceCodeRow[]> {
   const r = await db.query(`SELECT ${dcols} ${dfrom} WHERE d.status = 'pending' AND d.expires_at > $1 ORDER BY d.created_at DESC`, [now]);
   return r.map(toDevice);
+}
+
+/** A device request with the name of the token it became, when it was redeemed. */
+export interface DeviceRequestRow extends DeviceCodeRow {
+  token_name: string | null;
+}
+
+/**
+ * What the Access page lists under Requests, newest first: every code that is still live (pending, or approved and
+ * waiting for the client to poll) plus everything created since `since`, so decisions of the last day stay visible.
+ * Codes live 15 minutes, so `created_at >= since` covers every decision taken in that window.
+ */
+export async function listRecentDevices(db: Db, opts: { since: Date; now?: Date }): Promise<DeviceRequestRow[]> {
+  const now = opts.now ?? new Date();
+  const r = await db.query(
+    `SELECT ${dcols}, t.name AS token_name ${dfrom} LEFT JOIN tokens t ON t.id = d.token_id
+     WHERE d.created_at >= $1 OR (d.status IN ('pending', 'approved') AND d.expires_at > $2)
+     ORDER BY d.created_at DESC`,
+    [opts.since, now],
+  );
+  return r.map((row) => ({ ...toDevice(row), token_name: (row.token_name as string | null) ?? null }));
 }
 
 /** Record a poll; the caller compares the row's previous `last_polled_at` with the interval to answer slow_down. */
@@ -330,4 +398,49 @@ export async function listInvites(db: Db, opts: { includeSpent?: boolean; now?: 
 export async function revokeInvite(db: Db, idOrName: string): Promise<InviteRow | undefined> {
   const r = await db.query(`UPDATE invites SET revoked_at = now() WHERE revoked_at IS NULL AND (id = $1 OR name = $1) RETURNING ${icols}`, [idOrName]);
   return r[0] ? toInvite(r[0]) : undefined;
+}
+
+// ---------- retention ----------
+
+export interface AccessPurgeResult {
+  device_codes: number;
+  auth_codes: number;
+  refresh_tokens: number;
+  /** Names of the orphan clients removed. */
+  clients: string[];
+}
+
+export const ACCESS_CODE_RETENTION_SECONDS = 24 * 60 * 60;
+export const REFRESH_TOKEN_RETENTION_SECONDS = 30 * 24 * 60 * 60;
+export const ORPHAN_CLIENT_AGE_SECONDS = 24 * 60 * 60;
+
+/**
+ * The retention sweep for the authorization server's tables, run by the site's cron and by `relay` locally. It
+ * removes device codes and authorization codes expired for more than a day (every status: the feed keeps the
+ * audit trail), refresh tokens expired for more than 30 days, and orphan clients: public clients the device flow
+ * registered on the fly (device grant, no redirect URIs) that are older than a day and have no tokens, no refresh
+ * tokens and no live codes. Clients registered with redirect URIs or a secret (DCR, confidential) are never removed
+ * here; the Access page's Remove button covers them.
+ */
+export async function purgeExpiredAccess(db: Db, now: Date = new Date(), deviceGrant = "urn:ietf:params:oauth:grant-type:device_code"): Promise<AccessPurgeResult> {
+  const codeCutoff = new Date(now.getTime() - ACCESS_CODE_RETENTION_SECONDS * 1000);
+  const refreshCutoff = new Date(now.getTime() - REFRESH_TOKEN_RETENTION_SECONDS * 1000);
+  const clientCutoff = new Date(now.getTime() - ORPHAN_CLIENT_AGE_SECONDS * 1000);
+  const dev = await db.query("DELETE FROM oauth_device_codes WHERE expires_at < $1 RETURNING device_code_hash", [codeCutoff]);
+  const auth = await db.query("DELETE FROM oauth_codes WHERE expires_at < $1 RETURNING code_hash", [codeCutoff]);
+  const refresh = await db.query("DELETE FROM oauth_refresh_tokens WHERE expires_at < $1 RETURNING token_hash", [refreshCutoff]);
+  const clients = await db.query<{ name: string }>(
+    `DELETE FROM oauth_clients c
+     WHERE c.client_secret_hash IS NULL
+       AND cardinality(c.redirect_uris) = 0
+       AND $1 = ANY(c.grant_types)
+       AND c.created_at < $2
+       AND NOT EXISTS (SELECT 1 FROM tokens t WHERE t.client_id = c.client_id)
+       AND NOT EXISTS (SELECT 1 FROM oauth_refresh_tokens r WHERE r.client_id = c.client_id)
+       AND NOT EXISTS (SELECT 1 FROM oauth_device_codes d WHERE d.client_id = c.client_id AND d.expires_at > $3)
+       AND NOT EXISTS (SELECT 1 FROM oauth_codes k WHERE k.client_id = c.client_id AND k.expires_at > $3)
+     RETURNING c.name`,
+    [deviceGrant, clientCutoff, now],
+  );
+  return { device_codes: dev.length, auth_codes: auth.length, refresh_tokens: refresh.length, clients: clients.map((c) => c.name) };
 }
