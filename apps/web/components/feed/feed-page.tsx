@@ -2,7 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Feed } from "@/components/feed/feed";
 import { NeedsReview } from "@/components/feed/needs-review";
-import { getAssets, getFeed, getProjects, getTasks, getWorkers } from "@/lib/data";
+import { PipelineMap } from "@/components/flow/pipeline-map";
+import { getAssets, getFeed, getFlow, getProjects, getTasks, getWorkers } from "@/lib/data";
 import { viewerTimeZone } from "@/lib/tz-server";
 
 /** The feed: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -28,7 +29,7 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     actor: one(sp.actor),
     kind: one(sp.kind),
   };
-  const [events, projects, allRecent, pending, review, workers, tz] = await Promise.all([
+  const [events, projects, allRecent, pending, review, workers, tz, flow] = await Promise.all([
     getFeed({ ...filters, limit: 150 }),
     getProjects(),
     getFeed({ limit: 300 }),
@@ -36,6 +37,7 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     getTasks({ state: "review", limit: 50 }),
     getWorkers(),
     viewerTimeZone(),
+    getFlow(),
   ]);
   const now = Date.now();
   const actors = [...new Set(allRecent.map((e) => e.actor))].sort();
@@ -100,7 +102,17 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
         </div>
       </section>
       {!filters.project && !filters.lane && !filters.actor && !filters.kind && (
-        <div className="mb-4">
+        <div className="mb-4 flex flex-col gap-4">
+          {/* what is moving, above what needs a decision: the strip answers "is anything stuck" before a single row is read */}
+          <div className="rounded-lg border bg-card">
+            <div className="flex items-center justify-between px-3 pt-2">
+              <span className="text-xs font-medium text-muted-foreground">In motion</span>
+              <Link href="/flow" className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                Full map
+              </Link>
+            </div>
+            <PipelineMap initial={flow} variant="strip" />
+          </div>
           <NeedsReview tasks={review} assets={pending} now={now} />
         </div>
       )}
