@@ -135,8 +135,8 @@ export default async function AssetPage({ params }: Props) {
               </>
             )}
             <dt className="text-[11px] text-muted-foreground">Kind</dt>
-            <dd className="font-mono text-xs">
-              {asset.kind} · {asset.mime}
+            <dd className="text-xs">
+              {asset.kind} · <span className="font-mono">{asset.mime}</span>
             </dd>
             <dt className="text-[11px] text-muted-foreground">Size</dt>
             <dd className="font-mono text-xs">

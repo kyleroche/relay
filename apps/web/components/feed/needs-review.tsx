@@ -34,10 +34,10 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
               <li key={t.id}>
                 <Link href={taskPagePath(t)} className="flex h-full flex-col gap-1 rounded-md border bg-card p-2 transition-colors hover:border-primary/50">
                   <span className="truncate text-sm">{t.run_summary ?? t.summary ?? t.id}</span>
-                  <span className="flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
-                    <span className="truncate">{t.id}</span>
+                  <span className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="truncate font-mono">{t.id}</span>
                     {t.pr && (
-                      <span className="inline-flex items-center gap-0.5">
+                      <span className="inline-flex items-center gap-0.5 font-mono">
                         PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />
                       </span>
                     )}
@@ -65,10 +65,10 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
                   <Thumb asset={a} className="size-12 shrink-0 rounded-sm" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm">{a.title}</span>
-                    <span className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-muted-foreground">
+                    <span className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
                       {a.project && <span>{a.project}</span>}
-                      {(a.pr ?? a.issue) && <span>#{a.pr ?? a.issue}</span>}
-                      <span>v{a.version}</span>
+                      {(a.pr ?? a.issue) && <span className="font-mono">#{a.pr ?? a.issue}</span>}
+                      <span className="font-mono">v{a.version}</span>
                       <RelTime iso={a.created_at} now={now} className="ml-auto" />
                     </span>
                     <span className="mt-1 block">

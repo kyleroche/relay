@@ -61,7 +61,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {done && (
         <p role="status" className={`rounded-md border p-3 text-sm ${done === "approved" ? "border-primary/40 bg-primary/5" : "border-warn/40 bg-warn/5"}`}>
-          {done === "approved" ? <>Approved. <span className="font-mono">{one(sp.client)}</span> will receive its token on its next poll; you can close this page.</> : <>Denied. <span className="font-mono">{one(sp.client)}</span> will be told so.</>}
+          {done === "approved" ? <>Approved. <span className="font-medium">{one(sp.client)}</span> will receive its token on its next poll; you can close this page.</> : <>Denied. <span className="font-medium">{one(sp.client)}</span> will be told so.</>}
         </p>
       )}
       {error && (
@@ -118,7 +118,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
             {pending.map((p) => (
               <li key={p.user_code} className="flex items-center justify-between gap-3 px-3 py-2">
                 <span className="min-w-0 truncate">
-                  <span className="font-mono">{p.user_code}</span> <span className="text-muted-foreground">from</span> <span className="font-mono">{p.client_name}</span>
+                  <span className="font-mono">{p.user_code}</span> <span className="text-muted-foreground">from</span> <span className="font-medium">{p.client_name}</span>
                 </span>
                 <Link href={`/activate?code=${encodeURIComponent(p.user_code)}`} className="shrink-0 underline underline-offset-4">
                   Review
@@ -138,7 +138,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
             {awaiting.map((a) => (
               <li key={a.user_code} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <span className="min-w-0 break-all">
-                  <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-mono">{a.client_name}</span>
+                  <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-medium">{a.client_name}</span>
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   token on its next poll; code expires <RelTime iso={a.expires_at} now={now} />

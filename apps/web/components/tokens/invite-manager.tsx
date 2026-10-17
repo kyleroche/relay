@@ -112,7 +112,7 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
         {result?.ok && result.code && (
           <div role="status" className="mx-4 mb-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
             <p className="font-medium">
-              Invite for <code className="font-mono">{result.name}</code> created. Send this line now; the code will not be shown again.
+              Invite for <span className="font-medium">{result.name}</span> created. Send this line now; the code will not be shown again.
             </p>
             <div className="mt-2 flex items-center gap-2">
               <code className="min-w-0 flex-1 select-all break-all rounded bg-background px-2 py-1.5 font-mono">{cliLine}</code>

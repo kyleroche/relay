@@ -118,8 +118,8 @@ export default async function ProjectPage({ params }: Props) {
                 {p.decisions.map((d) => (
                   <li key={d.id} className="flex flex-col gap-1 py-3">
                     <p className="text-[15px] leading-6">{d.text}</p>
-                    <p className="flex flex-wrap items-center gap-x-2 font-mono text-[11px] text-muted-foreground">
-                      <span>#{d.id}</span>
+                    <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                      <span className="font-mono">#{d.id}</span>
                       <span>·</span>
                       <span>source {d.source}</span>
                       {d.source_ref && (
@@ -135,7 +135,7 @@ export default async function ProjectPage({ params }: Props) {
                         </>
                       )}
                       <span>·</span>
-                      <time dateTime={d.valid_from} title={d.valid_from}>
+                      <time dateTime={d.valid_from} title={d.valid_from} className="font-mono">
                         {fmtDate(d.valid_from)}
                       </time>
                     </p>
@@ -183,7 +183,7 @@ export default async function ProjectPage({ params }: Props) {
                     <span className="min-w-0 truncate font-mono text-xs">{m.id}</span>
                     <ModelStatusBadge status={m.status} />
                   </div>
-                  <p className="mt-2 font-mono text-[11px] text-muted-foreground">
+                  <p className="mt-2 text-xs text-muted-foreground">
                     {m.guidance_count} guidance · {m.skill_count} skills
                     {m.onboarded_at && (
                       <>
@@ -192,7 +192,7 @@ export default async function ProjectPage({ params }: Props) {
                       </>
                     )}
                   </p>
-                  <p className="mt-1 text-[11px] text-muted-foreground">lanes: {m.lanes.join(", ")}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">lanes: {m.lanes.join(", ")}</p>
                 </li>
               ))}
             </ul>

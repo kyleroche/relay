@@ -67,7 +67,7 @@ export function ReviewActions({ taskId, pr, canWrite }: { taskId: string; pr: nu
           <SheetHeader>
             <SheetTitle>Request changes</SheetTitle>
             <SheetDescription>
-              Your note is posted on pull request #{pr} as <code className="font-mono">relay: changes requested by you</code> and handed to the next run as review feedback. The task goes back to the queue; the same branch and PR are reused. Write it for the model that will act on it.
+              Your note is posted on pull request #{pr} as &ldquo;relay: changes requested by you&rdquo; and handed to the next run as review feedback. The task goes back to the queue; the same branch and PR are reused. Write it for the model that will act on it.
             </SheetDescription>
           </SheetHeader>
           <div className="flex flex-col gap-3 px-4">
@@ -80,7 +80,7 @@ export function ReviewActions({ taskId, pr, canWrite }: { taskId: string; pr: nu
                 maxLength={10_000}
                 disabled={pending}
                 placeholder="The toggle has no focus ring; match the one on /settings. Keep the copy as it is."
-                className="min-h-32 rounded-md border bg-background px-3 py-2 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="min-h-32 rounded-md border bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 aria-label="Review note"
               />
             </label>

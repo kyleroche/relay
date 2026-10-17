@@ -59,13 +59,13 @@ export function AssetCard({ asset, now, showProject = true }: { asset: Asset; no
             <h3 className="line-clamp-2 text-sm font-medium leading-5">{asset.title}</h3>
             <AssetStatusBadge status={asset.status} className="shrink-0" />
           </div>
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
             {showProject && asset.project && <span>{asset.project}</span>}
-            {ref && <span>{ref}</span>}
-            <span>v{asset.version}</span>
+            {ref && <span className="font-mono">{ref}</span>}
+            <span className="font-mono">v{asset.version}</span>
             <span>{asset.kind}</span>
-            {dims && <span className="hidden sm:inline">{dims}</span>}
-            <span>{fmtSize(asset.size)}</span>
+            {dims && <span className="hidden font-mono sm:inline">{dims}</span>}
+            <span className="font-mono">{fmtSize(asset.size)}</span>
           </p>
           <div className="mt-auto flex items-center justify-between gap-2 pt-1 text-[11px] text-muted-foreground">
             <ActorChip actor={asset.created_by} />
