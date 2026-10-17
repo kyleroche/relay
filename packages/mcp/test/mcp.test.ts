@@ -63,9 +63,11 @@ describe("relay mcp tools", () => {
       "relay_prefer",
       "relay_project",
       "relay_recall",
+      "relay_task_approve",
       "relay_task_create",
       "relay_task_get",
       "relay_task_list",
+      "relay_task_request_changes",
       "relay_webhook_subscribe",
       "relay_webhook_unsubscribe",
       "relay_whoami",
@@ -224,6 +226,71 @@ describe("relay mcp tools", () => {
     await server.close();
   });
 
+  it("task review tools: approve merges and request-changes queues; scope and self-approval refusals", async () => {
+    // a task in review with its PR, produced by the codex lane on worker "codex-bot"
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 77, createdBy: "bot:grok", lane: "codex" });
+    const base = { project: "demo", repo: "acme/demo", issue: 77, lane: "codex" };
+    await repo.writeEvent(db, { ...base, kind: "run.started", actor: "runner:codex-bot", summary: "codex on codex-bot", payload: { branch: "relay/codex-77" }, ts: "2026-10-16T10:01:00.000Z" });
+    await repo.writeEvent(db, { ...base, kind: "pr.opened", actor: "agent:codex", summary: "codex: Add dark mode (#77)", pr: 9, url: "https://github.com/acme/demo/pull/9", payload: { branch: "relay/codex-77" }, ts: "2026-10-16T10:06:00.000Z" });
+    await repo.writeEvent(db, { ...base, kind: "preview.ready", actor: "bot:vercel", issue: null, pr: 9, summary: "Preview deployed for #9", url: "https://demo-git-relay-codex-77.vercel.app", payload: { ref: "relay/codex-77" }, ts: "2026-10-16T10:08:00.000Z" });
+    const merged: number[] = [];
+    const comments: string[] = [];
+    const github = {
+      source: "token" as const,
+      createIssue: async () => ({ number: 1, title: "", body: "", state: "open", html_url: "", labels: [] }),
+      addLabels: async () => {},
+      getIssue: async () => ({ number: 77, title: "t", body: "", state: "open", html_url: "", labels: [] }),
+      request: async () => ({}),
+      createComment: async (_r: string, n: number, body: string) => (comments.push(body), { id: 1, html_url: `https://github.com/acme/demo/pull/${n}#issuecomment-1` }),
+      getPullRequest: async (_r: string, n: number) => ({ number: n, title: "codex: Add dark mode", state: "open", merged: false, html_url: `https://github.com/acme/demo/pull/${n}`, head_ref: "relay/codex-77", head_sha: "abc", base_ref: "main", user: "relay-agent" }),
+      mergePullRequest: async (_r: string, n: number) => (merged.push(n), { sha: "deadbeef", merged: true, message: "ok" }),
+      deleteBranch: async () => {},
+    };
+    const events: repo.EventRow[] = [];
+
+    // the task carries its preview for whoever asks
+    const reader = await connect({ canWrite: false, scopes: ["tasks:read"] });
+    const view = jsonOf<{ state: string; preview_url: string; preview_state: string; pr_url: string }>(await reader.client.callTool({ name: "relay_task_get", arguments: { task_id: "acme/demo#77" } }));
+    expect(view).toMatchObject({ state: "review", preview_url: "https://demo-git-relay-codex-77.vercel.app", preview_state: "ready", pr_url: "https://github.com/acme/demo/pull/9" });
+    for (const name of ["relay_task_approve", "relay_task_request_changes"]) {
+      const r = await reader.client.callTool({ name, arguments: { id: "acme/demo#77", note: "x" } });
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toMatch(/tasks:write/);
+    }
+    await reader.client.close();
+    await reader.server.close();
+
+    // the lane's own bot cannot approve its PR
+    const self = await connect({ canWrite: false, scopes: ["tasks:write"], actor: "token:oauth:codex-bot", github, afterEvent: (row) => void events.push(row) });
+    const refused = await self.client.callTool({ name: "relay_task_approve", arguments: { id: "acme/demo#77" } });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/its own work/);
+    expect(merged).toEqual([]);
+    await self.client.close();
+    await self.server.close();
+
+    // another bot sends it back, then approves the second attempt
+    const grok = await connect({ canWrite: false, scopes: ["tasks:write", "tasks:read"], actor: "token:oauth:grok-bot", github, afterEvent: (row) => void events.push(row) });
+    const back = jsonOf<{ state: string; review: { decided: string; by: string; note: string } }>(await grok.client.callTool({ name: "relay_task_request_changes", arguments: { id: "acme/demo#77", note: "Focus ring missing." } }));
+    expect(back.state).toBe("queued");
+    expect(back.review).toMatchObject({ decided: "changes_requested", by: "bot:oauth:grok-bot", note: "Focus ring missing." });
+    expect(comments[0]).toContain("relay: changes requested by bot:oauth:grok-bot:");
+    expect(events.map((e) => e.kind)).toEqual(["task.changes_requested"]);
+    // not in review any more
+    expect((await grok.client.callTool({ name: "relay_task_approve", arguments: { id: "acme/demo#77" } })).isError).toBe(true);
+    // written with the database clock, like the decision above, so it sorts after it
+    await repo.writeEvent(db, { ...base, kind: "run.finished", actor: "runner:codex-bot", summary: "Added the ring", pr: 9, payload: { conclusion: "success" } });
+    const ok = jsonOf<{ state: string; merged_at: string | null; review: { decided: string } }>(await grok.client.callTool({ name: "relay_task_approve", arguments: { id: "acme/demo#77" } }));
+    expect(ok.state).toBe("done");
+    expect(ok.merged_at).toBeTruthy();
+    expect(ok.review.decided).toBe("approved");
+    expect(merged).toEqual([9]);
+    expect(events.map((e) => e.kind)).toEqual(["task.changes_requested", "task.approved"]);
+    expect(events[1]?.actor).toBe("bot:oauth:grok-bot");
+    await grok.client.close();
+    await grok.server.close();
+  });
+
   it("whoami tells an anonymous caller how to authenticate", async () => {
     const { client, server } = await connect({ canWrite: false, scopes: [], authorizationServer: "https://relay.test/.well-known/oauth-authorization-server" });
     const who = jsonOf<{ authenticated: boolean; name: string; how_to_authenticate: string }>(await client.callTool({ name: "relay_whoami", arguments: {} }));
@@ -235,7 +302,8 @@ describe("relay mcp tools", () => {
   });
 
   describe("access and invite tools (tokens:write)", () => {
-    let clock = Date.parse("2026-10-16T12:00:00.000Z");
+    // anchored to the real clock: findToken compares expiry against the database's now(), so a fixed date would expire the tokens
+    let clock = Math.floor(Date.now() / 1000) * 1000 - 3 * 3_600_000;
     const o = { issuer: "https://relay.test", now: () => clock };
     const events: repo.EventRow[] = [];
     const HELD: TokenScope[] = ["tasks:read", "tasks:write", "events:write", "tokens:write"];

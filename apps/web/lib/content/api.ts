@@ -46,7 +46,7 @@ Scopes are named and granted per token:
 | \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
 | \`assets:review\` | PUT /api/v1/assets/{id}/review |
 | \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{owner}/{repo}%23{n}, relay_task_get, relay_task_list |
-| \`tasks:write\` | POST /api/v1/tasks, relay_task_create |
+| \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/request-changes, relay_task_create, relay_task_approve, relay_task_request_changes |
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
 | \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
@@ -183,7 +183,9 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 |---|---|---|
 | \`POST /api/v1/tasks\` (\`createTask\`) | \`tasks:write\` | \`{"project","title","body","lane","priority","idempotency_key"}\`: opens the GitHub issue with \`agent:<lane>\`, records the task, writes \`issue.opened\` and \`task.created\`; 201, or 200 for a repeated key |
 | \`GET /api/v1/tasks\` (\`listTasks\`) | \`tasks:read\` | tasks newest first with derived state; \`project\`, \`state\`, \`limit\` |
-| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, running, review, done, failed), \`runner\`, \`pr_url\`, last \`summary\` |
+| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, claimed, running, review, done, failed), \`runner\`, \`pr_url\`, \`preview_url\` and \`preview_state\`, \`run_summary\`, \`usage\`, \`review\`, \`merged_at\`, last \`summary\` |
+| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/approve\` (\`approveTask\`) | \`tasks:write\` | squash-merge the PR of a task in review, delete its branch, write \`task.approved\` (the task is done); a bot may not approve a PR its own lane produced, and GitHub's refusal comes back as 502 with \`task.merge_failed\` |
+| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/request-changes\` (\`requestTaskChanges\`) | \`tasks:write\` | \`{"note"}\`: comment on the PR, write \`task.changes_requested\`, queue the task again; the next run gets the note in its brief |
 | \`POST /api/v1/events\` (\`logEvent\`) | \`events:write\` | \`{"kind":"external.<x>","project","summary","url","cost_equiv","source"}\`; the actor is the token's |
 | \`GET /api/v1/usage\` (\`getUsage\`) | \`feed:read\` | per-subscription totals since \`since\` |
 | \`GET /api/v1/projects/{slug}/decisions\` (\`listProjectDecisions\`) | \`memory:read\` | decision history, \`current=1\` for open ones |
@@ -197,7 +199,9 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 \`\`\`bash
 curl -s -X POST ${SITE_URL}/api/v1/tasks -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
   -d '{"project":"site","title":"Add dark mode to pricing","lane":"codex","priority":"high","idempotency_key":"conv-91:1"}'
-curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN" | jq '.tasks[] | {id, state, pr_url, summary}'
+curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN" | jq '.tasks[] | {id, state, pr_url, preview_url, run_summary}'
+curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/approve" -H "Authorization: Bearer $TOKEN"
+curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/request-changes" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"note":"The toggle has no focus ring; match the one on /settings."}'
 \`\`\`
 
 ## MCP server
@@ -218,7 +222,8 @@ curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
 | \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
-| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, running, review, done, failed) with runner, PR and last summary |
+| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, claimed, running, review, done, failed) with runner, PR, preview URL, run summary, usage and the review decision |
+| \`relay_task_approve\`, \`relay_task_request_changes\` | \`tasks:write\` | approve a task in review (relay squash-merges the PR and deletes the branch) or send it back with a note (PR comment, task queued again, note in the next brief). A bot never approves a PR its own lane produced |
 | \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
 | \`relay_whoami\` | public | this connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
 | \`relay_webhook_subscribe\`, \`relay_webhook_unsubscribe\` | \`webhooks:write\` | register an outbound webhook (the signing secret is returned once) and remove one |

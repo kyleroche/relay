@@ -10,6 +10,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  approveTask,
   approxTokens,
   compileBrief,
   createInvite,
@@ -28,6 +29,7 @@ import {
   renderDecision,
   renderPreference,
   repo,
+  requestChanges,
   revokeInvite,
   safeFilename,
   sniffMime,
@@ -35,6 +37,7 @@ import {
   TASK_PRIORITIES,
   TASK_STATES,
   TaskCreateError,
+  TaskReviewError,
   TOKEN_SCOPES,
   ulid,
   uploadKeyFor,
@@ -74,8 +77,10 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_asset_request_upload", scope: "assets:write", description: "Reserve an asset id and get a one-time upload URL; PUT the bytes there, then call relay_asset_finalize." },
   { name: "relay_asset_finalize", scope: "assets:write", description: "Turn an uploaded object into an asset row (probe, thumbnail, record) after relay_asset_request_upload." },
   { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a GitHub issue in the project's repo with the agent:<lane> label (and priority:<p>); returns task_id and issue_url. Idempotent on idempotency_key." },
-  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, claimed, running, review, done or failed, plus the worker, PR and last summary." },
-  { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state." },
+  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, claimed, running, review, done or failed, plus the worker, PR, preview URL (preview_url, preview_state), the lane's run summary, usage and the review decision." },
+  { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state. state=review is what waits for a decision." },
+  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its PR through GitHub, deletes the branch and writes task.approved (the task is done). A bot may approve only with tasks:write and never a PR its own lane produced; GitHub's refusal comes back as an error with task.merge_failed in the feed." },
+  { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: relay comments on the PR (relay: changes requested by <actor>: …), writes task.changes_requested and queues the task; the next run gets the note in its brief and pushes to the same PR." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
   { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
@@ -121,7 +126,7 @@ export interface RelayServerOptions {
   invalidateCache?: boolean;
   site?: SiteHooks;
   assets?: AssetHooks;
-  /** GitHub access for relay_task_create (env token on the web, the gh login locally). Without it the tool answers with an error. */
+  /** GitHub access for relay_task_create, relay_task_approve and relay_task_request_changes (env token on the web, the gh login locally). Without it the tools answer with an error. */
   github?: GitHubClient;
   /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
   afterEvent?: (row: repo.EventRow) => void | Promise<void>;
@@ -602,6 +607,47 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (g) return g;
       const rows = await repo.listTaskViews(db, { ...(project ? { project } : {}), ...(state && isTaskState(state) ? { state } : {}), limit: limit ?? 50 });
       return json({ tasks: rows, count: rows.length });
+    },
+  );
+
+  const reviewFail = (e: unknown, tool: string) =>
+    fail(`relay: ${e instanceof Error ? e.message : String(e)}${e instanceof TaskReviewError && e.status === 503 ? ` (${tool} needs GitHub access on the server)` : ""}`);
+
+  server.registerTool(
+    "relay_task_approve",
+    { title: "Approve and merge a task", description: toolDescription("relay_task_approve"), inputSchema: { id: z.string().min(3).describe("owner/repo#n") } },
+    async ({ id }) => {
+      const g = gate("tasks:write", "relay_task_approve");
+      if (g) return g;
+      try {
+        const r = await approveTask(db, opts.github, id.trim(), externalActor(actor), { scopes: [...granted] });
+        for (const e of r.events) await emit(e);
+        afterWrite(r.task.project);
+        return json({ task_id: r.task.id, state: r.task.state, pr_url: r.task.pr_url, merged_at: r.task.merged_at, review: r.task.review });
+      } catch (e) {
+        return reviewFail(e, "relay_task_approve");
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_task_request_changes",
+    {
+      title: "Request changes on a task",
+      description: toolDescription("relay_task_request_changes"),
+      inputSchema: { id: z.string().min(3).describe("owner/repo#n"), note: z.string().min(1).max(10_000).describe("what should change; written for the model that will address it") },
+    },
+    async ({ id, note }) => {
+      const g = gate("tasks:write", "relay_task_request_changes");
+      if (g) return g;
+      try {
+        const r = await requestChanges(db, opts.github, id.trim(), externalActor(actor), note, { scopes: [...granted] });
+        for (const e of r.events) await emit(e);
+        afterWrite(r.task.project);
+        return json({ task_id: r.task.id, state: r.task.state, pr_url: r.task.pr_url, review: r.task.review, next: "the next worker run gets the note under Review feedback in its brief and pushes to the same PR" });
+      } catch (e) {
+        return reviewFail(e, "relay_task_request_changes");
+      }
     },
   );
 
