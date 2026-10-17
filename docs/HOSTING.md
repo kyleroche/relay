@@ -110,7 +110,7 @@ ways to set it up; the environment always wins over a stored app, which is also 
 
 **One click (fresh deployment).** Sign in, open `https://<site>/setup/github`, optionally name the organization that
 should own the app, and press Create. The page posts a GitHub App manifest (name `relay-<host>`, permissions Actions
-read, Contents read, Deployments read, Issues write, Metadata read, Pull requests write; events issues, issue_comment,
+read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues write, Metadata read, Pull requests write; events issues, issue_comment,
 pull_request, pull_request_review, workflow_run, deployment_status; webhook `https://<site>/api/webhooks/github`) to
 `https://github.com/settings/apps/new` (or the organization's page). GitHub asks you to confirm and redirects to
 `/setup/github/callback`, which exchanges the one-time code (`POST /app-manifests/{code}/conversions`) and stores the

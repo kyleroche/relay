@@ -101,7 +101,8 @@ export function appManifest(opts: { name?: string } = {}): Record<string, unknow
     setup_url: `${SITE_URL}/setup/github`,
     setup_on_update: false,
     public: false,
-    default_permissions: { actions: "read", contents: "read", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" },
+    // contents: write because approving a task squash-merges the PR and deletes its branch through the App
+    default_permissions: { actions: "read", contents: "write", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" },
     default_events: ["issues", "issue_comment", "pull_request", "pull_request_review", "workflow_run", "deployment_status"],
   };
 }

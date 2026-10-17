@@ -346,7 +346,7 @@ and a webhook can relay it.
 ### GitHub App
 
 The web app's GitHub credential is an App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`, or the sealed settings the
-manifest flow on `/setup/github` wrote; the environment wins). It needs Actions read, Contents read, Deployments read,
+manifest flow on `/setup/github` wrote; the environment wins). It needs Actions read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read,
 Issues write, Metadata read, Pull requests write, and the events issues, issue_comment, pull_request,
 pull_request_review, workflow_run, deployment_status. Installation tokens are minted per repository with a nine-minute
 RS256 app JWT, cached in memory for their one-hour life and refreshed a minute early. The app's webhook deliveries are

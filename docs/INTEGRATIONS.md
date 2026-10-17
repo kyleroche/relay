@@ -141,7 +141,7 @@ scopes: a bot never invites to a scope it does not hold, and never to `tokens:wr
 
 relay opens issues, reads runs and pull requests and comments on reviews as a GitHub App installed on the
 organization, instead of someone's personal token. On a fresh deployment, `<site>/setup/github` (signed in) creates the
-app in one click: it posts a manifest with relay's permissions (Actions read, Contents read, Deployments read, Issues
+app in one click: it posts a manifest with relay's permissions (Actions read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues
 write, Metadata read, Pull requests write) and events (issues, issue_comment, pull_request, pull_request_review,
 workflow_run, deployment_status) to GitHub, GitHub asks you to confirm and sends the credentials back to
 `/setup/github/callback`, and relay stores the id, private key and webhook secret sealed in its database. Then install
