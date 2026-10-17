@@ -269,7 +269,7 @@ describe("service files", () => {
 describe("container plan (relay work --isolation container)", () => {
   const spec = { bin: "/usr/local/bin/container", image: "relay-worker:0.1.0", context: "/Users/kyle/.harness/container", site: "https://relay.example.com", workerName: "mac-container", host: "mac.local" };
   it("names the worker after the host", () => {
-    expect(containerWorkerName("Kyles-MacBook.local")).toBe("kyles-macbook-container");
+    expect(containerWorkerName("Studio.local")).toBe("studio-container");
     expect(containerWorkerName("mac")).toBe("mac-container");
   });
   it("creates relay-work on the named volume with no host mounts, the runtime masks off, and the worker identity in the environment", () => {

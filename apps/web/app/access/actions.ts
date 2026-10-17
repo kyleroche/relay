@@ -93,7 +93,7 @@ export async function createInviteAction(input: InviteInput): Promise<TokenActio
   const g = await gate();
   if (g.refused) return g.refused;
   const name = input.name.trim();
-  if (!name) return { ok: false, message: "Say who the invite is for, e.g. woodhouse; its token will be named oauth:<name>." };
+  if (!name) return { ok: false, message: "Say who the invite is for, e.g. concierge; its token will be named oauth:<name>." };
   const scopes = [...new Set(input.scopes.map((s) => s.trim()).filter(isTokenScope))];
   if (!scopes.length) return { ok: false, message: "Pick at least one scope." };
   const expires = input.expiresIn.trim() ? parseDuration(input.expiresIn) : undefined;

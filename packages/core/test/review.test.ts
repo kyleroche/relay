@@ -224,9 +224,9 @@ describe("approveTask", () => {
     expect(e2).toMatchObject({ status: 403, message: expect.stringContaining("its own work") });
     expect(merged).toEqual([]);
     // a different bot with tasks:write may
-    const ok = await approveTask(db, gh, t.id, "bot:woodhouse", { scopes: ["tasks:write"] });
+    const ok = await approveTask(db, gh, t.id, "bot:concierge", { scopes: ["tasks:write"] });
     expect(ok.task.state).toBe("done");
-    expect(ok.events[0]?.actor).toBe("bot:woodhouse");
+    expect(ok.events[0]?.actor).toBe("bot:concierge");
   });
 });
 

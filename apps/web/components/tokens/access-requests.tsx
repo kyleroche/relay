@@ -24,7 +24,7 @@ export interface RequestView {
   created_at: string;
   expires_at: string;
   decided_at: string | null;
-  /** The deciding actor, "human:kyle" or "bot:woodhouse"; rendered with ActorChip. */
+  /** The deciding actor, "human:kyle" or "bot:concierge"; rendered with ActorChip. */
   decided_by: string | null;
   token_name: string | null;
 }

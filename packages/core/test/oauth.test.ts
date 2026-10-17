@@ -312,11 +312,11 @@ describe("device flow", () => {
 
 describe("invites", () => {
   it("a single-use invite redeems once for a token named after it, then is spent", async () => {
-    const { code, invite } = await createInvite(db, { name: "woodhouse", scopes: ["tasks:read", "tasks:write", "events:write"], expiresInSeconds: 3600, createdBy: "human:kyle" }, o);
+    const { code, invite } = await createInvite(db, { name: "concierge", scopes: ["tasks:read", "tasks:write", "events:write"], expiresInSeconds: 3600, createdBy: "human:kyle" }, o);
     expect(code).toMatch(/^rin_/);
     expect(invite.uses_left).toBe(1);
-    const t = await exchangeToken(db, { grant_type: GRANT_INVITE, invite: code, client_name: "woodhouse@mini" }, o);
-    expect(t.token_name).toBe("oauth:woodhouse");
+    const t = await exchangeToken(db, { grant_type: GRANT_INVITE, invite: code, client_name: "concierge@laptop" }, o);
+    expect(t.token_name).toBe("oauth:concierge");
     expect(t.scope).toBe("tasks:read tasks:write events:write");
     const row = await findToken(db, t.access_token);
     expect(row?.created_by).toBe(`invite:${invite.id}`);
@@ -325,7 +325,7 @@ describe("invites", () => {
     await fails(exchangeToken(db, { grant_type: GRANT_INVITE, invite: "rin_nope" }, o), "invalid_grant");
     // the refresh token works like any other
     const t2 = await exchangeToken(db, { grant_type: "refresh_token", refresh_token: t.refresh_token }, o);
-    expect(t2.token_name).toBe("oauth:woodhouse");
+    expect(t2.token_name).toBe("oauth:concierge");
     expect(REFRESH_TOKEN_TTL_SECONDS).toBe(90 * 86_400);
   });
 
@@ -404,7 +404,7 @@ describe("the Access page and retention", () => {
     const expired = await deviceAuthorization(db, { client_name: "late-bot", scope }, o);
     tick(DEVICE_CODE_TTL_SECONDS + 1);
     const pending = await deviceAuthorization(db, { client_name: "pending-bot", scope }, o);
-    const approved = await deviceAuthorization(db, { client_name: "woodhouse", scope }, o);
+    const approved = await deviceAuthorization(db, { client_name: "concierge", scope }, o);
     const redeemed = await deviceAuthorization(db, { client_name: "redeemed-bot", scope }, o);
     const denied = await deviceAuthorization(db, { client_name: "denied-bot", scope }, o);
     await decideDeviceRequest(db, approved.user_code, "approve", "human:kyle", o);
@@ -422,7 +422,7 @@ describe("the Access page and retention", () => {
     expect(by(redeemed.user_code)?.token_name).toBe(t.token_name);
     expect(by(denied.user_code)?.state).toBe("denied");
     expect(rows.findIndex((r) => r.user_code === denied.user_code)).toBeLessThan(rows.findIndex((r) => r.user_code === expired.user_code));
-    expect((await listApprovedAwaitingPoll(db, o)).map((r) => r.client_name)).toEqual(["woodhouse"]);
+    expect((await listApprovedAwaitingPoll(db, o)).map((r) => r.client_name)).toEqual(["concierge"]);
     expect((await listPendingAccess(db, o)).map((r) => r.user_code)).toEqual([pending.user_code]);
   });
 
@@ -430,13 +430,13 @@ describe("the Access page and retention", () => {
     const clients = await listClients(db, o);
     const named = (n: string) => clients.find((c) => c.name === n)!;
     expect(named("redeemed-bot")).toMatchObject({ live_tokens: 1, pending_codes: 0, live_refresh_tokens: 1 });
-    expect(named("woodhouse")).toMatchObject({ live_tokens: 0, pending_codes: 1, live_refresh_tokens: 0 });
+    expect(named("concierge")).toMatchObject({ live_tokens: 0, pending_codes: 1, live_refresh_tokens: 0 });
     expect(named("pending-bot").pending_codes).toBe(1);
     expect(named("late-bot")).toMatchObject({ live_tokens: 0, pending_codes: 0, live_refresh_tokens: 0 });
     expect(clientOrigin(named("late-bot"))).toBe("device");
     const dcr = await registerClient(db, { client_name: "dcr-app", redirect_uris: ["https://app.example/cb"] }, o);
     expect(clientOrigin((await listClients(db, o)).find((c) => c.client_id === dcr.client_id)!)).toBe("registration");
-    expect(clientOrigin(clients.find((c) => c.name === "woodhouse@mini" || c.client_id.startsWith("rc_invite_"))!)).toBe("invite");
+    expect(clientOrigin(clients.find((c) => c.name === "concierge@laptop" || c.client_id.startsWith("rc_invite_"))!)).toBe("invite");
   });
 
   it("removeClient refuses while a token, code or refresh token is live, then removes with its codes", async () => {
@@ -444,7 +444,7 @@ describe("the Access page and retention", () => {
     const redeemed = clients.find((c) => c.name === "redeemed-bot")!;
     const e = await fails(removeClient(db, redeemed.client_id, "human:kyle", o), "invalid_request");
     expect(e.description).toMatch(/1 live token/);
-    const approved = clients.find((c) => c.name === "woodhouse")!;
+    const approved = clients.find((c) => c.name === "concierge")!;
     await fails(removeClient(db, approved.client_id, "human:kyle", o), "invalid_request");
     await fails(removeClient(db, "rc_unknown", "human:kyle", o), "invalid_client");
 
@@ -493,7 +493,7 @@ describe("the Access page and retention", () => {
     expect(r.clients).toContain("relay-smoke-test");
     expect(r.clients).not.toContain("kept-dcr");
     expect(r.clients).not.toContain("fresh-bot");
-    expect(r.clients).not.toContain("woodhouse");
+    expect(r.clients).not.toContain("concierge");
     expect(await repo.getClient(db, smoke.client_id)).toBeUndefined();
     expect(await repo.getClient(db, fresh.client_id)).toBeDefined();
     expect((await db.query("SELECT 1 FROM oauth_device_codes WHERE client_id = $1", [fresh.client_id])).length).toBe(0);
@@ -527,14 +527,14 @@ describe("the grant ceiling: a bot never grants more than it holds, and never to
 
   it("approvals: wider than held and tokens:write are refused, the subset passes, deny is always allowed, a person is unrestricted", async () => {
     const wide = await deviceAuthorization(cdb, { client_name: "wide", scope: "tasks:read memory:write" }, o);
-    const e1 = await fails(decideDeviceRequest(cdb, wide.user_code, "approve", "bot:oauth:woodhouse", o, held), "invalid_scope");
+    const e1 = await fails(decideDeviceRequest(cdb, wide.user_code, "approve", "bot:oauth:concierge", o, held), "invalid_scope");
     expect(e1.status).toBe(403);
     expect(e1.description).toContain("a bot can approve only scopes it holds itself, and never tokens:write; ask a person to approve this one at https://relay.test/activate");
     expect(e1.description).toContain("memory:write");
     expect((await lookupDeviceRequest(cdb, wide.user_code, o))?.status).toBe("pending");
 
     const approver = await deviceAuthorization(cdb, { client_name: "would-be-approver", scope: "tasks:read tokens:write" }, o);
-    const e2 = await fails(decideDeviceRequest(cdb, approver.user_code, "approve", "bot:oauth:woodhouse", o, held), "invalid_scope");
+    const e2 = await fails(decideDeviceRequest(cdb, approver.user_code, "approve", "bot:oauth:concierge", o, held), "invalid_scope");
     expect(e2.description).toContain("over the ceiling: tokens:write");
 
     // a credential whose scopes are not passed holds nothing
@@ -544,25 +544,25 @@ describe("the grant ceiling: a bot never grants more than it holds, and never to
     expect(grantCeilingError("bot:x", ["tasks:read"], ["tasks:read"], o)).toBeUndefined();
     expect(grantCeilingError("human:kyle", ["tokens:write"], undefined, o)).toBeUndefined();
 
-    expect((await decideDeviceRequest(cdb, wide.user_code, "deny", "bot:oauth:woodhouse", o, held)).status).toBe("denied");
-    const ok = await decideDeviceRequest(cdb, subset.user_code, "approve", "bot:oauth:woodhouse", o, held);
+    expect((await decideDeviceRequest(cdb, wide.user_code, "deny", "bot:oauth:concierge", o, held)).status).toBe("denied");
+    const ok = await decideDeviceRequest(cdb, subset.user_code, "approve", "bot:oauth:concierge", o, held);
     expect(ok.status).toBe("approved");
-    expect(ok.actor).toBe("bot:oauth:woodhouse");
+    expect(ok.actor).toBe("bot:oauth:concierge");
     expect((await exchangeToken(cdb, { grant_type: GRANT_DEVICE_CODE, device_code: subset.device_code, client_id: subset.client_id }, o)).scope).toBe("tasks:read tasks:write");
 
     expect((await decideDeviceRequest(cdb, approver.user_code, "approve", "human:kyle", o)).status).toBe("approved");
   });
 
   it("invites: the same ceiling on what the code will grant", async () => {
-    const e = await fails(createInvite(cdb, { name: "too-wide", scopes: ["tasks:read", "feed:read"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o), "invalid_scope");
+    const e = await fails(createInvite(cdb, { name: "too-wide", scopes: ["tasks:read", "feed:read"], createdBy: "bot:oauth:concierge", creatorScopes: held }, o), "invalid_scope");
     expect(e.status).toBe(403);
     expect(e.description).toContain("a bot can mint invites only for scopes it holds itself, and never tokens:write; ask a person to create this one at https://relay.test/tokens");
     expect(e.description).toContain("feed:read");
-    await fails(createInvite(cdb, { name: "approver", scopes: ["tokens:write"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o), "invalid_scope");
+    await fails(createInvite(cdb, { name: "approver", scopes: ["tokens:write"], createdBy: "bot:oauth:concierge", creatorScopes: held }, o), "invalid_scope");
     await fails(createInvite(cdb, { name: "unknown-holdings", scopes: ["tasks:read"], createdBy: "token:ci" }, o), "invalid_scope");
     expect((await listInvites(cdb)).length).toBe(0);
 
-    const ok = await createInvite(cdb, { name: "within", scopes: ["tasks:read", "tasks:write"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o);
+    const ok = await createInvite(cdb, { name: "within", scopes: ["tasks:read", "tasks:write"], createdBy: "bot:oauth:concierge", creatorScopes: held }, o);
     expect(ok.invite.scopes).toEqual(["tasks:read", "tasks:write"]);
     expect((await exchangeToken(cdb, { grant_type: GRANT_INVITE, invite: ok.code }, o)).token_name).toBe("oauth:within");
     expect((await createInvite(cdb, { name: "by-a-person", scopes: ["tokens:write"], createdBy: "human:kyle" }, o)).invite.scopes).toEqual(["tokens:write"]);

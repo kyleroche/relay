@@ -326,7 +326,7 @@ Three kinds of actor decide a device request or mint an invite, and the server t
 | Actor | Where | May grant |
 |---|---|---|
 | a signed-in person (`human:<login>`) | the Access page, `/activate`, the operator's own CLI | anything, including `tokens:write` |
-| a credential with `tokens:write` (`bot:oauth:woodhouse`, `token:ci`, the shared `RELAY_MEMORY_TOKEN` as `token:shared`) | `relay_access_approve`, `relay_invite_create` over `/mcp`; `POST /api/v1/access/{code}/approve`, `POST /api/v1/invites`, `POST /api/v1/tokens` | only scopes it holds itself, and never `tokens:write` |
+| a credential with `tokens:write` (`bot:oauth:concierge`, `token:ci`, the shared `RELAY_MEMORY_TOKEN` as `token:shared`) | `relay_access_approve`, `relay_invite_create` over `/mcp`; `POST /api/v1/access/{code}/approve`, `POST /api/v1/invites`, `POST /api/v1/tokens` | only scopes it holds itself, and never `tokens:write` |
 | anything else | nothing: the scope gate refuses before the decision | nothing |
 
 The ceiling is `grantCeilingError` in `packages/core/src/oauth/server.ts`, checked by `decideDeviceRequest` (approve

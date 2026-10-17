@@ -22,10 +22,10 @@ describe("sender allowlists", () => {
   });
 
   it("with RELAY_ALLOWED_SENDERS, both follow the list, case-insensitively", async () => {
-    process.env.RELAY_ALLOWED_SENDERS = " Kyle , woodhouse[bot]";
+    process.env.RELAY_ALLOWED_SENDERS = " Kyle , concierge[bot]";
     expect(await senderTrusted("acme/demo", "kyle")).toBe(true);
     expect(await senderMayOpenTasks("acme/demo", "KYLE")).toBe(true);
-    expect(await senderMayOpenTasks("acme/demo", "woodhouse[bot]")).toBe(true);
+    expect(await senderMayOpenTasks("acme/demo", "concierge[bot]")).toBe(true);
     expect(await senderTrusted("acme/demo", "stranger")).toBe(false);
     expect(await senderMayOpenTasks("acme/demo", "stranger")).toBe(false);
   });

@@ -85,7 +85,7 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
         <div className="grid gap-3 px-4 sm:grid-cols-[1fr_auto_auto] sm:items-end">
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground">For</span>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. woodhouse" maxLength={80} disabled={!canWrite || pending} aria-label="Invite name" />
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. concierge" maxLength={80} disabled={!canWrite || pending} aria-label="Invite name" />
           </label>
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground">Expires in</span>

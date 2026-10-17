@@ -17,7 +17,7 @@ export function registerInvite(program: Command): void {
 
   invite
     .command("create")
-    .requiredOption("--for <name>", "who it is for; the token will be named oauth:<name>, e.g. woodhouse")
+    .requiredOption("--for <name>", "who it is for; the token will be named oauth:<name>, e.g. concierge")
     .requiredOption("--scopes <list>", `comma-separated: ${TOKEN_SCOPES.join(", ")}`)
     .option("--expires <duration>", "how long the code works: 30m, 24h, 7d (default 24h)", "24h")
     .option("--uses <n>", "how many times it may be redeemed (default 1)", "1")

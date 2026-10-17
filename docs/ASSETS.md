@@ -206,7 +206,7 @@ deflate), so a bundle is never unpacked to disk.
   app's reviews are attributed to the signed-in GitHub user, `human:<login>` (docs/SECURITY.md); in mock mode to
   `RELAY_REVIEWER`, default `human:demo`.
 - The feed home shows the pending count in its header and a "Needs review" strip above the events whenever any
-  exist. Pending reviews also reach the front end (Grok Bot, iMessage) with a signed link; replying through Woodhouse
+  exist. Pending reviews also reach the front end (Grok Bot, iMessage) with a signed link; replying through Concierge
   calls the review route.
 
 ## Environment

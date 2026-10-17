@@ -218,7 +218,7 @@ export async function userCodeTaken(db: Db, userCode: string): Promise<boolean> 
   return r.length > 0;
 }
 
-/** Pending requests a person (or Woodhouse) may still act on, newest first. `now` is the server's clock. */
+/** Pending requests a person (or Concierge) may still act on, newest first. `now` is the server's clock. */
 export async function listPendingDevices(db: Db, now: Date = new Date()): Promise<DeviceCodeRow[]> {
   const r = await db.query(`SELECT ${dcols} ${dfrom} WHERE d.status = 'pending' AND d.expires_at > $1 ORDER BY d.created_at DESC`, [now]);
   return r.map(toDevice);

@@ -17,7 +17,7 @@ refresh tokens 90 days and rotate on use; `docs/SECURITY.md` ("Access for agents
 | You are | One step | Who approves |
 |---|---|---|
 | an MCP client with a browser (Claude Code, a desktop app) | point it at `<site>/mcp`; the 401 names the authorization server, the client registers itself and opens the consent page | the signed-in person clicks Approve |
-| a headless bot or a CLI (Grok Bot, Woodhouse, a runner) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` approves it from the chat where the code was relayed (`relay_access_approve` over MCP, or `POST /api/v1/access/<code>/approve`), for scopes the bot holds itself |
+| a headless bot or a CLI (Grok Bot, Concierge, a runner) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` approves it from the chat where the code was relayed (`relay_access_approve` over MCP, or `POST /api/v1/access/<code>/approve`), for scopes the bot holds itself |
 | a machine the operator sets up (`relay setup --site <site>`) | the CLI runs the device flow for you and stores the token with its refresh token | same as above; `--invite <code>` skips it |
 | anything the operator trusts in advance | `relay invite create --for <name> --scopes <a,b>`; the holder runs `relay setup --site <site> --invite <code>` or posts grant `urn:relay:invite` | nobody: the invite is the approval, once |
 | a GitHub organization | install the relay GitHub App once (`<site>/setup/github`) | the GitHub org owner, on GitHub |
@@ -77,7 +77,7 @@ curl -s -X POST https://relay.kyro.house/oauth/token \
 
 ```text
 relay_access_list()                                   → {pending: [{user_code: "RLAY-4F7Q", client_name: "grok-bot", scopes: [...], expires_at}], approved_awaiting_poll: []}
-relay_access_approve({user_code: "RLAY-4F7Q"})        → {user_code, status: "approved", client_name, scopes, decided_by: "bot:oauth:woodhouse"}
+relay_access_approve({user_code: "RLAY-4F7Q"})        → {user_code, status: "approved", client_name, scopes, decided_by: "bot:oauth:concierge"}
 relay_access_approve({user_code, decision: "deny"})   → {status: "denied"}
 ```
 
@@ -91,7 +91,7 @@ refused (`403`, or an MCP tool error) with "ask a person to approve this one at 
 person is unrestricted, so one approved bot can never grow into every token. A deny is always allowed.
 
 Every request is also an `access.requested` row in the feed with `user_code`, `client_name`, `scopes` and the
-approve path in its payload, so a webhook on `access.requested` lets Woodhouse say "grok-bot wants access (tasks,
+approve path in its payload, so a webhook on `access.requested` lets Concierge say "grok-bot wants access (tasks,
 events): approve RLAY-4F7Q?" over iMessage and approve it when the reply is yes. The decision writes
 `access.granted` or `access.denied`.
 
@@ -118,7 +118,7 @@ back to local mode.
 For a machine or bot the operator trusts in advance, an invite replaces the approval:
 
 ```bash
-pnpm relay invite create --for woodhouse --scopes tasks:read,tasks:write,events:write,tokens:write --expires 24h --uses 1
+pnpm relay invite create --for concierge --scopes tasks:read,tasks:write,events:write,tokens:write --expires 24h --uses 1
 # rin_…   (shown once)
 ```
 
@@ -126,14 +126,14 @@ The holder redeems it within the window, once:
 
 ```bash
 pnpm relay setup --site https://relay.kyro.house --invite rin_…            # a CLI machine
-curl -s -X POST https://relay.kyro.house/oauth/token -d grant_type=urn:relay:invite -d invite=rin_… -d client_name=woodhouse@mini   # anything else
+curl -s -X POST https://relay.kyro.house/oauth/token -d grant_type=urn:relay:invite -d invite=rin_… -d client_name=concierge@laptop   # anything else
 ```
 
-and receives a token named `oauth:woodhouse` with exactly the invite's scopes, plus a refresh token. `relay invite ls`
+and receives a token named `oauth:concierge` with exactly the invite's scopes, plus a refresh token. `relay invite ls`
 and `relay invite revoke <id|name>` manage them; `POST /api/v1/invites` is the REST form and
 `relay_invite_create({name, scopes, expires_in?, uses?})` / `relay_invite_revoke({id_or_name})` the MCP form (all
 `tokens:write`; the create answers with the code once and the `relay setup --site <site> --invite <code>` line). Giving
-Woodhouse `tokens:write` is what lets it approve other devices' codes and mint invites from chat, within its own
+Concierge `tokens:write` is what lets it approve other devices' codes and mint invites from chat, within its own
 scopes: a bot never invites to a scope it does not hold, and never to `tokens:write`. The person creates that invite
 (the one above) once, on the Access page or with the CLI.
 
@@ -317,12 +317,12 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
    "relay needs your approval: open relay.kyro.house/activate and approve RLAY-4F7Q, or just say yes." It starts
    polling `POST <site>/oauth/token` every 5 seconds.
 2. **Approve.** The user opens `/activate` (already signed in with GitHub), sees "grok-bot asks for access" with the
-   four scopes explained, clicks Approve; or says "yes, let grok-bot in" and Woodhouse, the chief-of-staff bot that
+   four scopes explained, clicks Approve; or says "yes, let grok-bot in" and Concierge, the chief-of-staff bot that
    holds a `tokens:write` token from an invite the person created once, calls `relay_access_list()` on `<site>/mcp`,
    finds `RLAY-4F7Q` for `grok-bot` with those four scopes, and calls `relay_access_approve({user_code: "RLAY-4F7Q"})`
-   (or posts `POST <site>/api/v1/access/RLAY-4F7Q/approve`). That works because Woodhouse holds those four scopes
-   itself; had grok-bot asked for `memory:write` or `tokens:write`, Woodhouse would be told to hand it to a person at
-   `/activate`. The feed shows `access.requested`, then `access.granted` by `bot:oauth:woodhouse`. No one opens the
+   (or posts `POST <site>/api/v1/access/RLAY-4F7Q/approve`). That works because Concierge holds those four scopes
+   itself; had grok-bot asked for `memory:write` or `tokens:write`, Concierge would be told to hand it to a person at
+   `/activate`. The feed shows `access.requested`, then `access.granted` by `bot:oauth:concierge`. No one opens the
    Access page.
 3. **Receive.** The next poll returns `{access_token: "rly_…", refresh_token: "rrt_…", expires_in: 86400,
    token_name: "oauth:grok-bot"}`. The bot stores both in its secret store and schedules a refresh before 24 hours.

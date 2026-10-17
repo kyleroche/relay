@@ -23,7 +23,7 @@ const fill: Record<ReturnType<typeof meterTone>, string> = {
   unknown: "bg-transparent",
 };
 
-/** "from kyrobook, 4m ago" for a vendor reading, "demo" or "set by RELAY_PLAN_METERS" for the others; "" for none. */
+/** "from laptop, 4m ago" for a vendor reading, "demo" or "set by RELAY_PLAN_METERS" for the others; "" for none. */
 export function meterProvenance(meter: PlanMeter, now: number = Date.now()): string {
   if (meter.source === "vendor") return `from ${meter.worker ?? "a worker"}${meter.capturedAt ? `, ${fmtAgo(meter.capturedAt, now)}` : ""}`;
   if (meter.source === "demo") return "demo";

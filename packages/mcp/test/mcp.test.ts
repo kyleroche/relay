@@ -409,7 +409,7 @@ describe("relay mcp tools", () => {
     const o = { issuer: "https://relay.test", now: () => clock };
     const events: repo.EventRow[] = [];
     const HELD: TokenScope[] = ["tasks:read", "tasks:write", "events:write", "tokens:write"];
-    const woodhouse = () => connect({ canWrite: false, scopes: HELD, actor: "token:oauth:woodhouse", oauth: o, afterEvent: (row) => void events.push(row) });
+    const concierge = () => connect({ canWrite: false, scopes: HELD, actor: "token:oauth:concierge", oauth: o, afterEvent: (row) => void events.push(row) });
     const poll = (d: { device_code: string; client_id: string }) => exchangeToken(db, { grant_type: GRANT_DEVICE_CODE, device_code: d.device_code, client_id: d.client_id }, o);
     const oauthCode = async (p: Promise<unknown>): Promise<string> => {
       try {
@@ -445,7 +445,7 @@ describe("relay mcp tools", () => {
       events.length = 0;
       const d = await deviceAuthorization(db, { client_name: "grok-bot", scope: "tasks:read tasks:write" }, o);
       expect(await oauthCode(poll(d))).toBe("authorization_pending");
-      const { client, server } = await woodhouse();
+      const { client, server } = await concierge();
 
       const listed = jsonOf<{ pending: Array<{ user_code: string; client_name: string; scopes: string[]; state: string; requested_at: string; expires_at: string }>; approved_awaiting_poll: unknown[]; count: number; next?: string }>(
         await client.callTool({ name: "relay_access_list", arguments: {} }),
@@ -459,9 +459,9 @@ describe("relay mcp tools", () => {
       const approved = jsonOf<{ user_code: string; status: string; client_name: string; scopes: string[]; decided_by: string; next: string }>(
         await client.callTool({ name: "relay_access_approve", arguments: { user_code: d.user_code.toLowerCase() } }),
       );
-      expect(approved).toMatchObject({ user_code: d.user_code, status: "approved", client_name: "grok-bot", scopes: ["tasks:read", "tasks:write"], decided_by: "bot:oauth:woodhouse" });
+      expect(approved).toMatchObject({ user_code: d.user_code, status: "approved", client_name: "grok-bot", scopes: ["tasks:read", "tasks:write"], decided_by: "bot:oauth:concierge" });
       expect(events.map((e) => e.kind)).toEqual(["access.granted"]);
-      expect(events[0]!.actor).toBe("bot:oauth:woodhouse");
+      expect(events[0]!.actor).toBe("bot:oauth:concierge");
 
       const after = jsonOf<{ pending: Array<{ user_code: string }>; approved_awaiting_poll: Array<{ user_code: string; state: string }> }>(await client.callTool({ name: "relay_access_list", arguments: {} }));
       expect(after.pending.map((p) => p.user_code)).not.toContain(d.user_code);
@@ -471,7 +471,7 @@ describe("relay mcp tools", () => {
       const t = await poll(d);
       expect(t.token_name).toBe("oauth:grok-bot");
       expect(t.scope).toBe("tasks:read tasks:write");
-      expect((await repo.findToken(db, t.access_token))?.created_by).toBe("bot:oauth:woodhouse");
+      expect((await repo.findToken(db, t.access_token))?.created_by).toBe("bot:oauth:concierge");
 
       // decided, unknown and malformed codes say what to do next
       const again = await client.callTool({ name: "relay_access_approve", arguments: { user_code: d.user_code } });
@@ -489,10 +489,10 @@ describe("relay mcp tools", () => {
 
     it("denies: the device's poll ends with access_denied", async () => {
       const d = await deviceAuthorization(db, { client_name: "stranger", scope: "tasks:read" }, o);
-      const { client, server } = await woodhouse();
+      const { client, server } = await concierge();
       const denied = jsonOf<{ status: string; decided_by: string; next?: string }>(await client.callTool({ name: "relay_access_approve", arguments: { user_code: d.user_code, decision: "deny" } }));
       expect(denied.status).toBe("denied");
-      expect(denied.decided_by).toBe("bot:oauth:woodhouse");
+      expect(denied.decided_by).toBe("bot:oauth:concierge");
       expect(denied.next).toBeUndefined();
       expect(await oauthCode(poll(d))).toBe("access_denied");
       await client.close();
@@ -502,7 +502,7 @@ describe("relay mcp tools", () => {
     it("expired codes name the way out", async () => {
       const d = await deviceAuthorization(db, { client_name: "late", scope: "tasks:read" }, o);
       clock += 16 * 60_000;
-      const { client, server } = await woodhouse();
+      const { client, server } = await concierge();
       const r = await client.callTool({ name: "relay_access_approve", arguments: { user_code: d.user_code } });
       expect(r.isError).toBe(true);
       expect(textOf(r)).toMatch(/expired.*fresh one/);
@@ -511,7 +511,7 @@ describe("relay mcp tools", () => {
     });
 
     it("a bot grants no more than it holds, and never tokens:write", async () => {
-      const { client, server } = await woodhouse();
+      const { client, server } = await concierge();
       const wide = await deviceAuthorization(db, { client_name: "wide", scope: "tasks:read memory:write" }, o);
       const r1 = await client.callTool({ name: "relay_access_approve", arguments: { user_code: wide.user_code } });
       expect(r1.isError).toBe(true);
@@ -538,7 +538,7 @@ describe("relay mcp tools", () => {
 
     it("mints an invite the invite grant accepts, revokes one, and rejects bad input", async () => {
       events.length = 0;
-      const { client, server } = await woodhouse();
+      const { client, server } = await concierge();
       const made = jsonOf<{ invite: { id: string; name: string; scopes: string[]; uses_left: number; expires_at: string }; code: string; setup: string; redeem: string; note: string }>(
         await client.callTool({ name: "relay_invite_create", arguments: { name: "runner", scopes: ["tasks:read", "events:write"], expires_in: "1h", uses: 2 } }),
       );
@@ -548,7 +548,7 @@ describe("relay mcp tools", () => {
       expect(made.setup).toBe(`relay setup --site https://relay.test --invite ${made.code}`);
       expect(made.redeem).toContain(GRANT_INVITE);
       expect(events.map((e) => e.kind)).toEqual(["access.invite_created"]);
-      expect(events[0]!.actor).toBe("bot:oauth:woodhouse");
+      expect(events[0]!.actor).toBe("bot:oauth:concierge");
 
       const t = await exchangeToken(db, { grant_type: GRANT_INVITE, invite: made.code, client_name: "runner@box" }, o);
       expect(t.token_name).toBe("oauth:runner");

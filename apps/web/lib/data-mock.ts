@@ -79,7 +79,7 @@ function meters(events: FeedEvent[], now: number): PlanMeter[] {
   const pct = (x: number) => Math.min(100, Math.round(x * 100));
   // Demo numbers (source "demo" so the UI can say so): computed from the mock ledger against made-up caps. A real
   // deployment composes these from the workers' heartbeat readings (lib/meters.ts).
-  const demo = { source: "demo" as const, capturedAt: new Date(now - 4 * 60_000).toISOString(), worker: "kyrobook" };
+  const demo = { source: "demo" as const, capturedAt: new Date(now - 4 * 60_000).toISOString(), worker: "laptop" };
   const none = { source: "none" as const, capturedAt: null, worker: null };
   return [
     { id: "max-5h", label: "5-hour", subscription: "max", percentUsed: pct(five), resetsAt: r5, resetsIn: fmtUntil(r5, now), ...demo },
