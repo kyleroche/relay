@@ -24,6 +24,15 @@ export default async function ProjectsPage() {
           Repositories linked with <code className="rounded bg-muted px-1 font-mono text-xs">relay link</code>, with their decisions and digest coverage.
         </PageIntro>
       </section>
+      {projects.length === 0 && (
+        <div className="rounded-md border border-dashed p-6 sm:p-10">
+          <h2 className="text-base font-medium">No projects linked</h2>
+          <p className="mt-2 max-w-prose text-sm text-muted-foreground">Run this in a repository on a machine with your coding-agent logins; it registers the project and writes its summary.</p>
+          <pre className="mt-4 overflow-x-auto rounded-md border bg-card p-3 font-mono text-xs leading-5">
+            <code className="language-bash">npx @kyleroche/relay link</code>
+          </pre>
+        </div>
+      )}
       <ul className="grid gap-3 sm:grid-cols-2">
         {projects.map((p) => (
           <li key={p.slug}>
@@ -59,8 +68,8 @@ export default async function ProjectsPage() {
               </dl>
               <div className="flex flex-wrap gap-1">
                 {p.lanes.map((l) => (
-                  <span key={l} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                    agent:{l}
+                  <span key={l} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title={`Issues labelled agent:${l} run on this lane`}>
+                    {l}
                   </span>
                 ))}
               </div>

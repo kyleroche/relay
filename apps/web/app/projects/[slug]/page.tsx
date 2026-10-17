@@ -83,11 +83,22 @@ export default async function ProjectPage({ params }: Props) {
                 </span>
               </dd>
             </div>
+            <div>
+              <dt className="text-[11px] text-muted-foreground">Lanes</dt>
+              <dd className="mt-0.5 flex flex-wrap gap-1">
+                {p.lanes.length === 0 && <span className="text-muted-foreground">—</span>}
+                {p.lanes.map((l) => (
+                  <Link key={l} href={`/?project=${p.slug}&lane=${l}`} className="rounded border bg-muted px-1.5 py-px font-mono text-xs hover:border-primary/50" title={`Feed: ${p.slug} on the ${l} lane`}>
+                    {l}
+                  </Link>
+                ))}
+              </dd>
+            </div>
           </dl>
         </div>
       </section>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex flex-col gap-10">
           <section aria-labelledby="decisions">
             <h2 id="decisions" className="text-lg font-semibold tracking-tight">
@@ -164,19 +175,6 @@ export default async function ProjectPage({ params }: Props) {
                     {m.onboarded_at && <> · onboarded {fmtAgo(m.onboarded_at, now)}</>}
                   </p>
                   <p className="mt-1 text-[11px] text-muted-foreground">lanes: {m.lanes.join(", ")}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-          <section aria-labelledby="lanes">
-            <h2 id="lanes" className="text-lg font-semibold tracking-tight">Lanes</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Labels on an issue that route it to a runner with that login.</p>
-            <ul className="mt-3 flex flex-wrap gap-1.5">
-              {p.lanes.map((l) => (
-                <li key={l}>
-                  <Link href={`/?project=${p.slug}&lane=${l}`} className="rounded border bg-muted px-2 py-0.5 font-mono text-xs hover:border-primary/50">
-                    agent:{l}
-                  </Link>
                 </li>
               ))}
             </ul>
