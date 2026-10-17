@@ -37,6 +37,10 @@ jobs:
       - name: Test
         run: pnpm -r test
 
+      - name: npm package builds, packs, installs clean and runs
+        # Builds @kyleroche/relay, installs the tarball into an empty directory and runs relay/relay-mcp from there.
+        run: scripts/check-package.sh
+
       - name: README commands exist
         # Every `pnpm <script>` line inside a ```bash block in README.md must name a root package.json script.
         run: scripts/check-readme-commands.sh
