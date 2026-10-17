@@ -50,9 +50,14 @@ the worker lanes for people who already operate them.
    or a label on GitHub (the webhook records it as a task). The task is `queued`.
 2. A worker whose logins allow that lane, and whose labels satisfy the project's `lane.labels`, claims it from the
    site under a 30-minute lease that its heartbeat renews. The task is `claimed`.
-3. The worker clones the repo fresh, branches `relay/<lane>-<issue>` from the base, fetches the brief, reports
-   `run.started` (`running`), and runs the vendor CLI headless with the planner and subagents disabled and the
-   vendor's own permission model.
+3. The worker clones the repo fresh, branches `relay/<lane>-<issue>` from the base, and grades the issue text (and the
+   latest reviewer note) with the injection gate (`packages/core/src/tasks/gate.ts`, `docs/SECURITY.md` "The gate"): a
+   deterministic pre-check, then one Sonnet call with no tools. Text that reads as instructions to the agent rather
+   than to the work is `task.held` (`held`): the lease goes back, nothing runs, and the task waits for a person (or a
+   `tokens:write` bot) to `task.released` it (`queued`). The site's pre-check runs at creation too, so an obviously
+   bad task is held before any worker claims it. A tripwire, not a boundary: the sandbox below is what contains a lane.
+   Otherwise the worker fetches the brief, reports `run.started` (`running`), and runs the vendor CLI headless with
+   the planner and subagents disabled and the vendor's own permission model.
 4. The result is committed as `relay-agent` and pushed; a PR opens with `Closes #N` and the usage line as a comment;
    the worker reports `run.finished` with tokens and cost (`review`). A lane that fails or changes nothing reports
    `run.failed` (`failed`). A worker that vanishes loses its lease and the task is `queued` again.

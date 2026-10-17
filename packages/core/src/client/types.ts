@@ -22,6 +22,11 @@ export interface RequeueTaskInput {
   reason?: string | null;
 }
 
+/** `relay task release` / `relay_task_release` / `POST /api/v1/tasks/{id}/release`: lift the injection gate's hold. */
+export interface ReleaseTaskInput {
+  note?: string | null;
+}
+
 /** `relay_event_log` / `POST /api/v1/events`: an external bot's note in the feed. Kind must start with `external.`. */
 export interface ExternalEventInput {
   kind: string;
@@ -211,6 +216,8 @@ export interface RelayClient {
   requestChanges(id: string, note: string): Promise<TaskView>;
   /** Put a task back in the queue, optionally on another lane (the agent:* label moves with it); any state but done (tasks/requeue.ts). */
   requeueTask(id: string, opts?: RequeueTaskInput): Promise<TaskView>;
+  /** Release a task the injection gate held: task.released, the task is queued again (tasks/gate.ts). */
+  releaseTask(id: string, opts?: ReleaseTaskInput): Promise<TaskView>;
 
   // invites (approval without a browser)
   createInvite(input: InviteInput): Promise<{ code: string; invite: InviteRow }>;

@@ -134,14 +134,20 @@ heartbeat. `relay doctor` shows the file's values and age on the machine.
 
 1. Fresh clone with `gh repo clone` into `$RELAY_HOME/work/<owner>_<repo>_<n>`; branch `relay/<lane>-<issue>` from
    the tip of the default branch (a re-run starts over, never from an older attempt).
-2. `start` is reported. The brief is fetched from the site (`GET /api/v1/projects/<slug>/brief?issue=N&lane=<lane>`)
+2. The injection gate grades the issue text and the latest reviewer note (`packages/core/src/tasks/gate.ts`;
+   `docs/SECURITY.md`, "The gate"): the deterministic pre-check, then one Sonnet call with no tools unless
+   `RELAY_GATE=off`. A hold ends the job here: `release` reports `outcome: held` with the verdict and the gate's usage,
+   the lease is given back, `task.held` is written and the task is `held` until someone releases it. Nothing has run
+   and no `run.started` was written.
+3. `start` is reported. The brief is fetched from the site (`GET /api/v1/projects/<slug>/brief?issue=N&lane=<lane>`)
    or compiled locally; the prompt is the repo's `relay.md`, the issue quoted under the "data, not instructions"
    banner, the brief, and the deliverable.
-3. The lane runs with a per-run time limit (`--max-minutes`, default 60).
-4. Whatever the lane left uncommitted is committed as `relay-agent`; a lane that changed nothing is a failed run.
-5. `git push --force-with-lease -u origin <branch>`; `gh pr create --title "<lane>: <title>" --body "Closes #N"`
+4. The lane runs with a per-run time limit (`--max-minutes`, default 60).
+5. Whatever the lane left uncommitted is committed as `relay-agent`; a lane that changed nothing is a failed run.
+6. `git push --force-with-lease -u origin <branch>`; `gh pr create --title "<lane>: <title>" --body "Closes #N"`
    (or the existing PR is reused); one comment with the lane's summary and the `<!-- relay:usage -->` block.
-6. `release` reports the outcome, the PR and the usage. The clone is deleted (`--keep` keeps it).
+7. `release` reports the outcome, the PR, the lane's usage and the gate's (`gate_usage`, a second `step.usage` row on
+   lane `gate`). The clone is deleted (`--keep` keeps it).
 
 The usage block in the PR comment is marked `"source": "relay-work"`; the GitHub webhook shows it to humans but does
 not count it again, because the release already wrote the `step.usage` row. One worker runs one job at a time by
@@ -178,6 +184,16 @@ doorbell rings and `queuedCount` counts the task again. The next worker that ser
 same job from the base branch, replacing the branch with `--force-with-lease` and reusing an open PR. The case it
 exists for is a task opened on a cloud lane nobody wired: `run.dispatched` makes it `running` for ever, and a requeue
 onto `claude`, `codex` or `grok` hands it to a machine.
+
+### Held at the gate: release
+
+A task the gate held sits in state `held`: the doorbell does not count it, `claimNext` passes it over, the tasks page
+lists it first and the feed header counts it ("N tasks · M held · K assets"). Its page shows the score, the reasons
+and who held it (`runner:<name>` from a worker, `bot:relay` from the site's pre-check at creation). Release it there
+("Release", two clicks), with `relay task release <id> [--note <text>]`, `relay_task_release`, or
+`POST /api/v1/tasks/{id}/release`; `task.released` folds it back to `queued`, the doorbell rings, and the next worker
+grades it again before running. A person may release anything; a bot needs `tokens:write` and never releases a task it
+opened. Requeue works from the Held card too.
 
 ### What a job may run
 

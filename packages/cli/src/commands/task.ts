@@ -1,5 +1,5 @@
 /**
- * `relay task …`: open, read, review and requeue tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
+ * `relay task …`: open, read, review, requeue and release tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
  * the issue is opened and the PR merged with the machine's gh login; in site mode the site does it with its own
  * GitHub credential. State is derived from the feed every time it is asked for (docs/INTEGRATIONS.md).
  */
@@ -135,6 +135,26 @@ export function registerTask(program: Command): void {
         if (o.json) console.log(JSON.stringify(t, null, 2));
         else {
           log(`requeued; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""}`);
+          show(t);
+        }
+      } finally {
+        await h.close();
+      }
+    });
+
+  task
+    .command("release")
+    .argument("<task-id>", "owner/repo#n")
+    .option("--note <text>", "why it is safe to run, for the feed")
+    .option("--json")
+    .description("Release a task the injection gate held: record task.released and queue it again (docs/SECURITY.md, \"The gate\")")
+    .action(async (id: string, o: { note?: string; json?: boolean }) => {
+      const h = await openReady();
+      try {
+        const t = await h.client.releaseTask(id, { note: o.note ?? null });
+        if (o.json) console.log(JSON.stringify(t, null, 2));
+        else {
+          log(`released; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""} (the worker's gate grades it again)`);
           show(t);
         }
       } finally {

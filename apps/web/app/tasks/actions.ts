@@ -1,6 +1,6 @@
 "use server";
 
-import { approveTask, requestChanges, requeueTask, TaskRequeueError, TaskReviewError } from "@relay/core";
+import { approveTask, releaseTask, requestChanges, requeueTask, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
 import { revalidatePath } from "next/cache";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -39,7 +39,7 @@ async function gate(): Promise<{ refused: TaskActionResult; by?: never } | { ref
   return by ? { by } : { refused: SIGNED_OUT };
 }
 
-const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof Error ? e.message : String(e));
+const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof TaskGateError || e instanceof Error ? e.message : String(e));
 
 function pagePath(taskId: string): string {
   const [repo, n] = taskId.split("#");
@@ -69,6 +69,21 @@ export async function requestChangesAction(taskId: string, note: string): Promis
   if (!note.trim()) return { ok: false, message: "Say what should change; the note goes to the PR and to the next run." };
   try {
     const r = await requestChanges(await getDb(), await siteGitHub(), taskId, g.by, note);
+    dispatchAfter(r.events);
+    revalidatePath(pagePath(taskId));
+    revalidatePath("/tasks");
+    return { ok: true, state: r.task.state };
+  } catch (e) {
+    return { ok: false, message: describe(e) };
+  }
+}
+
+/** Release a task the injection gate held: task.released is written and the task is queued again (the next worker grades it again). */
+export async function releaseTaskAction(taskId: string, note?: string | null): Promise<TaskActionResult> {
+  const g = await gate();
+  if (g.refused) return g.refused;
+  try {
+    const r = await releaseTask(await getDb(), taskId, g.by, { note: note ?? null });
     dispatchAfter(r.events);
     revalidatePath(pagePath(taskId));
     revalidatePath("/tasks");

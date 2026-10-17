@@ -65,7 +65,8 @@ export default async function TasksPage() {
   const now = Date.now();
   const byState = new Map<TaskState, TaskView[]>();
   for (const t of tasks) byState.set(t.state, [...(byState.get(t.state) ?? []), t]);
-  const order: TaskState[] = ["review", "running", "claimed", "queued", "failed", "done"];
+  // held first: the gate stopped these and a person should read them before anything else waits on a decision
+  const order: TaskState[] = ["held", "review", "running", "claimed", "queued", "failed", "done"];
   const groups = order.map((state) => ({ state, list: byState.get(state) ?? [] })).filter((g) => g.list.length > 0);
   return (
     <>
@@ -73,7 +74,7 @@ export default async function TasksPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
-            <PageIntro doc="/docs/workers">Every task is a GitHub issue; its state is read from the feed, and the ones in review wait for your decision.</PageIntro>
+            <PageIntro doc="/docs/workers">Every task is a GitHub issue; its state is read from the feed. Held ones were stopped by the injection gate and wait for you to read them; the ones in review wait for your decision.</PageIntro>
           </div>
           {db && <ReviewPrompt prompt={REVIEW_AGENT_PROMPT} />}
         </div>

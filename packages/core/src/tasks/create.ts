@@ -3,6 +3,10 @@
  * It opens the GitHub issue with the lane label (and a priority label when asked), records the task row, and writes
  * `issue.opened` and `task.created` to the feed. With an idempotency key a second call returns the first task and
  * opens nothing. The issue body ends with a hidden marker so the task can be traced back from GitHub.
+ *
+ * The injection gate's pre-check (gate.ts) runs on the title and body here, on whichever side opened the task (the
+ * site has no vendor login, so only the deterministic part runs at creation; the model grade happens on the worker):
+ * a hit writes `task.held` right away and the task is `held` before any worker can claim it.
  */
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
@@ -10,6 +14,7 @@ import { getProject } from "../db/projects.ts";
 import { createTask, findTaskByKey, taskView, type TaskView } from "../db/tasks.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { ulid } from "../util.ts";
+import { heldEvent, precheckTask } from "./gate.ts";
 
 /** Worker lanes execute on a machine that ran `relay work`; cloud lanes are dispatched by the site to the vendor's hosted tier. */
 export const WORKER_LANES = ["claude", "codex", "grok"] as const;
@@ -94,6 +99,12 @@ export async function openTask(db: Db, github: GitHubClient | undefined, input: 
   if (opened) events.push(opened);
   const createdEv = await writeEvent(db, { ...base, kind: "task.created", summary: `${task.id}: ${input.title.trim()}`, payload: { task_id: task.id, lane: input.lane, priority: input.priority ?? null, idempotency_key: key }, dedupe_key: `task:${task.id}:created` });
   if (createdEv) events.push(createdEv);
+  // the gate's pre-check: an obviously bad text is held here, before a worker spends a claim on it (gate.ts)
+  const hits = precheckTask(`${input.title}\n\n${input.body ?? ""}`);
+  if (hits.length) {
+    const held = await writeEvent(db, heldEvent({ ...task, lane: input.lane }, "bot:relay", { score: 1, reasons: hits.map((h) => `pre-check: ${h}`), grader: "precheck", model: null }, { payload: { opened_by: input.actor }, dedupe_key: `task:${task.id}:held:create` }));
+    if (held) events.push(held);
+  }
   const view = await taskView(db, task);
   return { task: view, task_id: view.id, issue_url: issue.html_url || view.issue_url, created, events };
 }

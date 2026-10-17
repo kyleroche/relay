@@ -7,7 +7,8 @@
  *   doorbell   GET  /api/v1/work/doorbell                 the queue version and a queued estimate; what an idle worker reads instead of claiming
  *   claim      POST /api/v1/work/claim                    the oldest queued task for the worker's lanes and labels, under a 30-minute lease
  *   start      POST /api/v1/work/{task}/start             run.started (the clone is ready and the lane is about to run)
- *   release    POST /api/v1/work/{task}/release           run.finished or run.failed plus the step.usage row; `released` just frees the lease
+ *   release    POST /api/v1/work/{task}/release           run.finished or run.failed plus the step.usage row; `released` just frees the lease;
+ *                                                        `held` frees it and writes task.held (the injection gate, tasks/gate.ts)
  *
  * Every row these write carries the worker as `runner:<name>`, the actor the feed, the task derivation and the
  * workers page already understand. A worker cannot write arbitrary kinds: the shape is fixed here.
@@ -19,6 +20,8 @@ import { getTask, type TaskRow } from "../db/tasks.ts";
 import { claimNext, doorbell, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
 import type { MeterReading } from "../meters.ts";
+import { heldEvent, type GateVerdict } from "../tasks/gate.ts";
+import { reviewNotes } from "../tasks/review.ts";
 
 export class WorkError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 409 = 400) {
@@ -73,6 +76,8 @@ export interface ClaimResult {
   issue: ClaimedIssue | null;
   /** The repository's default branch when known, else null (the worker asks git). */
   base: string | null;
+  /** The latest `task.changes_requested` note, when a reviewer sent the task back; the gate grades it with the issue. */
+  note?: string | null;
 }
 
 export interface StartInput {
@@ -96,7 +101,8 @@ export interface RunUsage {
 
 export interface ReleaseInput {
   worker_id: string;
-  outcome: "finished" | "failed" | "released";
+  /** `held`: the injection gate flagged the task's text; the lease is freed and `task.held` written (tasks/gate.ts). */
+  outcome: "finished" | "failed" | "released" | "held";
   /** For `finished`: `success` (a PR exists) or another non-failing word; a failing word makes the task `failed`. */
   conclusion?: string;
   summary?: string;
@@ -105,6 +111,10 @@ export interface ReleaseInput {
   pr_url?: string | null;
   duration_ms?: number | null;
   usage?: RunUsage | null;
+  /** For `held`: what the gate found. */
+  gate?: Pick<GateVerdict, "score" | "reasons" | "grader" | "model"> | null;
+  /** The gate's own model call, when one ran (with any outcome): written as a `step.usage` row on lane `gate`. */
+  gate_usage?: RunUsage | null;
 }
 
 export interface ReleaseResult {
@@ -160,7 +170,9 @@ export async function claimServer(db: Db, input: ClaimInput, opts: { github?: Gi
       /* the worker falls back to gh */
     }
   }
-  return { claim: got.claim, task: got.task, issue, base: null };
+  // the latest reviewer note rides along so the worker's gate grades it with the issue (the brief carries it too, but the brief is not graded)
+  const notes = await reviewNotes(db, got.task, 1).catch(() => []);
+  return { claim: got.claim, task: got.task, issue, base: null, note: notes.at(-1)?.note ?? null };
 }
 
 export async function startServer(db: Db, taskId: string, input: StartInput): Promise<{ claim: ClaimRow; events: EventRow[] }> {
@@ -191,12 +203,17 @@ export async function releaseServer(db: Db, taskId: string, input: ReleaseInput)
   if (!worker) throw new WorkError(`No worker ${input.worker_id}.`, 404);
   const task = await getTask(db, taskId);
   if (!task) throw new WorkError(`No task ${taskId}.`, 404);
-  const claim = await releaseClaim(db, taskId, worker.id, input.outcome);
+  // a hold gives the lease back (`released`): the task.held row below is what keeps it off the queue
+  const claim = await releaseClaim(db, taskId, worker.id, input.outcome === "held" ? "released" : input.outcome);
   if (!claim) throw new WorkError(`${worker.name} holds no live claim on ${taskId}.`, 409);
   const events: EventRow[] = [];
   const lane = task.lane;
   const base = { actor: actorOf(worker), project: task.project, repo: task.repo, issue: task.issue, lane, pr: input.pr ?? null, duration_ms: input.duration_ms ?? null };
-  if (input.outcome === "finished") {
+  if (input.outcome === "held") {
+    const gate = input.gate ?? { score: 1, reasons: [input.error ?? input.summary ?? "flagged by the gate"], grader: "precheck", model: null };
+    const e = await writeEvent(db, heldEvent(task, actorOf(worker), { score: gate.score, reasons: gate.reasons, grader: gate.grader, model: gate.model ?? null }, { payload: { worker: worker.id, claim: claim.id }, dedupe_key: `run:${claim.id}:held` }));
+    if (e) events.push(e);
+  } else if (input.outcome === "finished") {
     const conclusion = input.conclusion ?? "success";
     const e = await writeEvent(db, {
       ...base,
@@ -240,6 +257,31 @@ export async function releaseServer(db: Db, taskId: string, input: ReleaseInput)
       url: input.pr_url ?? null,
       payload: { tool: u.tool, worker: worker.id, claim: claim.id, mode: "code" },
       dedupe_key: `usage:${claim.id}`,
+    });
+    if (e) events.push(e);
+  }
+  // the gate's own call, like every other model call: one step.usage row, on lane `gate` (docs/SECURITY.md, "The gate")
+  const g = input.gate_usage;
+  if (g && (g.tokens_in || g.tokens_out || g.cache_read || g.cache_write)) {
+    const e = await writeEvent(db, {
+      kind: "step.usage",
+      actor: "agent:gate",
+      project: task.project,
+      repo: task.repo,
+      issue: task.issue,
+      lane: "gate",
+      model: g.model,
+      subscription: g.subscription,
+      tokens_in: g.tokens_in,
+      tokens_out: g.tokens_out,
+      cache_read: g.cache_read,
+      cache_write: g.cache_write,
+      cost_equiv: g.cost_equiv,
+      duration_ms: g.duration_ms,
+      summary: `gate ${g.model ?? g.tool}: ${g.tokens_in + g.cache_read} in / ${g.tokens_out} out`,
+      url: `https://github.com/${task.repo}/issues/${task.issue}`,
+      payload: { tool: g.tool, worker: worker.id, claim: claim.id, mode: "gate", verdict: input.outcome === "held" ? "hold" : "clear" },
+      dedupe_key: `usage:${claim.id}:gate`,
     });
     if (e) events.push(e);
   }

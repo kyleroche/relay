@@ -25,6 +25,8 @@ describe("stationOf", () => {
     expect(stationOf(base("running"))).toBe("Running");
     expect(stationOf(base("done"))).toBe("Merged");
     expect(stationOf(base("failed"))).toBe("Failed");
+    // the injection gate holds a task at the first stop; the flow task carries `held: true` for the flag
+    expect(stationOf(base("held"))).toBe("Queue");
   });
 
   it("splits review by the preview: PR until one is ready, then Preview", () => {
@@ -58,6 +60,9 @@ describe("stationSince", () => {
     expect(stationSince(base("queued"), "Queue", [ev("issue.labeled", 1), ev("run.started", 10), ev("task.changes_requested", 40)])).toBe(at(40));
     expect(stationSince(base("queued"), "Queue", [ev("issue.labeled", 1), ev("task.requeued", 45)])).toBe(at(45));
     expect(stationSince(base("queued"), "Queue", [ev("issue.labeled", 1), ev("pr.closed", 33)])).toBe(at(33));
+    // a hold and its release are re-entries too: the dwell timer counts from the gate's decision
+    expect(stationSince(base("held"), "Queue", [ev("issue.labeled", 1), ev("task.held", 2)])).toBe(at(2));
+    expect(stationSince(base("queued"), "Queue", [ev("issue.labeled", 1), ev("task.held", 2), ev("task.released", 50)])).toBe(at(50));
   });
 
   it("uses the live claim for Claimed (the feed has no row for it) and falls back to updated_at", () => {

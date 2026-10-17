@@ -68,6 +68,52 @@ data, never as instructions:
 The usage comment the runner posts is parsed only when the comment author is in `RELAY_ALLOWED_SENDERS`; anyone
 else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded from the ledger (`docs/FEED.md`).
 
+### The gate
+
+Before a worker runs a task, relay grades the task's text (`packages/core/src/tasks/gate.ts`): the issue title and
+body as the lane would see them, plus the latest `task.changes_requested` note, capped at 20 KB. A flagged task is
+**held**: the worker gives its claim back, writes `task.held` with the score and the reasons, and no worker claims it
+again until a person (or a `tokens:write` bot) releases it. **This is a tripwire in front of the sandbox, not a
+boundary.** What contains a fooled lane is the OS sandbox, the tool allowlist and branch protection above; the gate
+only keeps the obvious cases from costing a run, and a text that passes it is still treated as data by the brief.
+
+Two graders, in order:
+
+1. **The pre-check**, deterministic, no model call, runs everywhere the text is seen, including on the site when a
+   task is created over MCP or REST (the site has no vendor login, so this is the only part that runs at creation).
+   It holds when the text matches any of these markers (`GATE_MARKERS`): `ignore previous instructions` (and
+   "disregard / forget / override … prior / above / all / your … instructions / rules / guidance / prompt"),
+   `curl … | sh` (or `wget`, piped into any shell), `.ssh`, `credentials.json`, `GITHUB_TOKEN` (and `GH_TOKEN`),
+   `ANTHROPIC_API_KEY` (and `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `XAI_API_KEY`),
+   `--dangerously-skip-permissions`, `git push --force` (or `-f`) to `main` or `master`, and `~/.harness`
+   (`$RELAY_HOME`, `.harness/credentials`). A hit is `grader: precheck`, score 1, one reason per marker. These words
+   have honest uses (an issue about relay itself will name `GITHUB_TOKEN`); the cost of a false hold is one click on
+   the task page.
+2. **The model grade**, on the worker, after the clone and before `run.started`: one call on the utility lane (Sonnet
+   by default; `RELAY_GATE_MODEL=fable|opus|sonnet` overrides) through the Claude adapter with no tools,
+   `--setting-sources ""`, MCP servers off, no instruction files or memory, and structured output against the schema
+   `{ verdict: "clear" | "hold", score: 0..1, reasons: string[] }`. The prompt names what to look for (exfiltration or
+   credential access; changes to CI, hooks, git config, package scripts or dependencies that execute code; contacting
+   hosts; "ignore previous instructions"; disabling safety or pushing to a protected branch; anything addressed to the
+   model) and puts the text under a `<<<TASK … TASK>>>` fence as data; the only output is the grade. The call is a
+   `step.usage` row on lane `gate`, like every other model call. Measured 2026-10-17 on Sonnet: about 5.1 K context
+   tokens per grade (the system context, the prompt and the text; cache-written on the first call, 2.2 K of it read
+   back on the next), 170 to 200 output tokens, 4 seconds, $0.010 to $0.014 equivalent. A benign dark-mode request
+   graded `clear` at 0.03; a body asking for a postinstall that fetches a URL and a committed `.env` graded `hold` at
+   0.98 with four reasons. `RELAY_GATE=off` in the worker's environment skips this call; the pre-check still runs.
+
+A grader that cannot run (no Claude login on a codex-only worker, a timeout) does **not** hold the task: the verdict
+is `clear` with the error recorded, the worker logs `gate unavailable`, and the job runs under the sandbox as it would
+have without the gate. Set `RELAY_GATE=off` on such a worker to say so on purpose.
+
+Releasing: the task page's Held card ("Release", two clicks), `relay task release <id> [--note]`,
+`relay_task_release({id, note?})` or `POST /api/v1/tasks/<owner>/<repo>%23<n>/release`. A signed-in person may release
+anything held; a bot needs `tokens:write` (not `tasks:write`: releasing is vouching for text, the same trust as
+approving another agent's access) and never releases a task it opened itself. `task.released` folds the task back to
+`queued`; the next worker grades it again, so a pre-check hit holds it again unless the issue is edited or that worker
+runs with `RELAY_GATE=off`. Requeue from the Held card does the same without the gate's blessing: it is a release by
+another name, so the same people may do it.
+
 ## Workers (`relay work`)
 
 A worker is the operator's own machine running the vendor CLIs under the operator's own logins (`docs/WORKERS.md`).

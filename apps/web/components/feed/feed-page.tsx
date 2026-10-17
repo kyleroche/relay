@@ -29,12 +29,13 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     actor: one(sp.actor),
     kind: one(sp.kind),
   };
-  const [events, projects, allRecent, pending, review, workers, tz, flow] = await Promise.all([
+  const [events, projects, allRecent, pending, review, held, workers, tz, flow] = await Promise.all([
     getFeed({ ...filters, limit: 150 }),
     getProjects(),
     getFeed({ limit: 300 }),
     getAssets({ status: "pending", limit: 50 }),
     getTasks({ state: "review", limit: 50 }),
+    getTasks({ state: "held", limit: 50 }),
     getWorkers(),
     viewerTimeZone(),
     getFlow(),
@@ -79,6 +80,14 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
                   plural(0, "task")
                 )}
                 <span className="text-muted-foreground"> · </span>
+                {held.length > 0 ? (
+                  <Link href="/tasks" className="text-warn underline underline-offset-4" title="Held at the injection gate; read the issue text, then release or requeue">
+                    {held.length} held
+                  </Link>
+                ) : (
+                  "0 held"
+                )}
+                <span className="text-muted-foreground"> · </span>
                 {pending.length > 0 ? (
                   <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
                     {plural(pending.length, "asset")}
@@ -113,7 +122,7 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
             </div>
             <PipelineMap initial={flow} variant="strip" />
           </div>
-          <NeedsReview tasks={review} assets={pending} now={now} />
+          <NeedsReview tasks={[...held, ...review]} assets={pending} now={now} />
         </div>
       )}
       <Feed events={events} projects={projects.map((p) => p.slug)} actors={actors} filters={filters} tz={tz} />

@@ -2,6 +2,7 @@
  * One job on a worker: scripts/runner/run-lane.sh in TypeScript, over the lane adapters (docs/WORKERS.md).
  *
  *   fresh clone into $RELAY_HOME/work/<task>   ->  branch relay/<lane>-<issue> from the tip of the base branch
+ *   the injection gate (tasks/gate.ts) grades the issue text; a hold is reported as `held` and nothing else runs
  *   brief from the site (or the local database) + the issue text under the "data, not instructions" banner
  *   the vendor CLI under the machine's own login, with the vendor's permission model, never a bypass flag
  *   commit as the machine's GitHub login (relay-agent as co-author), push --force-with-lease, open (or reuse) the PR, one comment with the usage block
@@ -21,6 +22,7 @@ import { runFx } from "../lanes/fx.ts";
 import { runGrok } from "../lanes/grok.ts";
 import { SANDBOX_UNAVAILABLE } from "../lanes/sandbox.ts";
 import type { LaneRequest, LaneResult } from "../lanes/types.ts";
+import { gateText, gradeTask, type GateVerdict } from "../tasks/gate.ts";
 import { type Log, noopLog } from "../util.ts";
 import type { WorkApi } from "./api.ts";
 import type { ClaimResult, ClaimedIssue, RunUsage } from "./server.ts";
@@ -93,6 +95,10 @@ export interface GitHost {
 
 export type LaneRunner = (req: LaneRequest, lane: string) => Promise<LaneResult & { tool: string }>;
 
+/** The injection gate a job runs before its lane (`gradeTask` by default; tests inject a verdict). */
+export type TaskGrader = (text: string, ctx: { project: string; task: string; env: NodeJS.ProcessEnv }) => Promise<GateVerdict>;
+export const defaultGrader: TaskGrader = (text, ctx) => gradeTask(text, { project: ctx.project, task: ctx.task, env: ctx.env });
+
 /** The label a worker started with `--no-sandbox` advertises, so the site shows which machines run Claude's Bash unsandboxed. */
 export const NO_SANDBOX_LABEL = "sandbox:off";
 
@@ -113,6 +119,8 @@ export interface JobOptions {
   home?: string;
   gitHost?: GitHost;
   lane?: LaneRunner;
+  /** The injection gate (tasks/gate.ts); `RELAY_GATE=off` in the worker's environment skips its model call. */
+  gate?: TaskGrader;
   timeoutMs?: number;
   /** Keep the clone after the run (debugging). */
   keep?: boolean;
@@ -128,9 +136,13 @@ export interface JobResult {
   task: string;
   lane: string;
   branch: string;
-  outcome: "finished" | "failed";
+  /** `held`: the gate flagged the text; the lane did not run and the task waits for a release (tasks/gate.ts). */
+  outcome: "finished" | "failed" | "held";
   pr?: PrRef;
   usage: RunUsage;
+  /** The gate's own model call, when one ran. */
+  gateUsage?: RunUsage;
+  gate?: GateVerdict;
   summary: string;
   error?: string;
   durationMs: number;
@@ -354,9 +366,11 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
   const git = (args: string[]) => must("git", args, { cwd: dir });
   const empty: RunUsage = { tool: lane, model: null, subscription: null, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost_equiv: 0, duration_ms: 0 };
   let usage = empty;
+  let gateUsage: RunUsage | undefined;
+  let verdict: GateVerdict | undefined;
   let pr: PrRef | undefined;
   let summary = "";
-  const report = async (outcome: "finished" | "failed", extra: { error?: string; conclusion?: string }): Promise<JobResult> => {
+  const report = async (outcome: JobResult["outcome"], extra: { error?: string; conclusion?: string }): Promise<JobResult> => {
     const durationMs = Date.now() - t0;
     await opts.api.release(task.id, {
       worker_id: opts.workerId,
@@ -368,11 +382,15 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
       pr_url: pr?.url ?? null,
       duration_ms: durationMs,
       usage,
+      ...(gateUsage ? { gate_usage: gateUsage } : {}),
+      ...(outcome === "held" && verdict ? { gate: { score: verdict.score, reasons: verdict.reasons, grader: verdict.grader, model: verdict.model } } : {}),
     });
     if (!opts.keep) rmSync(dir, { recursive: true, force: true });
     const out: JobResult = { task: task.id, lane, branch, outcome, usage, summary, durationMs };
     if (pr) out.pr = pr;
     if (extra.error) out.error = extra.error;
+    if (gateUsage) out.gateUsage = gateUsage;
+    if (verdict) out.gate = verdict;
     log(`${task.id}: ${outcome}${pr ? ` ${pr.url}` : ""}${extra.error ? ` (${extra.error})` : ""} in ${Math.round(durationMs / 1000)}s`);
     return out;
   };
@@ -386,6 +404,18 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
     await git(["fetch", "-q", "origin", base]);
     await git(["checkout", "-q", "-B", branch, `origin/${base}`]); // always from the tip of the base, even on a re-run
     const issue = claim.issue ?? (await host.getIssue(task.repo, task.issue));
+
+    // The injection gate (tasks/gate.ts): the issue text as the lane would see it, plus the latest reviewer note, graded
+    // before run.started so a held task never shows as running. A hold frees the lease and ends the job here.
+    log(`${task.id}: grading the issue text`);
+    verdict = await (opts.gate ?? defaultGrader)(gateText({ title: issue.title, body: issue.body, note: claim.note ?? null }), { project: task.project, task: task.id, env: cleanEnv() });
+    if (verdict.result) gateUsage = toUsage({ ...verdict.result, tool: "claude" });
+    if (verdict.error) log(`${task.id}: gate unavailable (${verdict.error}); the pre-check passed, running anyway`);
+    if (verdict.verdict === "hold") {
+      summary = `held at the gate (${verdict.grader}, ${verdict.score.toFixed(2)}): ${verdict.reasons.join("; ")}`;
+      log(`${task.id}: ${summary}`);
+      return await report("held", { error: summary.slice(0, 300) });
+    }
     await opts.api.start(task.id, { worker_id: opts.workerId, branch, ...(opts.host ? { host: opts.host } : {}) });
 
     let brief = "";

@@ -1,6 +1,6 @@
 import type { Ledger, LedgerEntry } from "../ledger/ledger.ts";
 
-export type LaneName = "plan" | "review" | "code" | "3d" | "triage" | "digest" | "video" | "probe";
+export type LaneName = "plan" | "review" | "code" | "3d" | "triage" | "digest" | "video" | "probe" | "gate";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
 
 export interface LaneRequest {

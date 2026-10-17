@@ -743,7 +743,7 @@ function Train({
           className={cn("flow-train", compact && "flow-train--compact", failed && "flow-train--failed", running && !reduced && "flow-train--running", "focus-visible:outline-2 focus-visible:outline-ring")}
           style={{ "--lane": failed ? "var(--bad)" : color, "--lane-raw": color } as React.CSSProperties}
           title={t.title}
-          aria-label={`${t.id}: ${t.title}, ${t.station}${worker ? ` on ${worker}` : ""}, here for ${fmtDwell(t.since, now)}`}
+          aria-label={`${t.id}: ${t.title}, ${t.station}${t.held ? " (held at the gate)" : ""}${worker ? ` on ${worker}` : ""}, here for ${fmtDwell(t.since, now)}`}
           data-lane={lane}
         >
           <span className="flow-train-light" aria-hidden="true" />
@@ -756,7 +756,12 @@ function Train({
           </span>
           {showRepo && <span className="flow-train-repo">{repoName(t)}</span>}
           <span className="flow-train-n">#{t.issue}</span>
-          {t.preview_state === "failed" && t.station !== "Failed" && (
+          {t.held && (
+            <span className="flow-train-flag" title="held at the gate">
+              !
+            </span>
+          )}
+          {!t.held && t.preview_state === "failed" && t.station !== "Failed" && (
             <span className="flow-train-flag" title="preview failed">
               !
             </span>
@@ -780,6 +785,12 @@ function HoverCard({ t, now, worker, failed, vertical }: { t: FlowTask; now: num
         </dd>
         <dt>lane</dt>
         <dd className="font-mono">{t.lane ?? "none"}</dd>
+        {t.held && (
+          <>
+            <dt className="text-warn">held</dt>
+            <dd className="text-warn">the injection gate flagged the text; release it on the task page</dd>
+          </>
+        )}
         {worker && (
           <>
             <dt>worker</dt>

@@ -1,9 +1,9 @@
-import { Check, Clock, Eye, Globe, Lock, Play, X, type LucideIcon } from "lucide-react";
+import { Check, Clock, Eye, Globe, Lock, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
 import type { PreviewState, TaskState } from "@relay/core";
 import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import { STATE_HINT, STATE_TONE } from "@/lib/tasks";
 
-const ICON: Record<TaskState, LucideIcon> = { queued: Clock, claimed: Lock, running: Play, review: Eye, done: Check, failed: X };
+const ICON: Record<TaskState, LucideIcon> = { queued: Clock, held: ShieldAlert, claimed: Lock, running: Play, review: Eye, done: Check, failed: X };
 
 /** A task's state mapped to {icon, tone, label, hint}; the rendering is components/ui/status-badge.tsx. */
 export function TaskStateBadge({ state, className }: { state: TaskState; className?: string }) {

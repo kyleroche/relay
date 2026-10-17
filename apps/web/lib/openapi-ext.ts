@@ -230,6 +230,31 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         },
       },
     },
+    "/tasks/{owner}/{repo}%23{issue}/release": {
+      post: {
+        operationId: "releaseTask",
+        tags: ["tasks"],
+        summary: "Release a task the injection gate held",
+        description:
+          "A task in state `held` was stopped by the injection gate before a lane ran it: its issue text (or the latest reviewer note) read as instructions aimed at the agent (the `task.held` row carries the score, the reasons and whether the deterministic pre-check or the model grader decided). Release writes `task.released`; the task is `queued` again and the next worker grades it again before running (a pre-check marker holds it again unless the issue is edited or that worker runs with `RELAY_GATE=off`). For text a person has read and judged safe. A signed-in person may release anything held; a bot's token must hold `tokens:write`, and a bot never releases a task it opened itself. A tripwire in front of the sandbox, not a boundary.",
+        security: [{ bearer: ["tokens:write"] }],
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" } },
+          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { note: { type: "string", maxLength: 2000, description: "Why it is safe to run, for the feed row." } } } } } },
+        responses: {
+          "200": response("Released; the updated task (state queued).", "#/components/schemas/Task"),
+          "400": problemResponse("Bad task id or a note over 2000 characters."),
+          "403": problemResponse("A token without tokens:write, or the bot that opened the task."),
+          "404": problemResponse("No such task."),
+          "409": problemResponse("The task is not held."),
+          "501": notImplemented,
+          ...commonErrors,
+        },
+      },
+    },
     "/events": {
       post: {
         operationId: "logEvent",
@@ -603,7 +628,7 @@ export const integrationSchemas: Record<string, unknown> = {
       idempotency_key: nullable("string"),
       created_by: { type: "string" },
       created_at: { type: "string", format: "date-time" },
-      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, run.started → running, pr.opened or a finished run → review, task.changes_requested or task.requeued → queued, task.approved, pr.merged or issue.closed → done, run.failed or a failed run → failed." },
+      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, task.held → held (the injection gate; not claimable until task.released → queued), run.started → running, pr.opened or a finished run → review, task.changes_requested or task.requeued → queued, task.approved, pr.merged or issue.closed → done, run.failed or a failed run → failed." },
       runner: nullable("string", { description: "runner:<name> that last claimed it." }),
       lane: nullable("string"),
       pr: nullable("integer"),
@@ -893,7 +918,7 @@ export const integrationSchemas: Record<string, unknown> = {
     required: ["worker_id", "outcome"],
     properties: {
       worker_id: { type: "string" },
-      outcome: { type: "string", enum: ["finished", "failed", "released"] },
+      outcome: { type: "string", enum: ["finished", "failed", "released", "held"], description: "held: the injection gate flagged the task's text; the lease is freed and task.held written from `gate`." },
       conclusion: { type: "string", description: "For finished runs; default success." },
       summary: { type: "string" },
       error: { type: "string" },
@@ -901,6 +926,18 @@ export const integrationSchemas: Record<string, unknown> = {
       pr_url: nullable("string", { format: "uri" }),
       duration_ms: nullable("integer"),
       usage: { oneOf: [{ $ref: "#/components/schemas/RunUsage" }, { type: "null" }] },
+      gate: {
+        oneOf: [
+          {
+            type: "object",
+            required: ["score", "reasons", "grader"],
+            properties: { score: { type: "number", minimum: 0, maximum: 1 }, reasons: { type: "array", items: { type: "string" } }, grader: { type: "string", enum: ["precheck", "model", "off"] }, model: nullable("string") },
+          },
+          { type: "null" },
+        ],
+        description: "For `held`: what the gate found.",
+      },
+      gate_usage: { oneOf: [{ $ref: "#/components/schemas/RunUsage" }, { type: "null" }], description: "The gate's own model call, when one ran (any outcome): written as a step.usage row on lane `gate`." },
     },
   },
   WorkReport: { type: "object", properties: { claim: { $ref: "#/components/schemas/Claim" }, events: { type: "array", items: { type: "object", properties: { id: { type: "integer" }, kind: { type: "string" } } } } } },
