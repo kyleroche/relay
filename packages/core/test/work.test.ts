@@ -1,14 +1,18 @@
 /**
  * The scheduler (docs/WORKERS.md): claims are atomic and leased, expired leases re-queue, lane.labels gate claims,
- * task state learns `claimed`, and the server protocol writes the documented events.
+ * task state learns `claimed`, the server protocol writes the documented events, the queue version moves on every
+ * write that changes the queue, the doorbell counts what looks queued, and the worker loop backs off while idle.
  */
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus, type ClaimLike } from "../src/db/tasks.ts";
-import { claimServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError } from "../src/work/server.ts";
+import { localWorkApi, type WorkApi } from "../src/work/api.ts";
+import type { JobResult } from "../src/work/job.ts";
+import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
 import { servicePlan } from "../src/work/service.ts";
+import { runWorker } from "../src/work/worker.ts";
 
 let db: Db;
 let n = 0;
@@ -236,5 +240,250 @@ describe("service files", () => {
     expect(p.content).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
     expect(p.content).toContain("Environment=RELAY_HOME=/home/relay/.harness");
     expect(p.load.at(-1)).toEqual(["systemctl", "--user", "enable", "--now", "relay-work.service"]);
+  });
+});
+
+describe("queue version", () => {
+  it("moves when a task is opened, a claim is released or a lease expires, and not on a claim", async () => {
+    const v0 = await repo.getQueueVersion(db);
+    const task = await newTask("claude");
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 1);
+    // the same task again: nothing new, no bump
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: task.issue, createdBy: "human:kyle", lane: "claude" });
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 1);
+    const { worker } = await repo.registerWorker(db, { name: "bell", lanes: ["claude"] });
+    const got = await repo.claimNext(db, { workerId: worker.id, lanes: ["claude"], leaseMs: 1000 });
+    expect(got?.task.id).toBe(task.id);
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 1); // a claim takes work; it does not ring anyone's bell
+    // the lease runs out: the expiry re-queues the task and moves the version once, and a second sweep finds nothing
+    expect(await repo.expireLeases(db, Date.now() + 5000)).toHaveLength(1);
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 2);
+    expect(await repo.expireLeases(db, Date.now() + 5000)).toHaveLength(0);
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 2);
+    // claim again and release: one more move
+    expect((await repo.claimNext(db, { workerId: worker.id, lanes: ["claude"] }))?.task.id).toBe(task.id);
+    expect(await repo.releaseClaim(db, task.id, worker.id, "finished")).toBeDefined();
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 3);
+    expect(await repo.releaseClaim(db, task.id, worker.id, "finished")).toBeUndefined();
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 3);
+    // a worker lane learned late (relabelled on GitHub) is a queue change too
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: task.issue, createdBy: "human:kyle", lane: "codex" });
+    expect(await repo.getQueueVersion(db)).toBe(v0 + 4);
+  });
+});
+
+describe("doorbell", () => {
+  let fresh: Db;
+  let issue = 0;
+  const open = async (lane: string) => (await repo.createTask(fresh, { project: "demo", repo: "acme/demo", issue: ++issue, createdBy: "human:kyle", lane })).task;
+  beforeAll(async () => {
+    fresh = await openDb({ file: ":memory:" });
+    await migrate(fresh);
+    await repo.upsertProject(fresh, { slug: "demo", repo: "acme/demo", path: "/tmp/demo" });
+  });
+  afterAll(async () => {
+    await fresh.close();
+  });
+
+  it("counts the tasks that look queued, per lane, leaving out cloud lanes, live leases and finished runs", async () => {
+    expect(await doorbellServer(fresh)).toMatchObject({ version: 0, queued: 0 });
+    const a = await open("claude");
+    await open("codex-cloud"); // dispatched by the site, never claimed by a worker
+    const bell = await doorbellServer(fresh);
+    expect(bell.queued).toBe(1);
+    expect(bell.version).toBe(2);
+    expect(Date.parse(bell.ts)).toBeGreaterThan(0);
+    expect((await doorbellServer(fresh, { lanes: ["codex"] })).queued).toBe(0);
+    expect((await doorbellServer(fresh, { lanes: ["claude", "codex"] })).queued).toBe(1);
+    // a live lease takes it off the count; a release puts it back
+    const { worker } = await repo.registerWorker(fresh, { name: "w", lanes: ["claude"] });
+    const got = await repo.claimNext(fresh, { workerId: worker.id, lanes: ["claude"] });
+    expect(got?.task.id).toBe(a.id);
+    expect((await doorbellServer(fresh)).queued).toBe(0);
+    await repo.releaseClaim(fresh, a.id, worker.id, "released");
+    expect((await doorbellServer(fresh)).queued).toBe(1);
+    // started under a lease that then ran out: the worker vanished, so it looks queued again
+    await repo.claimNext(fresh, { workerId: worker.id, lanes: ["claude"], leaseMs: 1000 });
+    await repo.writeEvent(fresh, { kind: "run.started", actor: "runner:w", repo: a.repo, issue: a.issue, lane: "claude", summary: "x" });
+    expect((await doorbellServer(fresh)).queued).toBe(0);
+    await repo.expireLeases(fresh, Date.now() + 5000);
+    expect((await doorbellServer(fresh)).queued).toBe(1);
+    // a finished run ends it; a closed PR without a merge re-queues it; a merge is final
+    await repo.writeEvent(fresh, { kind: "run.finished", actor: "runner:w", repo: a.repo, issue: a.issue, lane: "claude", summary: "x", payload: { conclusion: "success" } });
+    expect((await doorbellServer(fresh)).queued).toBe(0);
+    await repo.writeEvent(fresh, { kind: "pr.closed", actor: "human:kyle", repo: a.repo, issue: a.issue, pr: 1, summary: "x" });
+    expect((await doorbellServer(fresh)).queued).toBe(1);
+    await repo.writeEvent(fresh, { kind: "pr.merged", actor: "human:kyle", repo: a.repo, issue: a.issue, pr: 1, summary: "x" });
+    expect((await doorbellServer(fresh)).queued).toBe(0);
+    // a run started by an Actions runner (no claim ever) is running, not queued
+    const b = await open("grok");
+    await repo.writeEvent(fresh, { kind: "run.started", actor: "runner:actions", repo: b.repo, issue: b.issue, lane: "grok", summary: "x" });
+    expect((await doorbellServer(fresh, { lanes: ["grok"] })).queued).toBe(0);
+    // the local WorkApi serves the same thing
+    const api = localWorkApi(fresh, { dispatch: false });
+    expect(await api.doorbell({ lanes: ["claude"] })).toMatchObject({ queued: 0, version: await repo.getQueueVersion(fresh) });
+  });
+
+  it("the heartbeat records the interval the worker is on", async () => {
+    const { worker } = await repo.registerWorker(fresh, { name: "slow", lanes: ["claude"] });
+    expect(worker.poll_ms).toBeNull();
+    const hb = await heartbeatServer(fresh, worker.id, { interval_ms: 300_000 });
+    expect(hb.worker.poll_ms).toBe(300_000);
+    // a heartbeat without one keeps the last
+    expect((await heartbeatServer(fresh, worker.id)).worker.poll_ms).toBe(300_000);
+    expect((await repo.workerViews(fresh)).find((w) => w.name === "slow")?.poll_ms).toBe(300_000);
+  });
+});
+
+/**
+ * The loop against a fake WorkApi under fake timers: `calls` is every request in order with its fake-clock time, so
+ * the request budget, the backoff and the heartbeat cadence are all visible. `set` changes what the doorbell says and
+ * what the next claim returns.
+ */
+function fakeWorkApi() {
+  const calls: Array<{ t: number; what: string; interval?: number }> = [];
+  const state = { version: 1, queued: 0, claims: [] as ClaimResult[] };
+  const worker = { id: "w1", name: "fake", host: "fake.local", lanes: ["claude"], labels: [], version: "0.1.0", last_seen: "", status: "online" as const, poll_ms: null, created_at: "" };
+  const api: WorkApi = {
+    mode: "local",
+    async register() {
+      calls.push({ t: Date.now(), what: "register" });
+      return { worker, created: true, events: [] };
+    },
+    async heartbeat(_id, input = {}) {
+      calls.push({ t: Date.now(), what: input.status === "offline" ? "heartbeat:offline" : "heartbeat", ...(input.interval_ms ? { interval: input.interval_ms } : {}) });
+      return { worker, leases: [], events: [] };
+    },
+    async doorbell() {
+      calls.push({ t: Date.now(), what: "doorbell" });
+      return { version: state.version, queued: state.queued, ts: new Date().toISOString() };
+    },
+    async claim() {
+      calls.push({ t: Date.now(), what: "claim" });
+      return state.claims.shift() ?? null;
+    },
+    async start() {},
+    async release() {},
+    async brief() {
+      return { text: "", tokens: 0 };
+    },
+    async workers() {
+      return [];
+    },
+  };
+  const claimFor = (id: string): ClaimResult => ({
+    claim: { id: `c-${id}`, task_id: id, worker_id: worker.id, lease_until: new Date(Date.now() + 1_800_000).toISOString(), claimed_at: new Date().toISOString(), released_at: null, outcome: null },
+    task: { id, project: "demo", repo: "acme/demo", issue: 1, idempotency_key: null, created_by: "human:kyle", created_at: "", lane: "claude" },
+    issue: null,
+    base: null,
+  });
+  const only = (what: string) => calls.filter((c) => c.what === what);
+  const since = (what: string, t: number) => only(what).filter((c) => c.t >= t);
+  /** Gaps between consecutive doorbell reads from `t` on, in seconds. */
+  const gaps = (t = 0) => since("doorbell", t).map((c) => c.t).map((x, i, a) => (i ? (x - a[i - 1]!) / 1000 : null)).filter((x): x is number => x !== null);
+  return { api, calls, state, claimFor, only, since, gaps };
+}
+
+describe("runWorker loop: doorbell and backoff", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("claims once at start, then only when the version moves; backs off 15 -> 30 -> ... -> 300 s; resets on work; heartbeats on cadence", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const f = fakeWorkApi();
+    const ac = new AbortController();
+    const intervals: number[] = [];
+    let jobStarted = -1;
+    const loop = runWorker({
+      api: f.api,
+      name: "fake",
+      host: "fake.local",
+      lanes: ["claude"],
+      version: "0.1.0",
+      signal: ac.signal,
+      onInterval: (ms) => intervals.push(ms / 1000),
+      runJob: async (claim): Promise<JobResult> => {
+        jobStarted = Date.now();
+        await new Promise((r) => setTimeout(r, 130_000)); // two heartbeats' worth of lane time
+        return { task: claim.task.id, lane: "claude", branch: "relay/claude-1", outcome: "finished", usage: { tool: "claude", model: null, subscription: null, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost_equiv: 0, duration_ms: 0 }, summary: "ok", durationMs: 130_000 };
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    // startup: register, one doorbell, one claim (the queue is drained at start whatever the bell says)
+    expect(f.calls.map((c) => c.what)).toEqual(["register", "doorbell", "claim"]);
+
+    // 20 idle minutes: the tick doubles from 15 s to the 5-minute cap and stays there; no claim is made
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
+    expect(f.gaps()).toEqual([15, 30, 60, 120, 240, 300, 300]);
+    expect(intervals).toEqual([30, 60, 120, 240, 300]);
+    expect(f.only("claim")).toHaveLength(1);
+    // idle heartbeats every 5 minutes, carrying the interval the worker is on
+    expect(f.only("heartbeat").map((c) => c.t / 1000)).toEqual([300, 600, 900, 1200]);
+    expect(f.only("heartbeat").at(-1)?.interval).toBe(300_000);
+
+    // work it cannot take (`queued` up, version unchanged): one claim per tick, still on the slow cadence
+    const t1 = Date.now();
+    f.state.queued = 1;
+    await vi.advanceTimersByTimeAsync(300_000);
+    expect(f.since("claim", t1)).toHaveLength(1);
+    expect(f.since("doorbell", t1)).toHaveLength(1);
+    expect(intervals.at(-1)).toBe(300);
+    f.state.queued = 0;
+
+    // the version moves and a task is there: the next tick (300 s after the last) claims it and is back on 15 s
+    const t2 = Date.now();
+    f.state.version = 2;
+    f.state.claims.push(f.claimFor("acme/demo#1"));
+    const nextTick = f.only("doorbell").at(-1)!.t + 300_000;
+    await vi.advanceTimersByTimeAsync(nextTick - Date.now());
+    expect(f.since("claim", t2).map((c) => c.t)).toEqual([nextTick]);
+    expect(jobStarted).toBe(nextTick);
+    expect(intervals.at(-1)).toBe(15);
+    // while the lease is held: a heartbeat every minute (on the timer's own grid), and no doorbell or claim
+    await vi.advanceTimersByTimeAsync(129_000);
+    const busyBeats = f.since("heartbeat", jobStarted + 1).map((c) => c.t / 1000);
+    expect(busyBeats).toHaveLength(2);
+    expect(busyBeats[1]! - busyBeats[0]!).toBe(60);
+    expect(f.since("doorbell", jobStarted + 1)).toHaveLength(0);
+    // the job finishes: one doorbell + claim right away (there may be more work), then the backoff restarts from 15 s
+    await vi.advanceTimersByTimeAsync(1_000);
+    const t3 = Date.now();
+    expect(t3).toBe(jobStarted + 130_000);
+    expect(f.since("claim", jobStarted + 1).map((c) => c.t)).toEqual([t3]);
+    await vi.advanceTimersByTimeAsync(46_000);
+    expect(f.gaps(t3)).toEqual([15, 30]);
+    expect(intervals.slice(-3)).toEqual([15, 30, 60]);
+
+    // stop: the loop reports offline once and returns what it ran
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    const r = await loop;
+    expect(r.ran).toBe(1);
+    expect(f.only("heartbeat:offline")).toHaveLength(1);
+    expect(f.calls.at(-1)?.what).toBe("heartbeat:offline");
+  });
+
+  it("a site without the doorbell makes the loop claim on every tick, still backing off; --once never rings", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const f = fakeWorkApi();
+    f.api.doorbell = async () => {
+      f.calls.push({ t: Date.now(), what: "doorbell" });
+      return null;
+    };
+    const ac = new AbortController();
+    const loop = runWorker({ api: f.api, name: "fake", host: "fake.local", lanes: ["claude"], version: "0.1.0", signal: ac.signal });
+    await vi.advanceTimersByTimeAsync(105_000);
+    expect(f.only("claim").map((c) => c.t / 1000)).toEqual([0, 15, 45, 105]);
+    ac.abort();
+    await vi.advanceTimersByTimeAsync(0);
+    await loop;
+
+    const g = fakeWorkApi();
+    const once = await runWorker({ api: g.api, name: "fake", host: "fake.local", lanes: ["claude"], version: "0.1.0", once: true });
+    expect(once.ran).toBe(0);
+    expect(g.calls.map((c) => c.what)).toEqual(["register", "claim", "heartbeat:offline"]);
   });
 });

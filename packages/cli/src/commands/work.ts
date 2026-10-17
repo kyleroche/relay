@@ -1,7 +1,7 @@
 /**
- * `relay work`: this machine becomes a worker (docs/WORKERS.md). It registers with the lanes its logins allow,
- * heartbeats every minute, claims the oldest queued task it can run, runs it with the vendor CLI under the
- * machine's own login, opens the PR and reports usage. In site mode (`relay setup --site`) everything goes through the
+ * `relay work`: this machine becomes a worker (docs/WORKERS.md). It registers with the lanes its logins allow, reads
+ * the queue's doorbell on a tick that stretches from 15 s to 5 min while nothing is queued, claims the oldest queued
+ * task it can run, runs it with the vendor CLI under the machine's own login, opens the PR and reports usage. In site mode (`relay setup --site`) everything goes through the
  * hosted relay; without a site it schedules against the local database.
  *
  *   relay work                 foreground loop; logs to $RELAY_HOME/work.log
@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { detectGitHub, httpWorkApi, localWorkApi, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
+import { detectGitHub, httpWorkApi, localWorkApi, MAX_IDLE_MS, POLL_MS, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
 import { log, openReady } from "./_common.ts";
 import { detectLanes } from "./probes.ts";
 
@@ -26,6 +26,7 @@ interface WorkOptions {
   jobs: string;
   name?: string;
   interval: string;
+  maxInterval?: string;
   maxMinutes: string;
   keep?: boolean;
   install?: boolean;
@@ -57,13 +58,14 @@ async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () =
   return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name">) {
+function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval">) {
   const platform = process.platform === "darwin" ? "darwin" : "linux";
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
   if (o.labels) args.push("--labels", o.labels);
   if (o.jobs && o.jobs !== "1") args.push("--jobs", o.jobs);
   if (o.name) args.push("--name", o.name);
+  if (o.maxInterval) args.push("--max-interval", o.maxInterval);
   const rp = runtimePaths();
   return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}) });
 }
@@ -77,11 +79,22 @@ const sh = (words: string[]): { ok: boolean; out: string } => {
   }
 };
 
+const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
+
 function fmtWorker(w: WorkerView, now: number): string {
   const ago = Math.max(0, Math.round((now - new Date(w.last_seen).getTime()) / 1000));
   const seen = ago < 90 ? `${ago}s ago` : ago < 5400 ? `${Math.round(ago / 60)}m ago` : `${Math.round(ago / 3600)}h ago`;
   const cur = w.current ? `  on ${w.current.task_id} since ${w.current.claimed_at.slice(11, 16)}Z` : "";
-  return `${w.name.padEnd(14)} ${w.state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}${cur}`;
+  const every = w.poll_ms && w.state !== "offline" ? `  every ${fmtInterval(w.poll_ms)}` : "";
+  return `${w.name.padEnd(14)} ${w.state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${every}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}${cur}`;
+}
+
+/** `--max-interval`, else RELAY_WORK_MAX_INTERVAL, else 5 minutes; never below the first tick. */
+function maxIntervalMs(flag: string | undefined, pollMs: number): number {
+  const raw = flag ?? process.env.RELAY_WORK_MAX_INTERVAL;
+  const n = raw === undefined || raw === "" ? NaN : Number(raw);
+  if (raw !== undefined && raw !== "" && (!Number.isFinite(n) || n <= 0)) throw new Error(`--max-interval: '${raw}' is not a number of seconds`);
+  return Math.max(pollMs, Number.isFinite(n) ? n * 1000 : MAX_IDLE_MS);
 }
 
 export function registerWork(program: Command, version: string): void {
@@ -93,7 +106,8 @@ export function registerWork(program: Command, version: string): void {
     .option("--labels <list>", "capabilities this worker advertises, matched against a project's lane.labels preference, e.g. gpu,xcode")
     .option("--jobs <n>", "concurrent jobs (the lanes still serialize per vendor login)", "1")
     .option("--name <name>", "worker name (default: this host's short name)")
-    .option("--interval <seconds>", "seconds between empty polls", "15")
+    .option("--interval <seconds>", "the first tick after activity; the loop doubles it while nothing is queued", String(POLL_MS / 1000))
+    .option("--max-interval <seconds>", `the longest tick while idle (default ${MAX_IDLE_MS / 1000}, or RELAY_WORK_MAX_INTERVAL); set it above your database's auto-suspend timeout to let it sleep`)
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
     .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it")
@@ -113,8 +127,11 @@ export function registerWork(program: Command, version: string): void {
         if (!serving.length) throw new Error(`no lanes to serve: ${d.reasons.join("; ")}. Log in, or force with --lanes.`);
         if (d.reasons.length) out(`not serving: ${d.reasons.join("; ")}`);
       }
+      const pollMs = Math.max(5, Number(o.interval) || POLL_MS / 1000) * 1000;
+      const maxIdleMs = maxIntervalMs(o.maxInterval, pollMs);
+      const debug = process.env.RELAY_DEBUG ? (m: string) => out(`debug: ${m}`) : undefined;
       const { api, where, close } = await openWorkApi();
-      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `polling every ${o.interval}s`}, log ${workLogPath()}`);
+      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, log ${workLogPath()}`);
       const ac = new AbortController();
       const stop = () => ac.abort();
       process.once("SIGINT", stop);
@@ -129,8 +146,10 @@ export function registerWork(program: Command, version: string): void {
           version,
           jobs,
           ...(o.once ? { once: true } : {}),
-          pollMs: Math.max(5, Number(o.interval) || 15) * 1000,
+          pollMs,
+          maxIdleMs,
           log: out,
+          ...(debug ? { debug } : {}),
           signal: ac.signal,
           job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}) },
         });
