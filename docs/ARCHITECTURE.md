@@ -18,6 +18,7 @@ relay exists because one person using several coding-agent subscriptions wastes 
 | Task bus | Issues, labels (`agent:claude`, `agent:codex`, `agent:grok`; `agent:claude-cloud`, `agent:codex-cloud` for the vendors' hosted tiers), one Projects board across repos | GitHub |
 | Workers | Machines running `relay work`: they register their lanes from their logins, claim queued tasks from the site under a lease, run `claude -p`, `codex exec`/`fx`, or `grok -p` in a fresh clone and open a PR (`docs/WORKERS.md`). Self-hosted GitHub Actions runners remain an optional path (`docs/RUNNERS.md`). | the user's machines |
 | Scheduler | The `workers` and `claims` tables plus `claimNext`: oldest queued task whose lane and required labels match, one live claim per task, 30-minute leases renewed by heartbeats | the web app (or the local database) |
+| Task state | Derived from the feed by one fold (`deriveTaskStatus`, then the flow map's station in `tasks/station.ts`) and cached on the task row after every write that can change it (`db/task-state.ts`): `state`, `station`, `since`, the PR, the preview, the runner, the last error. The feed stays the source of truth; the columns let the tasks list and the flow map read one query instead of every history | the database |
 | Memory | Postgres: projects, file digests keyed by content hash, decisions with validity, preferences, vendor guidance with vector and full-text search | Neon in production, PGlite locally |
 | Memory server | MCP over stdio for the CLIs and over HTTP for cloud agents | the web app and each machine |
 | Rules file | A generated `relay.md` per repo, referenced from `AGENTS.md`/`CLAUDE.md` through an owned, marker-delimited section | in every linked repo |
@@ -69,7 +70,12 @@ the worker lanes for people who already operate them.
    effort), releases a live claim, writes `task.requeued` (`queued`) and rings the doorbell; the next run starts over
    from the base branch and reuses an open PR. That is how a task opened on a cloud lane nobody wired, or one whose
    worker vanished, gets to a machine without waiting for a GitHub webhook that may never arrive.
-7. Every step above is a row in the feed.
+7. Every step above is a row in the feed. The task's state is never written by hand: after each of these writes
+   (an event naming the task, a claim taken, released or expired, the row created) relay folds the task's rows once and
+   caches the result on the task row (`tasks.state`, `station`, `since`, `pr`, `preview_*`, `runner`, `last_error`,
+   `cost`; migration 010, `packages/core/src/db/task-state.ts`). Readers that show many tasks at once (the flow map's
+   `/api/flow`, `relay task ls --state`, `relay_task_list(state)`) read those columns; a single task's view still folds
+   its rows, so the two can never disagree for long, and a row the cache never saw is folded and filled on first read.
 
 ## What relay deliberately does not do
 
