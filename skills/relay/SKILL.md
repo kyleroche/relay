@@ -41,7 +41,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    npx @kyleroche/relay work status             # the service, the site's workers, the log tail
    ```
 
-   Run `--install --yes` only if the user said so. Then report the lanes the worker now serves (from `relay work status` or the `lanes` line of `doctor`), and that tasks labelled with those lanes will be claimed by this machine. Force a subset with `--lanes claude,codex`; advertise capabilities with `--labels gpu`.
+   Run `--install --yes` when the user asked to make this machine a worker or to set relay up here; ask first only if they did not. Then report the lanes the worker now serves (from `relay work status` or the `lanes` line of `doctor`), and that tasks labelled with those lanes will be claimed by this machine. Force a subset with `--lanes claude,codex`; advertise capabilities with `--labels gpu`.
 
 4. Install hooks and the memory MCP server into each detected CLI's config (optional but recommended):
 
@@ -49,7 +49,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    npx @kyleroche/relay setup
    ```
 
-   It prints every file it will touch and writes nothing. Run `npx @kyleroche/relay setup --yes` only if the user said so.
+   It prints every file it will touch and writes nothing. Run `npx @kyleroche/relay setup --yes` when the user asked for relay on this machine; ask first only if they did not.
 
 5. In each repository the user wants managed:
 
