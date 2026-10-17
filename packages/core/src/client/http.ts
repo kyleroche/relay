@@ -5,12 +5,13 @@
  */
 import type { EventRow } from "../db/events.ts";
 import type { DecisionRow, PreferenceRow } from "../db/memory.ts";
+import type { InviteRow } from "../db/oauth.ts";
 import type { ProjectRow } from "../db/projects.ts";
 import type { TaskView } from "../db/tasks.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
-import type { RelayClient } from "./types.ts";
+import type { RelayClient, WhoAmI } from "./types.ts";
 
 export type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>;
 
@@ -189,6 +190,28 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
       }
     },
 
+    async createInvite(i) {
+      const r = await rest<{ invite: InviteRow; code: string }>("POST", "/invites", { name: i.name, scopes: i.scopes, expires_in: i.expiresInSeconds, uses: i.uses });
+      return r.body;
+    },
+    async listInvites(o = {}) {
+      const r = await rest<{ invites: InviteRow[] }>("GET", "/invites", undefined, { all: o.includeSpent ? 1 : undefined });
+      return r.body.invites;
+    },
+    async revokeInvite(idOrName) {
+      try {
+        const r = await rest<{ revoked: InviteRow }>("DELETE", `/invites/${encodeURIComponent(idOrName)}`);
+        return r.body.revoked;
+      } catch (e) {
+        if (e instanceof RelayHttpError && e.status === 404) return undefined;
+        throw e;
+      }
+    },
+    async whoami() {
+      const r = await rest<WhoAmI>("GET", "/whoami");
+      return r.body;
+    },
+
     async createTask(input) {
       const r = await rest<{ task_id: string; issue_url: string; created: boolean; task: TaskView }>("POST", "/tasks", input);
       return r.body;
@@ -236,7 +259,7 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
           await rest("GET", "/projects", undefined, { limit: 1 });
           return { ok: true, detail: `${site} answers (${info.body.name ?? "relay"} ${info.body.version ?? ""}); token accepted` };
         } catch (e) {
-          if (e instanceof RelayHttpError && (e.status === 401 || e.status === 403)) return { ok: false, detail: `${site} answers but rejects the token (${e.status}); mint one at ${site}/tokens` };
+          if (e instanceof RelayHttpError && (e.status === 401 || e.status === 403)) return { ok: false, detail: `${site} answers but rejects the token (${e.status}); run relay setup --site ${site} to approve this machine again` };
           throw e;
         }
       } catch (e) {

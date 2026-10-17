@@ -35,6 +35,11 @@ export interface HarnessConfig {
   site?: string;
   /** Bearer token for the site, from ~/.harness/credentials.json (env RELAY_TOKEN wins). Never printed. */
   siteToken?: string;
+  /** Refresh token and expiry when the site token came from the device flow or an invite; `openHarness` refreshes it. */
+  siteRefreshToken?: string;
+  siteTokenExpiresAt?: string;
+  siteTokenSource?: "device" | "invite" | "manual" | "env";
+  siteTokenName?: string;
 }
 
 /** The subset a user may put in ~/.harness/config.json. */
@@ -79,6 +84,10 @@ export function loadConfig(): HarnessConfig {
   const site = readSiteConfig(cfg.home);
   if (site.site) cfg.site = site.site;
   if (site.token) cfg.siteToken = site.token;
+  if (site.refreshToken) cfg.siteRefreshToken = site.refreshToken;
+  if (site.tokenExpiresAt) cfg.siteTokenExpiresAt = site.tokenExpiresAt;
+  if (site.tokenSource) cfg.siteTokenSource = site.tokenSource;
+  if (site.tokenName) cfg.siteTokenName = site.tokenName;
   if (process.env.AI_GATEWAY_API_KEY) cfg.gateway.apiKey = process.env.AI_GATEWAY_API_KEY;
   return cfg;
 }
