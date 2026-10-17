@@ -168,6 +168,24 @@ The app pages are behind the GitHub sign-in (step 4) in production, since the fe
 spend; the info page, the docs and the agent-readiness files stay public. Enable Vercel Authentication (Deployment
 Protection) for previews, which have no OAuth app of their own.
 
+## 7b. Firewall rate limits
+
+The authorization server's public endpoints and the anonymous API surface get per-IP rate limits from the Vercel WAF (Pro plan or above), so a stranger cannot spam device requests, registrations or token polls across function instances. The rules live in `apps/web/infra/firewall.json`:
+
+| Paths | Limit per IP | Why |
+|---|---|---|
+| `POST /oauth/device`, `POST /oauth/register` | 10 per minute | one request per machine or bot is the normal rate |
+| `POST /oauth/token` | 60 per minute | device polling is 12 per minute; refreshes are rarer |
+| `/api/v1/*`, `/mcp` without an `Authorization` header | 60 per minute | anonymous discovery and probing; bearer callers are not limited here |
+
+Apply or update them with the CLI from `apps/web` (the project must be linked):
+
+```bash
+vercel api "/v1/security/firewall/config?projectId=<project id>&teamId=<team id>" --method PUT --input infra/firewall.json
+```
+
+The firewall answers an over-limit request with 403 before it reaches the app. Attack challenge mode and BotID stay off: they exist to stop automated clients, which is what this site serves. The in-app limiter (`apps/web/lib/api.ts`) is per instance and only a backstop.
+
 ## 8. Publishing the CLI to npm
 
 The `relay` command ships as `@kyleroche/relay` (`packages/cli`, built with `tsup` into `dist/`: the CLI, the stdio

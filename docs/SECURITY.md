@@ -328,3 +328,7 @@ verified with the same HMAC as an organization webhook. `installation` events wr
 `project.github_disconnected`; a repository is auto-registered as a project only when it already holds a `relay.md`.
 Rotation: a new private key in the environment wins immediately; or remove the stored app on `/setup/github` and run
 the manifest flow again, then revoke the old key on GitHub.
+
+## Edge rate limits
+
+Per-IP limits on the device, registration and token endpoints and on anonymous API and MCP traffic are enforced by the Vercel WAF in front of the app (`apps/web/infra/firewall.json`, applied as in `docs/HOSTING.md`). They are the shared-store limiter the in-app one is not.

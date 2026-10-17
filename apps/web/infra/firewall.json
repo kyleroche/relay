@@ -1,0 +1,11 @@
+{"firewallEnabled": true, "rules": [
+ {"name": "oauth-device-register-10-per-min", "description": "Device-flow and dynamic client registration: 10 requests per minute per IP, then deny.", "active": true,
+  "conditionGroup": [{"conditions": [{"type": "path", "op": "pre", "value": "/oauth/device"}]}, {"conditions": [{"type": "path", "op": "pre", "value": "/oauth/register"}]}],
+  "action": {"mitigate": {"action": "rate_limit", "rateLimit": {"algo": "fixed_window", "window": 60, "limit": 10, "keys": ["ip"], "action": "deny"}, "actionDuration": null}}},
+ {"name": "oauth-token-60-per-min", "description": "Token endpoint: 60 requests per minute per IP (device polling is 12 per minute), then deny.", "active": true,
+  "conditionGroup": [{"conditions": [{"type": "path", "op": "pre", "value": "/oauth/token"}]}],
+  "action": {"mitigate": {"action": "rate_limit", "rateLimit": {"algo": "fixed_window", "window": 60, "limit": 60, "keys": ["ip"], "action": "deny"}, "actionDuration": null}}},
+ {"name": "anonymous-api-mcp-60-per-min", "description": "Requests to /api/v1 and /mcp without an Authorization header: 60 per minute per IP, then deny. Bearer callers are unaffected.", "active": true,
+  "conditionGroup": [{"conditions": [{"type": "path", "op": "pre", "value": "/api/v1"}, {"type": "header", "key": "authorization", "op": "nex"}]}, {"conditions": [{"type": "path", "op": "pre", "value": "/mcp"}, {"type": "header", "key": "authorization", "op": "nex"}]}],
+  "action": {"mitigate": {"action": "rate_limit", "rateLimit": {"algo": "fixed_window", "window": 60, "limit": 60, "keys": ["ip"], "action": "deny"}, "actionDuration": null}}}
+]}
