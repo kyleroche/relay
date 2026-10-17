@@ -113,7 +113,7 @@ describe("relay work --isolation container --install (plan only)", () => {
     const printed = out.mock.calls.map((c) => String(c[0])).join("\n");
     expect(printed).toContain("container build --tag relay-worker:0.1.0-test");
     expect(printed).toContain(`container volume create ${CONTAINER_VOLUME}`);
-    expect(printed).toMatch(new RegExp(`container create --name ${CONTAINER_NAME} --volume ${CONTAINER_VOLUME}:/home/relay --publish 127.0.0.1:3000:3000 --masked-path NONE --read-only-path NONE`));
+    expect(printed).toMatch(new RegExp(`container create --name ${CONTAINER_NAME} --volume ${CONTAINER_VOLUME}:/home/relay --publish 127.0.0.1:3000:3000 --publish 127.0.0.1:1455:1455 --masked-path NONE --read-only-path NONE`));
     expect(printed).toContain("--env RELAY_ISOLATION=container");
     expect(printed).toMatch(/--env RELAY_WORKER_NAME=[a-z0-9._-]+-container/);
     expect(printed).toMatch(/relay-worker:0.1.0-test relay work --lanes claude --jobs 2$/m);

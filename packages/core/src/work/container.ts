@@ -69,6 +69,10 @@ export interface ContainerSpec {
 export const CONTAINER_MEMORY = "4G";
 /** The port fx's login flow listens on for the browser redirect (`http://localhost:3000/callback`). */
 export const FX_CALLBACK_PORT = 3000;
+/** Codex's own OAuth listener, which `fx login codex` hands off to (`http://localhost:1455/auth/callback`). */
+export const CODEX_CALLBACK_PORT = 1455;
+/** Every login callback port the container publishes to the Mac's loopback. */
+export const LOGIN_CALLBACK_PORTS = [FX_CALLBACK_PORT, CODEX_CALLBACK_PORT] as const;
 export const CONTAINER_CPUS = 4;
 
 export interface ContainerPlan {
@@ -117,11 +121,10 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
       CONTAINER_NAME,
       "--volume",
       `${CONTAINER_VOLUME}:${CONTAINER_HOME}`,
-      // fx's OAuth logins (Codex, Grok) redirect the Mac's browser to localhost:3000/callback; the listener is inside the
+      // fx's OAuth logins (Codex, Grok) redirect the Mac's browser to localhost:3000/callback (Grok) or localhost:1455/auth/callback (Codex); the listener is inside the
       // container, so the port is published to the Mac's loopback only. Claude Code (paste a code) and gh (device code)
       // need no port.
-      "--publish",
-      `127.0.0.1:${FX_CALLBACK_PORT}:${FX_CALLBACK_PORT}`,
+      ...LOGIN_CALLBACK_PORTS.flatMap((port) => ["--publish", `127.0.0.1:${port}:${port}`]),
       "--masked-path",
       "NONE",
       "--read-only-path",

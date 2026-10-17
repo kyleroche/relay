@@ -278,7 +278,7 @@ describe("container plan (relay work --isolation container)", () => {
     expect(p.volumeCreate).toEqual(["/usr/local/bin/container", "volume", "create", CONTAINER_VOLUME]);
     expect(p.create.slice(0, 4)).toEqual(["/usr/local/bin/container", "create", "--name", CONTAINER_NAME]);
     expect(p.create).toContain(`${CONTAINER_VOLUME}:/home/relay`);
-    expect(p.create.join(" ")).toContain("--publish 127.0.0.1:3000:3000 --masked-path NONE --read-only-path NONE --memory 4G --cpus 4");
+    expect(p.create.join(" ")).toContain("--publish 127.0.0.1:3000:3000 --publish 127.0.0.1:1455:1455 --masked-path NONE --read-only-path NONE --memory 4G --cpus 4");
     expect(containerPlan({ ...spec, memory: "8G", cpus: 6 }).create.join(" ")).toContain("--memory 8G --cpus 6");
     expect(p.create.join(" ")).toContain("--env RELAY_HOME=/home/relay/.harness");
     expect(p.create.join(" ")).toContain("--env RELAY_ISOLATION=container");
