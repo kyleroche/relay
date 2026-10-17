@@ -7,14 +7,14 @@ type EventRow = core.EventRow;
 import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
+import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { dataMode } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
 import { getDb } from "@/lib/db";
 import { fmtAgo, fmtCost, fmtDuration, fmtTokens } from "@/lib/format";
 import { requireSession } from "@/lib/session";
-import { STATE_HINT, STATE_TONE, taskTitle } from "@/lib/tasks";
+import { taskTitle } from "@/lib/tasks";
 import { viewerTimeZone } from "@/lib/tz-server";
-import { cn } from "@/lib/utils";
 
 type Props = { params: Promise<{ owner: string; repo: string; n: string }> };
 
@@ -92,11 +92,9 @@ export default async function TaskPage({ params }: Props) {
               </Link>
             </p>
           </div>
-          <div className="shrink-0 text-right">
-            <span className={cn("font-mono text-sm", STATE_TONE[t.state])} title={STATE_HINT[t.state]}>
-              {t.state}
-            </span>
-            {t.updated_at && <p className="mt-0.5 text-xs text-muted-foreground">{fmtAgo(t.updated_at, now)}</p>}
+          <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
+            <TaskStateBadge state={t.state} />
+            {t.updated_at && <p className="text-xs text-muted-foreground">{fmtAgo(t.updated_at, now)}</p>}
           </div>
         </div>
       </section>
@@ -104,8 +102,8 @@ export default async function TaskPage({ params }: Props) {
       <div className="flex flex-col gap-6">
         {t.preview_url ? (
           <section aria-labelledby="preview-h" className="rounded-lg border bg-card p-4">
-            <h2 id="preview-h" className="text-xs font-medium text-muted-foreground">
-              Preview{t.preview_state === "building" ? " (a newer push is building)" : t.preview_state === "failed" ? " (the latest build failed; this is the last good one)" : ""}
+            <h2 id="preview-h" className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+              Preview <PreviewBadge state={t.preview_state} />
             </h2>
             <a
               href={t.preview_url}
@@ -117,7 +115,7 @@ export default async function TaskPage({ params }: Props) {
               <span className="truncate">{t.preview_url.replace(/^https?:\/\//, "")}</span>
               <ArrowUpRight className="size-4 shrink-0" aria-hidden="true" />
             </a>
-            <p className="mt-1 text-xs text-muted-foreground">Opens in a new tab. Built from {t.branch ?? "the task's branch"} by Vercel or the repository's deployment.</p>
+            <p className="mt-1 text-xs text-muted-foreground">Built from {t.branch ?? "the task's branch"} by Vercel or the repository's deployment.</p>
           </section>
         ) : (
           inReview && (
@@ -134,12 +132,12 @@ export default async function TaskPage({ params }: Props) {
             </h2>
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
               {inReview
-                ? `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"} and deletes its branch. Request changes posts your note on the PR and queues the task again; the next run gets the note in its brief. Requeue starts the task over, on this lane or another.`
+                ? `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"}; Request changes sends your note to the next run.`
                 : t.lane?.endsWith("-cloud")
-                  ? `A cloud lane holds this task; relay only hears back when its PR opens. If that lane is not wired, requeue it on a worker lane (claude, codex or grok) and a machine running relay work picks it up.`
+                  ? "A cloud lane holds this task; if that lane is not wired, requeue it on a worker lane."
                   : t.state === "failed"
-                    ? "The run failed. Requeue puts the task back for the next worker, on this lane or another; the run starts over from the base branch."
-                    : "A worker has this task. Requeue releases its claim and puts the task back for the next worker, on this lane or another, if the run is stuck or on the wrong lane."}
+                    ? "The run failed; Requeue starts it over, on this lane or another."
+                    : "A worker has this task; Requeue releases it and starts over, on this lane or another."}
             </p>
             {showMergeFailure && (
               <p role="alert" className="mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
@@ -149,7 +147,7 @@ export default async function TaskPage({ params }: Props) {
                 </span>
               </p>
             )}
-            <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
               {inReview && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
               <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
             </div>
@@ -232,7 +230,7 @@ export default async function TaskPage({ params }: Props) {
                       </a>
                     )}
                   </p>
-                  <p className="mt-1">{e.summary}</p>
+                  <p className="mt-1">{e.kind === "task.merge_failed" ? <span className="text-muted-foreground">merge refused</span> : e.summary}</p>
                   {e.kind === "task.changes_requested" && typeof e.payload.note === "string" && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
                   {e.kind === "task.requeued" && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
                 </li>
