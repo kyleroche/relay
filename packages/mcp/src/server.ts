@@ -66,6 +66,9 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, running, review, done or failed, plus runner, PR and last summary." },
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
+  { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
+  { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
+  { name: "relay_webhook_unsubscribe", scope: "webhooks:write", description: "Remove an outbound webhook by id." },
 ];
 
 /** Description lookup by tool name, so new tools do not depend on their position in TOOL_SCOPES. */
@@ -107,6 +110,20 @@ export interface RelayServerOptions {
   github?: GitHubClient;
   /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
   afterEvent?: (row: repo.EventRow) => void | Promise<void>;
+  /** What relay_whoami reports about this connection's credential (HTTP: from the token row). */
+  identity?: ConnectionIdentity;
+  /** Where an anonymous caller can get access (the site's OAuth metadata); shown by relay_whoami and in scope errors. */
+  authorizationServer?: string;
+  /** One paragraph on how to get access, appended to every scope refusal an anonymous caller gets. */
+  accessHint?: string;
+}
+
+export interface ConnectionIdentity {
+  /** The token's name (`oauth:<client>`, `ci-runner`), or the local user. */
+  name: string;
+  expires_at: string | null;
+  /** db | env | shared | session | local | anonymous */
+  source: string;
 }
 
 /** Cut text at a line boundary so it stays under `max` approximate tokens; says so when it did. */
@@ -189,13 +206,15 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       /* delivery problems are the dispatcher's to record */
     }
   };
+  const anonymous = !opts.canWrite && !opts.scopes?.length;
+  const hint = anonymous && (opts.accessHint || opts.authorizationServer) ? ` ${opts.accessHint ?? `Get one through the authorization server: ${opts.authorizationServer}`}` : "";
   const gate = (scope: TokenScope, tool: string) =>
     granted.has(scope)
       ? undefined
       : fail(
           scope === "memory:write" && !opts.scopes
             ? `relay: writes need a bearer token with memory:write; this connection is read-only`
-            : `relay: ${tool} needs a bearer token with the ${scope} scope`,
+            : `relay: ${tool} needs a bearer token with the ${scope} scope.${hint}`,
         );
   const assetsHooks = opts.assets;
   const viewUrl = async (key: string | null): Promise<string | null> => {
@@ -564,6 +583,53 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       return json({ tasks: rows, count: rows.length });
     },
   );
+
+  server.registerTool("relay_whoami", { title: "Who am I", description: toolDescription("relay_whoami"), inputSchema: {} }, async () => {
+    const identity = opts.identity ?? (opts.canWrite ? { name: actor, expires_at: null, source: "local" } : { name: "anonymous", expires_at: null, source: "anonymous" });
+    return json({
+      actor: anonymous ? "anon" : actor,
+      name: identity.name,
+      scopes: [...granted],
+      expires_at: identity.expires_at,
+      source: identity.source,
+      authenticated: !anonymous,
+      ...(anonymous && opts.authorizationServer ? { how_to_authenticate: `OAuth 2.1 with PKCE, the device flow, or an invite code: ${opts.authorizationServer}` } : {}),
+    });
+  });
+
+  server.registerTool(
+    "relay_webhook_subscribe",
+    {
+      title: "Subscribe a webhook",
+      description: toolDescription("relay_webhook_subscribe"),
+      inputSchema: {
+        url: z.string().url().describe("where relay POSTs deliveries"),
+        events: z.array(z.string().min(1)).min(1).describe("kinds such as pr.merged, run.failed; a prefix like 'run.'; or '*'"),
+        bearer: z.string().min(1).max(500).optional().describe("sent as Authorization: Bearer on every delivery, e.g. the bot's routine key"),
+        project: z.string().optional().describe("limit to one project slug"),
+      },
+    },
+    async ({ url, events, bearer, project }) => {
+      const g = gate("webhooks:write", "relay_webhook_subscribe");
+      if (g) return g;
+      const badUrl = repo.validateWebhookUrl(url);
+      if (badUrl) return fail(`relay: ${badUrl}`);
+      if (project && !(await repo.getProject(db, project))) return fail(`relay: unknown project '${project}'`);
+      try {
+        const row = await repo.createWebhook(db, { project: project ?? null, url, events, bearer: bearer ?? null, createdBy: externalActor(actor) });
+        return json({ webhook: repo.publicWebhook(row), secret: row.secret, note: "The secret is shown once; verify X-Relay-Signature with it (docs/FEED.md)." });
+      } catch (e) {
+        return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  server.registerTool("relay_webhook_unsubscribe", { title: "Unsubscribe a webhook", description: toolDescription("relay_webhook_unsubscribe"), inputSchema: { id: z.string().min(1) } }, async ({ id }) => {
+    const g = gate("webhooks:write", "relay_webhook_unsubscribe");
+    if (g) return g;
+    const removed = await repo.deleteWebhook(db, id);
+    return removed ? json({ removed: id }) : fail(`relay: no webhook ${id}`);
+  });
 
   server.registerTool(
     "relay_event_log",

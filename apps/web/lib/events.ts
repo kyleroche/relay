@@ -30,6 +30,13 @@ export const EVENT_KINDS = {
   "decision.captured": { group: "memory", source: "lane", label: "Decision", description: "A durable decision extracted from a session or a merged PR." },
   "preference.set": { group: "memory", source: "cli", label: "Preference", description: "A preference was set at global, project, lane or model scope." },
   "project.linked": { group: "memory", source: "cli", label: "Project linked", description: "relay link registered a repository." },
+  "project.github_connected": { group: "memory", source: "github", label: "GitHub App installed", description: "The GitHub App was installed on a repository (auto-registered when it holds a relay.md)." },
+  "project.github_disconnected": { group: "memory", source: "github", label: "GitHub App removed", description: "The GitHub App was removed from a repository or uninstalled." },
+  // Access (docs/SECURITY.md, "Access for agents")
+  "access.requested": { group: "access", source: "oauth", label: "Access requested", description: "A device or CLI asked for a token; payload carries the user code to approve at /activate or over the API." },
+  "access.granted": { group: "access", source: "oauth", label: "Access granted", description: "A token was issued: consent, device approval or an invite redeemed." },
+  "access.denied": { group: "access", source: "oauth", label: "Access denied", description: "A person declined a device request." },
+  "access.revoked": { group: "access", source: "oauth", label: "Access revoked", description: "A token or refresh token was revoked, or a reused refresh token cut its lineage." },
   "memory.consolidated": { group: "memory", source: "nightly", label: "Memory consolidated", description: "Nightly digest: superseded decisions closed, rules file regenerated." },
   "onboard.refreshed": { group: "memory", source: "cli", label: "Vendor docs refreshed", description: "Official guidance and skills for a model were re-ingested." },
   // Assets (docs/ASSETS.md)

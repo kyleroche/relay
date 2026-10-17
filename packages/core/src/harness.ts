@@ -3,8 +3,10 @@ import { openDb, type Db } from "./db/client.ts";
 import { Ledger } from "./ledger/ledger.ts";
 import type { Harness } from "./onboard/index.ts";
 import { briefEmbedder } from "./brief/index.ts";
+import { credentialsFromToken, OAuthClientError, refreshAccessToken, tokenIsStale } from "./client/device.ts";
 import { httpClient, SiteModeError } from "./client/http.ts";
 import { localClient } from "./client/local.ts";
+import { writeSiteConfig } from "./client/site.ts";
 import type { ClientMode, RelayClient } from "./client/types.ts";
 
 export interface OpenHarness extends Harness {
@@ -39,9 +41,33 @@ export const defaultActor = (): string => `human:${process.env.RELAY_ACTOR ?? pr
  * Open the harness. With a site configured (`relay setup --site`), `client` talks to it over HTTPS and no database is
  * opened unless `local` is set; otherwise `client` wraps the database (Postgres via DATABASE_URL, else embedded PGlite).
  */
+/**
+ * A site token from the device flow or an invite lives 24 hours; its refresh token lives 90 days. When the access
+ * token is about to lapse, trade the refresh token for a new pair and store it, so hooks and commands never see a 401.
+ * A failed refresh (revoked, expired, reused) says what to do instead of failing on the first call.
+ */
+export async function refreshSiteTokenIfStale(cfg: HarnessConfig, now: number = Date.now()): Promise<HarnessConfig> {
+  if (!cfg.site || !cfg.siteToken || !cfg.siteRefreshToken || !tokenIsStale(cfg.siteTokenExpiresAt, now)) return cfg;
+  if (cfg.siteTokenSource === "env") return cfg;
+  try {
+    const r = await refreshAccessToken({ site: cfg.site, refreshToken: cfg.siteRefreshToken });
+    const c = credentialsFromToken(r, now);
+    writeSiteConfig({ site: cfg.site, token: { token: c.token, refreshToken: c.refreshToken, expiresAt: c.expiresAt, source: cfg.siteTokenSource ?? "device", tokenName: r.token_name ?? cfg.siteTokenName ?? null } }, cfg.home);
+    const next: HarnessConfig = { ...cfg, siteToken: c.token };
+    if (c.refreshToken) next.siteRefreshToken = c.refreshToken;
+    if (c.expiresAt) next.siteTokenExpiresAt = c.expiresAt;
+    if (r.token_name) next.siteTokenName = r.token_name;
+    return next;
+  } catch (e) {
+    const why = e instanceof OAuthClientError ? `${e.code}: ${e.description}` : e instanceof Error ? e.message : String(e);
+    throw new SiteModeError("refreshing the site token", `the refresh failed (${why}); run \`relay setup --site ${cfg.site}\` to approve this machine again`);
+  }
+}
+
 export async function openHarness(cfg: HarnessConfig = loadConfig(), opts: OpenHarnessOptions = {}): Promise<OpenHarness> {
   ensureHome(cfg);
   const actor = opts.actor ?? defaultActor();
+  cfg = await refreshSiteTokenIfStale(cfg);
   const siteMode = !!cfg.site && !!cfg.siteToken;
   const db = siteMode && !opts.local ? siteModeDb(cfg.site!) : await openDb(cfg.databaseUrl ? { url: cfg.databaseUrl } : { file: cfg.dbFile });
   const ledger = new Ledger(db);

@@ -40,6 +40,14 @@ describe("classifyRoute", () => {
       "/api/assets/bundle/abc/123/sig/index.html",
       "/api/assets/upload",
       "/api/markdown",
+      "/.well-known/oauth-authorization-server",
+      "/.well-known/oauth-protected-resource",
+      "/oauth/register",
+      "/oauth/authorize",
+      "/oauth/authorize/decision",
+      "/oauth/token",
+      "/oauth/device",
+      "/oauth/revoke",
       "/_next/static/chunk.js",
       "/icon.svg",
       "/opengraph-image",
@@ -49,7 +57,7 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
+    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/activate", "/activate/", "/setup", "/setup/github", "/setup/github/callback", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
     // unknown paths are nobody's: they fall through to a real 404, never a sign-in redirect
@@ -68,6 +76,11 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/api/v1/feed", anon)).toBe("session");
     expect(classifyRoute("/api/v1/projects", anon)).toBe("session");
     expect(classifyRoute("/api/v1/assets", { hasBearer: false, publicRead: false, method: "POST" })).toBe("session");
+    // the access and invite routes follow the same rule: a bearer (tokens:write) or the session
+    expect(classifyRoute("/api/v1/access/RLAY-4F7Q/approve", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");
+    expect(classifyRoute("/api/v1/access/RLAY-4F7Q/approve", { hasBearer: false, publicRead: false, method: "POST" })).toBe("session");
+    expect(classifyRoute("/api/v1/invites", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
+    expect(classifyRoute("/api/v1/whoami", { hasBearer: true, publicRead: false })).toBe("public");
   });
 
   it("honours RELAY_PUBLIC_READ for anonymous GET reads only", () => {
@@ -111,6 +124,9 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/\\evil.example")).toBe("/");
     expect(safeNextPath("/sign-in?next=/")).toBe("/");
     expect(safeNextPath("/auth/github/start")).toBe("/");
+    expect(safeNextPath("/oauth/authorize?client_id=x")).toBe("/oauth/authorize?client_id=x");
+    expect(safeNextPath("/oauth/token")).toBe("/");
+    expect(safeNextPath("/activate?code=RLAY-4F7Q")).toBe("/activate?code=RLAY-4F7Q");
     expect(safeNextPath("/x\r\nSet-Cookie: a=b")).toBe("/");
   });
 });

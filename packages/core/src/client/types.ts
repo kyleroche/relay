@@ -7,6 +7,7 @@ import type { EventRow, ListEventsOpts, UsageSummaryRow } from "../db/events.ts"
 import type { DecisionRow, PreferenceRow } from "../db/memory.ts";
 import type { ProjectRow } from "../db/projects.ts";
 import type { TaskState, TaskView } from "../db/tasks.ts";
+import type { InviteRow } from "../db/oauth.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
 import type { CreateTaskInput } from "../tasks/create.ts";
@@ -118,6 +119,25 @@ export interface SiteHealth {
   detail: string;
 }
 
+/** `relay invite create`: who it is for, what it grants, how long it lasts, how many times it may be redeemed. */
+export interface InviteInput {
+  name: string;
+  scopes: string[];
+  expiresInSeconds?: number;
+  uses?: number;
+}
+
+/** Who the caller is, as the backing store sees it (`GET /api/v1/whoami`, `relay_whoami`). */
+export interface WhoAmI {
+  actor: string;
+  /** The token's name, or the actor in local mode. */
+  name: string;
+  scopes: string[];
+  expires_at: string | null;
+  /** db | env | shared | session | local */
+  source: string;
+}
+
 export interface RelayClient {
   readonly mode: ClientMode;
   /** The site URL in site mode. */
@@ -153,6 +173,14 @@ export interface RelayClient {
   createTask(input: Omit<CreateTaskInput, "actor">): Promise<{ task_id: string; issue_url: string; created: boolean; task: TaskView }>;
   getTask(id: string): Promise<TaskView | undefined>;
   listTasks(opts?: { project?: string; state?: TaskState; limit?: number }): Promise<TaskView[]>;
+
+  // invites (approval without a browser)
+  createInvite(input: InviteInput): Promise<{ code: string; invite: InviteRow }>;
+  listInvites(opts?: { includeSpent?: boolean }): Promise<InviteRow[]>;
+  revokeInvite(idOrName: string): Promise<InviteRow | undefined>;
+
+  /** Who this client is to the backing store. */
+  whoami(): Promise<WhoAmI>;
 
   // webhooks
   addWebhook(input: WebhookInput): Promise<{ webhook: PublicWebhook; secret: string }>;

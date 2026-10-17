@@ -49,7 +49,7 @@ export const GET = api<Ctx>(
     let issue: BriefIssue | undefined;
     if (issueNo) {
       issue = { number: issueNo, title: `issue #${issueNo}` };
-      const gh = siteGitHub();
+      const gh = await siteGitHub();
       if (gh && project.repo) {
         try {
           const i = await gh.getIssue(project.repo, issueNo);

@@ -20,9 +20,14 @@ export async function readJson(req: Request): Promise<JsonBody | undefined> {
   }
 }
 
-/** The web app never shells out to gh: only an environment token (GITHUB_APP_TOKEN or GITHUB_TOKEN) opens issues. */
-export function siteGitHub(): GitHubClient | undefined {
-  return detectGitHub(process.env, { allowGh: false });
+/**
+ * The web app never shells out to gh. It acts as the GitHub App when one is configured (environment, or the sealed
+ * settings the manifest flow wrote), else with GITHUB_APP_TOKEN or GITHUB_TOKEN; undefined when neither exists.
+ */
+export async function siteGitHub(): Promise<GitHubClient | undefined> {
+  const { githubApp } = await import("@/lib/github-app");
+  const app = await githubApp().catch(() => undefined);
+  return detectGitHub(process.env, { allowGh: false, ...(app ? { app: app.client() } : {}) });
 }
 
 /** 501 for writes that need the database and an operator (mock deployments serve demo data only). */

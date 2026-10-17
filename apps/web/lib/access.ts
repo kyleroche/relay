@@ -4,12 +4,13 @@
  *
  * Public without a session: the homepage (the public landing for anonymous visitors, the feed for a signed-in one;
  * `lib/negotiate.ts` decides which), the agent-readiness surface (info, about, contact, privacy, docs, well-known
- * files, OpenAPI, llms.txt, the install skill), the sign-in flow itself, the endpoints that carry their own
+ * files, OpenAPI, llms.txt, the install skill), the sign-in flow itself, the OAuth endpoints under /oauth/ (the
+ * authorize page asks for a session itself, with a `next` that returns to it), the endpoints that carry their own
  * authentication (/mcp and /api/v1 bearer tokens, webhook and cron secrets, signed asset URLs), and anonymous /api/v1
- * reads when the deploy enables public read. The app's own pages — projects, usage, workers, the asset pages, the
- * internal /api/feed and /api/meters routes — and /api/v1 calls without a bearer need a session. Paths that are
- * neither are `unknown`: they fall through so Next.js answers 404. Agents and scanners must see a real not-found,
- * never a redirect to sign-in (docs/AGENT-READINESS.md).
+ * reads when the deploy enables public read. The app's own pages — projects, usage, workers, the asset pages, tokens,
+ * /activate (approving a device code), /setup/* (the GitHub App), the internal /api/feed and /api/meters routes — and
+ * /api/v1 calls without a bearer need a session. Paths that are neither are `unknown`: they fall through so Next.js
+ * answers 404. Agents and scanners must see a real not-found, never a redirect to sign-in (docs/AGENT-READINESS.md).
  */
 
 export type Access = "public" | "session" | "unknown";
@@ -45,6 +46,7 @@ const PUBLIC_EXACT = new Set([
 const PUBLIC_PREFIXES = [
   "/docs/",
   "/auth/",
+  "/oauth/",
   "/.well-known/",
   "/skills/",
   "/api/webhooks/",
@@ -60,8 +62,8 @@ const PUBLIC_PREFIXES = [
 const PUBLIC_PATTERNS = [/^\/llms[^/]*\.txt$/, /^\/manifest[^/]*$/];
 
 /** The signed-in surface. Add a page here when you add one; anything not listed is a 404, not a redirect. */
-const SESSION_EXACT = new Set(["/projects", "/usage", "/workers", "/assets", "/tokens", "/api/feed", "/api/meters"]);
-const SESSION_PREFIXES = ["/projects/", "/assets/", "/api/assets/mock/"];
+const SESSION_EXACT = new Set(["/projects", "/usage", "/workers", "/assets", "/tokens", "/activate", "/setup", "/api/feed", "/api/meters"]);
+const SESSION_PREFIXES = ["/projects/", "/assets/", "/activate/", "/setup/", "/api/assets/mock/"];
 
 /** True for the paths whose denial is a problem+json 401 rather than a redirect to /sign-in. */
 export function isApiPath(pathname: string): boolean {
@@ -97,5 +99,6 @@ export function safeNextPath(next: string | null | undefined, fallback = "/"): s
   if (!next.startsWith("/") || next.startsWith("//") || next.startsWith("/\\")) return fallback;
   if (/[\r\n]/.test(next)) return fallback;
   if (next.startsWith("/sign-in") || next.startsWith("/auth/")) return fallback;
+  if (/^\/oauth\/(?!authorize(?:[/?]|$))/.test(next)) return fallback; // only the consent page is a sensible return target
   return next;
 }

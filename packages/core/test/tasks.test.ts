@@ -108,6 +108,9 @@ function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: st
     async getIssue(repo, issue): Promise<GitHubIssue> {
       return { number: issue, title: "t", body: "", state: "open", html_url: `https://github.com/${repo}/issues/${issue}`, labels: [] };
     },
+    async request() {
+      return {};
+    },
   };
 }
 

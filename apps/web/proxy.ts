@@ -3,6 +3,7 @@ import { classifyRoute, isApiPath } from "@/lib/access";
 import { dataMode, publicReadEnabled } from "@/lib/mode";
 import { hasMarkdownMirror, homeDecision, MARKDOWN_PATH_HEADER, negotiateFormat, type Format } from "@/lib/negotiate";
 import { SESSION_COOKIE, verifySession } from "@/lib/session-token";
+import { SITE_URL } from "@/lib/site";
 
 /**
  * Three jobs, in this order:
@@ -98,15 +99,18 @@ export default async function proxy(req: NextRequest): Promise<NextResponse> {
         type: "about:blank",
         title: "Unauthorized",
         status: 401,
-        detail: pathname.startsWith("/api/v1/") ? "This operation needs a bearer token or a signed-in session." : "This endpoint needs a signed-in session.",
+        detail: pathname.startsWith("/api/v1/")
+          ? `This operation needs a bearer token. You can request one yourself: POST ${SITE_URL}/oauth/device with client_name and scope, show the person the user_code to approve at ${SITE_URL}/activate, poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code (or use grant_type=urn:relay:invite with an invite code), then retry with Authorization: Bearer. Metadata: ${SITE_URL}/.well-known/oauth-authorization-server; guide: ${SITE_URL}/docs/api#access.`
+          : "This endpoint needs a signed-in session.",
         instance: pathname,
+        ...(pathname.startsWith("/api/v1/") ? { access: { authorization_server: `${SITE_URL}/.well-known/oauth-authorization-server`, device: `POST ${SITE_URL}/oauth/device`, token: `POST ${SITE_URL}/oauth/token`, activate: `${SITE_URL}/activate`, docs: `${SITE_URL}/docs/api#access` } } : {}),
       }),
       {
         status: 401,
         headers: {
           "content-type": "application/problem+json; charset=utf-8",
           "cache-control": "no-store",
-          "WWW-Authenticate": `Bearer realm="relay"`,
+          "WWW-Authenticate": `Bearer realm="relay", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"`,
           // the readiness contract wants rate-limit headers on every API response, including refusals
           "RateLimit-Policy": '"default";q=60;w=60',
           RateLimit: '"default";r=60;t=60',

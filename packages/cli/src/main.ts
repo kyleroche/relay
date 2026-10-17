@@ -18,6 +18,7 @@ import { registerPrefer } from "./commands/prefer.ts";
 import { registerCapture } from "./commands/capture.ts";
 import { registerMemory } from "./commands/memory.ts";
 import { registerToken } from "./commands/token.ts";
+import { registerInvite } from "./commands/invite.ts";
 import { registerTask } from "./commands/task.ts";
 import { registerWebhook } from "./commands/webhook.ts";
 import { openReady } from "./commands/_common.ts";
@@ -28,6 +29,7 @@ const { version } = createRequire(import.meta.url)("../package.json") as { versi
 const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version(version);
 registerAssetCommands(program);
 registerToken(program);
+registerInvite(program);
 registerTask(program);
 registerWebhook(program);
 
@@ -131,7 +133,7 @@ async function loginCheck(tool: "claude" | "codex" | "fx" | "grok" | "gh", bin: 
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, and whether the database is reachable")
+  .description("Report Node version, which CLIs are installed and logged in, whether the database or site is reachable, and how this machine authenticates")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);
@@ -149,16 +151,28 @@ program
 
     const cfg = loadConfig();
     const siteMode = !!cfg.site && !!cfg.siteToken;
-    if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site} --token <t>` });
-    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, task and webhook commands and the hooks use it)` : "local: the database on this machine" });
+    if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site}` });
+    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite, task and webhook commands and the hooks use it)` : "local: the database on this machine" });
     if (siteMode) {
       const t0 = Date.now();
-      const h = await openReady();
+      // Where the credential came from, never the credential: device flow, invite, pasted token, or RELAY_TOKEN.
+      const sourceLabel = { device: "approved on /activate (device flow)", invite: "redeemed an invite", manual: "pasted with --token", env: "RELAY_TOKEN in the environment" }[cfg.siteTokenSource ?? "manual"];
+      const renews = cfg.siteRefreshToken ? "; renews itself with a refresh token" : cfg.siteTokenExpiresAt ? "; no refresh token, re-run relay setup when it expires" : "";
+      checks.push({ status: "ok", name: "auth", detail: `${sourceLabel}${cfg.siteTokenName ? ` as ${cfg.siteTokenName}` : ""}${cfg.siteTokenExpiresAt ? `, expires ${cfg.siteTokenExpiresAt}` : ", no expiry"}${renews}` });
       try {
-        const health = await h.client.health();
-        checks.push({ status: health.ok ? "ok" : "fail", name: "site", detail: `${health.detail}, ${Date.now() - t0} ms` });
-      } finally {
-        await h.close();
+        const h = await openReady();
+        try {
+          const health = await h.client.health();
+          checks.push({ status: health.ok ? "ok" : "fail", name: "site", detail: `${health.detail}, ${Date.now() - t0} ms` });
+          if (health.ok) {
+            const who = await h.client.whoami().catch(() => undefined);
+            if (who) checks.push({ status: "ok", name: "whoami", detail: `${who.name} (${who.source}): ${who.scopes.join(", ")}${who.expires_at ? `; expires ${who.expires_at}` : ""}` });
+          }
+        } finally {
+          await h.close();
+        }
+      } catch (e) {
+        checks.push({ status: "fail", name: "site", detail: (e instanceof Error ? e.message : String(e)).slice(0, 200) });
       }
     }
     const t0 = Date.now();

@@ -1,16 +1,27 @@
 /**
- * Site mode configuration. `relay setup --site <url> --token <t>` writes the URL into ~/.harness/config.json (`site`)
- * and the token into ~/.harness/credentials.json at mode 0600, separate from the file users share and edit. The
- * environment overrides both (RELAY_SITE, RELAY_TOKEN) for CI and tests. Nothing else is read or written here.
+ * Site mode configuration. `relay setup --site <url>` writes the URL into ~/.harness/config.json (`site`) and the
+ * credential into ~/.harness/credentials.json at mode 0600, separate from the file users share and edit. The
+ * credential is the access token plus, when it came from the device flow or an invite, the refresh token, its expiry
+ * and where it came from (`source`), so `openHarness` can refresh it before it lapses. The environment overrides the
+ * site and token (RELAY_SITE, RELAY_TOKEN) for CI and tests. Nothing else is read or written here.
  */
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { normalizeSite } from "./http.ts";
 
+export type TokenSource = "device" | "invite" | "manual" | "env";
+
 export interface SiteConfig {
   site?: string;
   token?: string;
+  refreshToken?: string;
+  /** ISO time the access token stops working; absent for operator-minted tokens. */
+  tokenExpiresAt?: string;
+  /** How the token got here: approved on /activate, an invite code, pasted with --token, or RELAY_TOKEN. */
+  tokenSource?: TokenSource;
+  /** The token's name on the site when known (`oauth:<client name>`). */
+  tokenName?: string;
   /** Where each value came from, for `relay doctor`. */
   sources: { site?: "env" | "file"; token?: "env" | "file" };
 }
@@ -27,17 +38,28 @@ function readJson(path: string): Record<string, unknown> {
   }
 }
 
+const strOf = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+
 export function readSiteConfig(home?: string, env: Record<string, string | undefined> = process.env): SiteConfig {
   const out: SiteConfig = { sources: {} };
   const cfg = readJson(configPath(home));
-  if (typeof cfg.site === "string" && cfg.site.trim()) {
-    out.site = normalizeSite(cfg.site);
+  if (strOf(cfg.site)) {
+    out.site = normalizeSite(cfg.site as string);
     out.sources.site = "file";
   }
   const creds = readJson(credentialsPath(home));
-  if (typeof creds.token === "string" && creds.token.trim()) {
-    out.token = creds.token.trim();
+  if (strOf(creds.token)) {
+    out.token = strOf(creds.token);
     out.sources.token = "file";
+    const refresh = strOf(creds.refresh_token);
+    if (refresh) out.refreshToken = refresh;
+    const exp = strOf(creds.expires_at);
+    if (exp) out.tokenExpiresAt = exp;
+    const source = strOf(creds.source);
+    if (source === "device" || source === "invite" || source === "manual") out.tokenSource = source;
+    else out.tokenSource = "manual";
+    const name = strOf(creds.token_name);
+    if (name) out.tokenName = name;
   }
   if (env.RELAY_SITE?.trim()) {
     out.site = normalizeSite(env.RELAY_SITE);
@@ -46,12 +68,27 @@ export function readSiteConfig(home?: string, env: Record<string, string | undef
   if (env.RELAY_TOKEN?.trim()) {
     out.token = env.RELAY_TOKEN.trim();
     out.sources.token = "env";
+    out.tokenSource = "env";
+    delete out.refreshToken;
+    delete out.tokenExpiresAt;
+    delete out.tokenName;
   }
   return out;
 }
 
-/** Write (or with `site: null` remove) the site entry; the token goes to credentials.json at 0600. */
-export function writeSiteConfig(input: { site: string | null; token?: string | null }, home?: string): { configPath: string; credentialsPath: string } {
+export interface SiteCredential {
+  token: string;
+  refreshToken?: string | null;
+  expiresAt?: string | null;
+  source?: TokenSource;
+  tokenName?: string | null;
+}
+
+/**
+ * Write (or with `site: null` remove) the site entry; the credential goes to credentials.json at 0600. `token: null`
+ * removes the credential; `undefined` leaves it alone.
+ */
+export function writeSiteConfig(input: { site: string | null; token?: SiteCredential | string | null }, home?: string): { configPath: string; credentialsPath: string } {
   const cp = configPath(home);
   const kp = credentialsPath(home);
   mkdirSync(join(cp, ".."), { recursive: true });
@@ -61,8 +98,15 @@ export function writeSiteConfig(input: { site: string | null; token?: string | n
   writeFileSync(cp, JSON.stringify(cfg, null, 2) + "\n");
   if (input.token !== undefined) {
     const creds = readJson(kp);
-    if (input.token === null) delete creds.token;
-    else creds.token = input.token;
+    for (const k of ["token", "refresh_token", "expires_at", "source", "token_name"]) delete creds[k];
+    if (input.token !== null) {
+      const c: SiteCredential = typeof input.token === "string" ? { token: input.token, source: "manual" } : input.token;
+      creds.token = c.token;
+      if (c.refreshToken) creds.refresh_token = c.refreshToken;
+      if (c.expiresAt) creds.expires_at = c.expiresAt;
+      creds.source = c.source ?? "manual";
+      if (c.tokenName) creds.token_name = c.tokenName;
+    }
     writeFileSync(kp, JSON.stringify(creds, null, 2) + "\n", { mode: 0o600 });
     try {
       chmodSync(kp, 0o600);

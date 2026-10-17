@@ -167,19 +167,22 @@ exact-match merges only. (Not built yet; capture already dedupes exact matches a
 
 ## Site mode
 
-A machine does not have to hold the database. `relay setup --site https://relay.example.com --token <t>` stores the
-site URL in `~/.harness/config.json` (`site`) and the token in `~/.harness/credentials.json` (mode 0600; `RELAY_SITE`
-and `RELAY_TOKEN` override both). Mint the first token on the site's `/tokens` page while signed in; after that
-`relay token create` works from a site-mode machine too (scope `tokens:write`). `relay setup` checks the site answers
-and accepts the token before saving (`--yes` saves anyway).
+A machine does not have to hold the database. `relay setup --site https://relay.example.com` stores the site URL in
+`~/.harness/config.json` (`site`) and the credential in `~/.harness/credentials.json` (mode 0600; `RELAY_SITE` and
+`RELAY_TOKEN` override both). Without `--token` it runs the device flow: it prints a code like `RLAY-4F7Q`, you approve
+it at `<site>/activate` (or a bot approves it over the API), and the CLI stores the 24-hour access token with its
+90-day refresh token and renews it before it lapses. `--invite <code>` redeems an invite from `relay invite create`
+with no approval; `--token <t>` pastes a token from `/tokens`. `relay setup` checks the site answers and accepts the
+credential before saving (`--yes` saves anyway). `docs/INTEGRATIONS.md` has the flows.
 
 With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,
 `httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`,
-`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay task`, `relay webhook` and
-the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay link` still
+`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`, `relay task`,
+`relay webhook` and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay link` still
 hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
 `step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`; scope `projects:write`).
-`relay doctor` reports `mode` and `site`. Without a site nothing changes: the CLI opens PGlite or `DATABASE_URL`.
+`relay doctor` reports `mode`, `auth` (how the machine got its token, its name and expiry), `site` and `whoami`.
+Without a site nothing changes: the CLI opens PGlite or `DATABASE_URL`.
 
 Not available in site mode (they need the database on the machine): `relay capture` (the session-end hook exits
 quietly; use `relay decide`), `relay decide --global`, `relay sql`, `relay init`, `relay onboard`, `relay models`,
@@ -190,7 +193,8 @@ one line saying so. `relay setup --no-site` returns to local mode.
 
 ```text
 pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
-pnpm relay setup --site <url> --token <t> | --no-site             # site mode: commands and hooks use the hosted relay
+pnpm relay setup --site <url> [--invite <code> | --token <t>] | --no-site   # site mode: device flow (approve the code at /activate), invite, or a pasted token
+pnpm relay invite create --for <name> --scopes a,b [--expires 24h] [--uses 1]   # one-time code another machine redeems with --invite
 pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels
 pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
 pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now

@@ -20,9 +20,14 @@ export interface Grant {
   scopes: TokenScope[];
   /** Attribution for writes made with this token, e.g. `token:ci`. */
   actor?: string;
+  /** The token's name and expiry, for relay_whoami. */
+  name?: string;
+  expiresAt?: string | null;
+  /** db | env | shared | session */
+  source?: string;
 }
 
-export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "site" | "assets" | "github" | "afterEvent"> {
+export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "site" | "assets" | "github" | "afterEvent" | "authorizationServer" | "accessHint"> {
   /** A shared bearer token that grants every scope (RELAY_MEMORY_TOKEN). Unset or empty means it never matches. */
   token?: string | undefined;
   /** Resolve a presented bearer token to its scopes; undefined when unknown. */
@@ -31,6 +36,8 @@ export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "s
   publicRead?: boolean;
   /** Attribution for writes made with the shared token. */
   actor?: string;
+  /** RFC 9728 protected-resource metadata URL, added to the 401 challenge so clients can find the authorization server. */
+  resourceMetadata?: string;
 }
 
 export type McpHandler = (req: Request) => Promise<Response>;
@@ -52,15 +59,19 @@ export function tokenMatches(presented: string | undefined, expected: string | u
 export async function resolveGrant(req: Request, opts: McpHandlerOptions): Promise<Grant | undefined> {
   const presented = bearerOf(req);
   if (!presented) return undefined;
-  if (tokenMatches(presented, opts.token)) return { scopes: ALL_SCOPES, actor: opts.actor ?? "human:web" };
+  if (tokenMatches(presented, opts.token)) return { scopes: ALL_SCOPES, actor: opts.actor ?? "human:web", name: "shared", expiresAt: null, source: "shared" };
   if (opts.authorize) return opts.authorize(presented);
   return undefined;
 }
 
-function unauthorized(): Response {
-  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: unknown bearer token" }, id: null }), {
+export function bearerChallenge(resourceMetadata?: string, scope?: string): string {
+  return `Bearer realm="relay"${scope ? `, scope="${scope}"` : ""}${resourceMetadata ? `, resource_metadata="${resourceMetadata}"` : ""}`;
+}
+
+function unauthorized(resourceMetadata?: string): Response {
+  return new Response(JSON.stringify({ jsonrpc: "2.0", error: { code: -32001, message: "unauthorized: unknown or expired bearer token" }, id: null }), {
     status: 401,
-    headers: { "content-type": "application/json", "www-authenticate": 'Bearer realm="relay"' },
+    headers: { "content-type": "application/json", "www-authenticate": bearerChallenge(resourceMetadata) },
   });
 }
 
@@ -68,7 +79,7 @@ export function createMcpHandler(db: Db, opts: McpHandlerOptions): McpHandler {
   return async (req) => {
     const presented = bearerOf(req);
     const grant = await resolveGrant(req, opts);
-    if (presented && !grant) return unauthorized();
+    if (presented && !grant) return unauthorized(opts.resourceMetadata);
     const server = createRelayServer(db, {
       canWrite: false,
       scopes: grant?.scopes ?? [],
@@ -79,6 +90,9 @@ export function createMcpHandler(db: Db, opts: McpHandlerOptions): McpHandler {
       ...(opts.assets ? { assets: opts.assets } : {}),
       ...(opts.github ? { github: opts.github } : {}),
       ...(opts.afterEvent ? { afterEvent: opts.afterEvent } : {}),
+      ...(opts.authorizationServer ? { authorizationServer: opts.authorizationServer } : {}),
+      ...(opts.accessHint ? { accessHint: opts.accessHint } : {}),
+      ...(grant ? { identity: { name: grant.name ?? grant.actor ?? "token", expires_at: grant.expiresAt ?? null, source: grant.source ?? "db" } } : {}),
       invalidateCache: false,
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });

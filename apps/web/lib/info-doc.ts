@@ -1,4 +1,5 @@
 import { FLOW, RULES, TAGLINE } from "@/lib/content/info";
+import { accessSteps } from "@/lib/api";
 import { dataMode, publicReadEnabled, REPO_URL, SITE_URL } from "@/lib/data";
 
 export const APP_VERSION = "0.0.1";
@@ -17,6 +18,7 @@ export function infoDocument() {
     site: SITE_URL,
     data_mode: dataMode(),
     public_read: publicReadEnabled(),
+    access: { summary: "Agents request access themselves: register, a person approves a short code once (or an invite code skips it), then retry with the bearer token.", ...accessSteps() },
     rules: RULES.map((r, i) => ({ n: i + 1, title: r.title, body: r.body })),
     task_flow: FLOW.map((f, i) => ({ n: i + 1, step: f.step, where: f.where, detail: f.detail })),
     links: {
@@ -35,7 +37,11 @@ export function infoDocument() {
       assets_api: `${SITE_URL}/api/v1/assets`,
       agent_skills: `${SITE_URL}/.well-known/agent-skills/index.json`,
       ai_catalog: `${SITE_URL}/.well-known/ai-catalog.json`,
-      token_issuance: "relay token create --name <name> --scopes <scopes>",
+      token_issuance: "OAuth 2.1 at this site, an invite code, or relay token create --name <name> --scopes <scopes>",
+      oauth_authorization_server: `${SITE_URL}/.well-known/oauth-authorization-server`,
+      oauth_protected_resource: `${SITE_URL}/.well-known/oauth-protected-resource`,
+      activate: `${SITE_URL}/activate`,
+      integrations: `${SITE_URL}/docs/integrations`,
       llms: `${SITE_URL}/llms.txt`,
       llms_full: `${SITE_URL}/llms-full.txt`,
       versioning: `${SITE_URL}/docs/versioning`,

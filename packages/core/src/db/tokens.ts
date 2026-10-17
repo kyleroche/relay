@@ -48,9 +48,13 @@ export interface TokenRow {
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+  /** Null for operator-minted tokens; set on OAuth access tokens (24 h) so `findToken` stops honouring them. */
+  expires_at: string | null;
+  /** The OAuth client the token was issued to, when it came from the authorization server. */
+  client_id: string | null;
 }
 
-const cols = "id, name, scopes, created_by, created_at, last_used_at, revoked_at";
+const cols = "id, name, scopes, created_by, created_at, last_used_at, revoked_at, expires_at, client_id";
 const toToken = (r: Record<string, unknown>): TokenRow => ({
   id: r.id as string,
   name: r.name as string,
@@ -59,6 +63,8 @@ const toToken = (r: Record<string, unknown>): TokenRow => ({
   created_at: iso(r.created_at) ?? "",
   last_used_at: iso(r.last_used_at),
   revoked_at: iso(r.revoked_at),
+  expires_at: iso(r.expires_at),
+  client_id: (r.client_id as string | null) ?? null,
 });
 
 export const TOKEN_PREFIX = "rly_";
@@ -67,7 +73,7 @@ export const TOKEN_PREFIX = "rly_";
 export const hashToken = (token: string): string => sha256(token);
 
 /** Mint a token. Unknown scope names throw. The plaintext is in the result and nowhere else. */
-export async function createToken(db: Db, input: { name: string; scopes: string[]; createdBy: string }): Promise<{ token: string; row: TokenRow }> {
+export async function createToken(db: Db, input: { name: string; scopes: string[]; createdBy: string; expiresAt?: Date | string | null; clientId?: string | null }): Promise<{ token: string; row: TokenRow }> {
   const scopes = [...new Set(input.scopes.map((s) => s.trim()).filter(Boolean))];
   const bad = scopes.filter((s) => !isTokenScope(s));
   if (bad.length) throw new Error(`unknown scope(s): ${bad.join(", ")}; valid: ${TOKEN_SCOPES.join(", ")}`);
@@ -75,16 +81,16 @@ export async function createToken(db: Db, input: { name: string; scopes: string[
   if (!input.name.trim()) throw new Error("a token needs a name");
   const token = TOKEN_PREFIX + randomBytes(32).toString("base64url");
   const r = await db.query(
-    `INSERT INTO tokens (id, name, token_hash, scopes, created_by) VALUES ($1, $2, $3, $4::text[], $5) RETURNING ${cols}`,
-    [ulid(), input.name.trim(), hashToken(token), scopes, input.createdBy],
+    `INSERT INTO tokens (id, name, token_hash, scopes, created_by, expires_at, client_id) VALUES ($1, $2, $3, $4::text[], $5, $6, $7) RETURNING ${cols}`,
+    [ulid(), input.name.trim(), hashToken(token), scopes, input.createdBy, input.expiresAt ? new Date(input.expiresAt) : null, input.clientId ?? null],
   );
   return { token, row: toToken(r[0]!) };
 }
 
-/** The live row for a presented token, or undefined. Touches last_used_at (best effort). */
+/** The live row for a presented token (not revoked, not expired), or undefined. Touches last_used_at (best effort). */
 export async function findToken(db: Db, token: string): Promise<TokenRow | undefined> {
   if (!token) return undefined;
-  const r = await db.query(`SELECT ${cols} FROM tokens WHERE token_hash = $1 AND revoked_at IS NULL`, [hashToken(token)]);
+  const r = await db.query(`SELECT ${cols} FROM tokens WHERE token_hash = $1 AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())`, [hashToken(token)]);
   if (!r[0]) return undefined;
   const row = toToken(r[0]);
   await db.query("UPDATE tokens SET last_used_at = now() WHERE id = $1", [row.id]).catch(() => {});
@@ -94,6 +100,24 @@ export async function findToken(db: Db, token: string): Promise<TokenRow | undef
 export async function listTokens(db: Db, opts: { includeRevoked?: boolean } = {}): Promise<TokenRow[]> {
   const r = await db.query(`SELECT ${cols} FROM tokens ${opts.includeRevoked ? "" : "WHERE revoked_at IS NULL"} ORDER BY created_at DESC`);
   return r.map(toToken);
+}
+
+/** One row by id, revoked or not (the OAuth server reads the name of the token a refresh replaces). */
+export async function getTokenById(db: Db, id: string): Promise<TokenRow | undefined> {
+  const r = await db.query(`SELECT ${cols} FROM tokens WHERE id = $1`, [id]);
+  return r[0] ? toToken(r[0]) : undefined;
+}
+
+/** Revoke by id, with no name lookup (the OAuth server knows the row it minted). */
+export async function revokeTokenById(db: Db, id: string): Promise<TokenRow | undefined> {
+  const r = await db.query(`UPDATE tokens SET revoked_at = now() WHERE revoked_at IS NULL AND id = $1 RETURNING ${cols}`, [id]);
+  return r[0] ? toToken(r[0]) : undefined;
+}
+
+/** Revoke by the plaintext's hash: what `POST /oauth/revoke` does with an access token. */
+export async function revokeTokenByHash(db: Db, tokenHash: string): Promise<TokenRow | undefined> {
+  const r = await db.query(`UPDATE tokens SET revoked_at = now() WHERE revoked_at IS NULL AND token_hash = $1 RETURNING ${cols}`, [tokenHash]);
+  return r[0] ? toToken(r[0]) : undefined;
 }
 
 /** Revoke by id (or by name when no id matches). Returns the row, or undefined when nothing matched. */

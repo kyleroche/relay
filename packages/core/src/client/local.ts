@@ -4,6 +4,8 @@ import type { Db } from "../db/client.ts";
 import { currentVersion } from "../db/migrate.ts";
 import * as repo from "../db/repo.ts";
 import { detectGitHub, type GitHubClient } from "../github/client.ts";
+import { createInvite, listInvites, revokeInvite } from "../oauth/server.ts";
+import { TOKEN_SCOPES } from "../db/tokens.ts";
 import { openTask } from "../tasks/create.ts";
 import { deliverWebhook, dispatchEvent, pingPayload, type DeliverOptions } from "../webhooks/dispatch.ts";
 import type { RelayClient } from "./types.ts";
@@ -18,6 +20,8 @@ export interface LocalClientOptions {
   deliver?: Omit<DeliverOptions, "db">;
   /** Called after the client is closed. */
   onClose?: () => Promise<void>;
+  /** The issuer invites are minted for (only used in the invite's feed events). */
+  issuer?: string;
 }
 
 export const EXTERNAL_KIND = /^external\.[a-z0-9_.-]+$/i;
@@ -119,6 +123,14 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
       return t ? repo.taskView(db, t) : undefined;
     },
     listTasks: (o = {}) => repo.listTaskViews(db, o),
+
+    async createInvite(i) {
+      const r = await createInvite(db, { name: i.name, scopes: i.scopes, ...(i.expiresInSeconds ? { expiresInSeconds: i.expiresInSeconds } : {}), ...(i.uses ? { uses: i.uses } : {}), createdBy: opts.actor }, { issuer: opts.issuer ?? "relay://local" });
+      return r;
+    },
+    listInvites: (o = {}) => listInvites(db, o),
+    revokeInvite: (idOrName) => revokeInvite(db, idOrName),
+    whoami: async () => ({ actor: opts.actor, name: opts.actor, scopes: [...TOKEN_SCOPES], expires_at: null, source: "local" }),
 
     async addWebhook(input) {
       const row = await repo.createWebhook(db, { project: input.project ?? null, url: input.url, events: input.events, bearer: input.bearer ?? null, ...(input.secret ? { secret: input.secret } : {}), createdBy: opts.actor });
