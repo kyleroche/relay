@@ -4,6 +4,7 @@ import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/tokens/actions";
+import { Scopes, Tag } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
@@ -18,21 +19,21 @@ export interface TokenRowView {
   name: string;
   scopes: string[];
   created_by: string;
-  /** "2026-10-16" */
+  /** Relative, made on the server: "2 h ago" */
   created: string;
-  /** "2026-10-16 18:04 UTC" or null */
+  /** Relative or null: "5 min ago" */
   last_used: string | null;
   revoked: boolean;
   /** True for an OAuth access token whose 24 h passed (its refresh token may still renew it). */
   expired: boolean;
-  /** Preformatted expiry for OAuth tokens; null for hand-minted ones. */
+  /** Relative expiry for OAuth tokens ("in 23 h", or "2 h ago" once expired); null for hand-minted ones. */
   expires: string | null;
   origin: TokenOrigin;
 }
 
-const originLabel = (o: TokenOrigin): string => (o.kind === "oauth" ? `issued to ${o.client}` : o.kind === "invite" ? "redeemed an invite" : "minted by hand");
+const originLabel = (o: TokenOrigin): string => (o.kind === "oauth" ? "device flow" : o.kind === "invite" ? "invite" : "by hand");
 
-/** Grants: live tokens first, revoked and expired ones under a toggle. Each row says how it was issued and how it renews. */
+/** Grants: live tokens first, revoked and expired ones under a toggle. One line of metadata per row, no identifiers. */
 export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWrite: boolean }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
@@ -50,27 +51,30 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
     });
   };
 
+  const meta = (t: TokenRowView): string => {
+    const parts = [originLabel(t.origin), `created ${t.created}`];
+    if (t.revoked) parts.push("revoked");
+    else if (t.expires) parts.push(t.expired ? `expired ${t.expires}` : `expires ${t.expires}, renews itself`);
+    else parts.push("never expires");
+    parts.push(t.last_used ? `used ${t.last_used}` : "never used");
+    return parts.join(" · ");
+  };
+
   const Row = ({ t }: { t: TokenRowView }) => (
-    <li className={cn("flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between", (t.revoked || t.expired) && "opacity-60")}>
+    <li className={cn("flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between", (t.revoked || t.expired) && "opacity-60")}>
       <div className="min-w-0">
-        <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-          {t.name}
-          {t.revoked && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">revoked</span>}
-          {!t.revoked && t.expired && <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-normal uppercase tracking-wide text-muted-foreground">expired</span>}
+        <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span className="font-medium" title={t.id}>
+            {t.name}
+          </span>
+          {t.revoked && <Tag>revoked</Tag>}
+          {!t.revoked && t.expired && <Tag>expired</Tag>}
+          <Scopes scopes={t.scopes} />
         </p>
-        <p className="mt-0.5 flex flex-wrap gap-1">
-          {t.scopes.map((s) => (
-            <code key={s} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">
-              {s}
-            </code>
-          ))}
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          {originLabel(t.origin)} · created {t.created} by {t.created_by} · {t.expires ? (t.expired ? `expired ${t.expires}` : `renews itself; this one until ${t.expires}`) : "never expires"} · last used {t.last_used ?? "never"} · <span className="font-mono">{t.id}</span>
-        </p>
+        <p className="mt-0.5 text-xs text-muted-foreground">{meta(t)}</p>
       </div>
       {!t.revoked && (
-        <Button size="sm" variant="outline" onClick={() => revoke(t.id)} disabled={!canWrite || pending} aria-label={`Revoke ${t.name}`}>
+        <Button size="sm" variant="ghost" onClick={() => revoke(t.id)} disabled={!canWrite || pending} aria-label={`Revoke ${t.name}`}>
           <Trash2 className="size-3.5" /> Revoke
         </Button>
       )}
@@ -85,7 +89,7 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
         </p>
       )}
       {live.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">No live tokens. Approve a request above, or hand out an invite below.</p>
+        <p className="text-sm text-muted-foreground">No live tokens yet. Approve a request and one appears here.</p>
       ) : (
         <ul className="divide-y rounded-lg border">
           {live.map((t) => (
@@ -94,7 +98,7 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
         </ul>
       )}
       {past.length > 0 && (
-        <div className="mt-3">
+        <div className="mt-2">
           <button type="button" onClick={() => setShowPast((v) => !v)} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" aria-expanded={showPast}>
             {showPast ? "Hide" : "Show"} {past.length} revoked or expired
           </button>
