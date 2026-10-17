@@ -283,16 +283,45 @@ does anything:
    `container start --attach relay-work` with KeepAlive, so when the worker inside exits the container is started
    again. The Mac's `$RELAY_HOME/work.log` gets the container's output; inside, the worker also writes
    `/home/relay/.harness/work.log`.
-5. **Prints the login sequence**, which is yours to do, in this order:
+5. **Prints the login sequence**, which is yours to do. One command makes every login that is missing:
 
    ```text
-   relay work container shell                 # a shell inside, as the relay user (container exec -it relay-work bash)
-   claude                                     # then /login: the OAuth paste-code flow (open the URL on the Mac, paste the code back)
-   gh auth login && gh auth setup-git         # the account the worker clones, pushes and opens PRs as
-   fx login codex                             # optional: the codex lane (the browser's redirect to localhost:1455 reaches the container)
-   fx login --no-browser grok                 # optional: the grok lane; open the printed address on the Mac, paste the callback address back
-   exit
+   relay work container login all             # claude, gh, then the optional codex and grok; the ones already in the volume are skipped
    relay work container status                # relay doctor inside, and the lanes the container worker serves
+   ```
+
+   `login` runs each vendor CLI inside the container, from the Mac, and the logins land in the volume. Claude Code
+   and gh run in your terminal (`container exec -it`): `claude`, where you type `/login`, open the URL it prints on
+   this Mac, paste the code back and `/exit`; then `gh auth login --git-protocol https --web`, whose device code
+   prints in the terminal, followed by `gh auth setup-git`. The two OAuth-redirect logins are driven from outside,
+   since the container has no browser: fx runs inside with its browser turned off (`FX_NO_OPEN_BROWSER=1`, stdin
+   kept open), relay reads the authorize URL it prints and the loopback port its `redirect_uri` names, starts a
+   listener on the Mac at `127.0.0.1:<that port>`, opens the URL in your browser (`--no-open` prints it instead),
+   and when the browser is redirected back the listener answers "signed in, you can close this tab" and hands the
+   code to the login server inside. For **grok**, fx's listener sits on a random port that no published port can
+   serve, so the code is pasted to fx's prompt on stdin, which is the by-hand flow automated. For **codex**, the
+   redirect goes to Codex's own listener on 1455, and while the container runs that port on the Mac belongs to the
+   container's `--publish 127.0.0.1:1455:1455`: relay cannot bind it, sees that it is a port the container
+   publishes, opens the browser anyway and lets the redirect reach the listener inside through the published port and
+   `relay-entry`'s forwarder (the paragraph below), waiting for fx to finish. Only when 1455 is free on the Mac (a
+   container made by an older relay without the publish) does the host listener take the codex redirect, and it
+   then replays it with `curl` on the container's loopback (`http://localhost:1455/auth/callback?code=…&state=…`)
+   and pastes the code to fx as well. Any other busy port is a refusal, and a login the browser does not come back
+   from within five minutes (`--timeout <seconds>`) is given up: both print the by-hand steps for that provider and
+   leave the others to run. `relay work container login grok` does one login; `--force` logs in again when the
+   volume already holds it. Claude Code also has `claude setup-token`, which prints a long-lived OAuth token for model
+   requests only; relay does not use it, because the login belongs in the container, not in an environment variable,
+   but it is the headless alternative when no terminal is at hand.
+
+   By hand, inside (`relay work container shell`), in this order:
+
+   ```text
+   claude                                     # then /login: the OAuth paste-code flow (open the URL on the Mac, paste the code back, /exit)
+   gh auth login && gh auth setup-git         # the account the worker clones, pushes and opens PRs as (device code)
+   fx login codex                             # optional: the codex lane (the browser's redirect to localhost:1455 reaches the container)
+   FX_NO_OPEN_BROWSER=1 fx login grok         # optional: the grok lane; open the printed URL on the Mac and paste only the code back (below)
+   exit
+   relay work container status
    ```
 
    The browser-redirect logins work through two published ports: `--publish 127.0.0.1:3000:3000` (fx's own
@@ -301,9 +330,10 @@ does anything:
    the redirect would be dropped; `relay-entry` therefore starts one `socat` forwarder per port at container boot
    (eth0 → `127.0.0.1`, as the relay user, in the background; the list comes in as `RELAY_LOGIN_PORTS`), and a
    forwarder with no login running just waits. Grok's login picks a random localhost port that no published port
-   can serve: inside, use `fx login --no-browser grok`, open the printed address on the Mac, and when the browser
-   ends on a `127.0.0.1:<port>/callback?...` page that cannot load, paste that full address from the address bar
-   (or the code xAI shows) back into the fx prompt; the login completes.
+   can serve: by hand, run `FX_NO_OPEN_BROWSER=1 fx login grok` (or `fx login grok --no-browser`; the flag goes
+   after the provider), open the printed URL on the Mac, and when the browser ends on an unreachable
+   `127.0.0.1:<port>/callback?state=…&code=…` page, paste only the `code` value into fx's prompt ("Paste the code
+   shown by xAI and press enter"); the whole address fails with "failed to sign in", and each code is single-use.
 
 Inside, `relay work` knows it is the container worker (`RELAY_ISOLATION=container`): it registers as
 `<hostname>-container` on the Mac's hostname, so the workers page and the flow map show it as a separate machine; it
@@ -321,7 +351,8 @@ Day to day:
 
 ```text
 relay work container status      # relay-work running?, the image it runs (and whether this relay would build another), relay doctor inside, the lanes it would serve
-relay work container shell       # exec into it as the relay user (logins, a look at a clone kept with --keep)
+relay work container login all   # the vendor logins inside, driven from the Mac (claude, gh, codex, grok; or one of them; --force to redo one)
+relay work container shell       # exec into it as the relay user (logins by hand, a look at a clone kept with --keep)
 relay work container logs -f     # the worker's output (container logs)
 relay work container stop        # stop it and unload the service that would restart it
 relay work container start       # the service when installed, else `container start`
@@ -340,7 +371,7 @@ ports apply), carrying over what the old container was created with (the baked `
 passthrough environment, the worker name, `--memory` and `--cpus`; the last two can be overridden), starts it, and
 checks the volume: `/home/relay/.harness/credentials.json` there means the site is already joined, so `relay setup
 --site` is skipped and the plan says `site: joined as <name> (kept)`; otherwise the device flow runs as at install
-(`--site`, `--invite`). It then reads `relay doctor` inside and prints the login list with `kept` for the logins the
+(`--site`, `--invite`). It then reads `relay doctor` inside and prints `relay work container login all` with the by-hand list under it, `kept` marking the logins the
 volume holds, so only what is missing is an instruction; when everything is there it prints one line. Then the
 service is reloaded. `relay work --isolation container --install --yes` over an existing container converges to the
 same thing (no second device flow, no login list for logins already made); `update` differs in taking its settings
@@ -400,7 +431,7 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
 - The service does not start on macOS: `launchctl print gui/$(id -u)/house.kyro.relay.work` shows the last exit
   status; `tail -f ~/.harness/work.log` the reason (usually a login or a PATH without the CLIs).
 - Container mode: `relay work container status` says `waiting: no site yet` or `no lanes yet`; the worker inside is
-  up and waits for `relay setup --site` or the logins (`relay work container shell`). The service's log on the Mac
+  up and waits for `relay setup --site` or the logins (`relay work container login all`). The service's log on the Mac
   says `attach is currently unsupported on already running containers` when something else started the container;
   `relay work container stop` then `relay work container start` hands it back to the service. After a reboot the
   first attempt can fail while `container`'s own services are still starting; KeepAlive retries 30 seconds later.
@@ -410,4 +441,4 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
 - Codex logins go stale when unused; a weekly `relay probe codex:<model>` keeps the refresh token warm.
 
 
-fx's `login codex` and `login grok` open the Mac's browser and expect the redirect at `http://localhost:3000/callback` (Grok) or `http://localhost:1455/auth/callback` (Codex's own listener); the container publishes both ports to the Mac's loopback so the login completes inside. Claude Code's login pastes a code and gh uses a device code, so they need no port.
+fx's `login codex` and `login grok` expect the browser's redirect on a loopback port inside the container: Codex's own listener at `http://localhost:1455/auth/callback`, which the container publishes to the Mac's loopback, and Grok's at a random `http://127.0.0.1:<port>/callback`, which it cannot; `relay work container login` catches both on the Mac and hands the code inside. Claude Code's login pastes a code and gh uses a device code, so they need no port.
