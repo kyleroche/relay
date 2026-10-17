@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { repo, type TaskState, type TaskView } from "@relay/core";
+import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
@@ -78,7 +79,7 @@ export default async function TasksPage() {
           </div>
           {db && <ReviewPrompt prompt={REVIEW_AGENT_PROMPT} />}
         </div>
-        {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; tasks need a database (RELAY_DATA=db or DATABASE_URL).</p>}
+        {!db && <DemoNotice className="mt-3" />}
       </section>
 
       {db && tasks.length === 0 && (

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import type { InstallationInfo } from "@relay/core";
 import { Alert } from "@/components/alert";
+import { DemoNotice } from "@/components/demo-notice";
 import { ManifestForm } from "@/components/github/manifest-form";
 import { PageIntro } from "@/components/page-intro";
 import { Button } from "@/components/ui/button";
@@ -183,7 +184,7 @@ function Manifest({ canManifest, db, org, login, secret, legacyToken }: { canMan
           <dt className="text-muted-foreground">Webhook</dt>
           <dd className="font-mono">{SITE_URL}/api/webhooks/github</dd>
         </dl>
-        {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; the manifest flow stores the app in the database and needs RELAY_DATA=db or DATABASE_URL.</p>}
+        {!db && <DemoNotice className="mt-3" />}
         {db && !canManifest && (
           <Alert tone="warn" className="mt-3 text-xs">
             Set <code className="font-mono">RELAY_SESSION_SECRET</code> (32+ characters, <code className="font-mono">openssl rand -hex 32</code>) first: the app&apos;s private key is sealed with it.

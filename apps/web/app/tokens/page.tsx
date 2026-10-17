@@ -5,6 +5,7 @@ import { ClientList, type ClientView } from "@/components/tokens/client-list";
 import { InviteCreate, InviteList, type InviteView } from "@/components/tokens/invite-manager";
 import { GrantList, MintByHand, type TokenOrigin, type TokenRowView } from "@/components/tokens/token-manager";
 import { CopyButton } from "@/components/copy-button";
+import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
 import { CONNECT_AGENT_PROMPT } from "@/lib/content/info";
 import { dataMode, SITE_URL } from "@/lib/data";
@@ -100,7 +101,7 @@ export default async function AccessPage() {
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">Access</h1>
         <PageIntro doc="/docs/api#access">Who may call this relay: agents ask for access themselves, you approve once.</PageIntro>
-        {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; access needs a database (RELAY_DATA=db or DATABASE_URL).</p>}
+        {!db && <DemoNotice className="mt-3" />}
       </section>
 
       <div className="flex flex-col gap-8">
