@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // After tsup: lay out the rest of the package beside the bundle so `runtimePaths()` finds it (dist/hooks/*.mjs,
-// dist/migrations/*.sql), make the two bins executable, and bring the repo's LICENSE into the package.
+// dist/migrations/*.sql, dist/container/ with the worker image's Dockerfile and entry script), make the two bins
+// executable, and bring the repo's LICENSE into the package.
 import { chmodSync, copyFileSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,8 @@ function copyDir(from, to, keep) {
 
 const hooks = copyDir(join(pkg, "hooks"), join(dist, "hooks"), (n) => n.endsWith(".mjs"));
 const migrations = copyDir(join(pkg, "..", "core", "src", "db", "migrations"), join(dist, "migrations"), (n) => /^\d{3,}_[\w-]+\.sql$/.test(n));
+const container = copyDir(join(pkg, "container"), join(dist, "container"), (n) => n === "Dockerfile" || n === "relay-entry");
+chmodSync(join(dist, "container", "relay-entry"), 0o755);
 for (const bin of ["relay.js", "relay-mcp.js"]) chmodSync(join(dist, bin), 0o755);
 copyFileSync(join(pkg, "..", "..", "LICENSE"), join(pkg, "LICENSE"));
-console.log(`postbuild: ${hooks.length} hook scripts, ${migrations.length} migrations, LICENSE`);
+console.log(`postbuild: ${hooks.length} hook scripts, ${migrations.length} migrations, ${container.length} container files, LICENSE`);

@@ -21,7 +21,7 @@ packed="$(cd packages/cli && npm pack --ignore-scripts --pack-destination "$tmp"
 tarball="$(jq -r '.[0].filename' <<<"$packed")"
 jq -r '.[0] | "\(.filename): \(.files | length) files, \(.size) bytes packed, \(.unpackedSize) bytes unpacked"' <<<"$packed"
 jq -r '.[0].files[].path' <<<"$packed" | sort
-for f in dist/relay.js dist/relay-mcp.js dist/hooks/_lib.mjs dist/hooks/session-start.mjs dist/hooks/user-prompt.mjs dist/hooks/session-end.mjs dist/migrations/001_init.sql templates/relay-caller.yml templates/relay-review.yml README.md LICENSE; do
+for f in dist/relay.js dist/relay-mcp.js dist/hooks/_lib.mjs dist/hooks/session-start.mjs dist/hooks/user-prompt.mjs dist/hooks/session-end.mjs dist/migrations/001_init.sql dist/container/Dockerfile dist/container/relay-entry templates/relay-caller.yml templates/relay-review.yml README.md LICENSE; do
   if ! tar -tzf "$tmp/$tarball" "package/$f" >/dev/null 2>&1; then echo "::error::$f missing from the tarball"; exit 1; fi
 done
 
