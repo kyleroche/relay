@@ -1,0 +1,30 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`claudeArgs > a code run carries the allowlist, the refusal list, no setting sources, and the sandbox as --settings 1`] = `
+[
+  "-p",
+  "--output-format",
+  "json",
+  "--model",
+  "opus",
+  "--permission-mode",
+  "acceptEdits",
+  "--allowedTools",
+  "Read,Edit,Write,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add*),Bash(git commit*),Bash(git checkout*),Bash(git restore*),Bash(pnpm install*),Bash(pnpm test*),Bash(pnpm typecheck*),Bash(pnpm build*),Bash(pnpm -r *),Bash(npm test*)",
+  "--disallowedTools",
+  "Bash(git push*),Bash(git -c*),Bash(git config*),Bash(git remote*),Bash(pnpm dlx*),Bash(pnpm exec*),Bash(npm exec*),Bash(npx*),Bash(curl*),Bash(wget*)",
+  "--strict-mcp-config",
+  "--mcp-config",
+  "{"mcpServers":{}}",
+  "--setting-sources",
+  "",
+  "--settings",
+  "{"sandbox":{"enabled":true,"autoAllowBashIfSandboxed":true,"failIfUnavailable":true,"allowUnsandboxedCommands":false,"excludedCommands":[],"network":{"strictAllowlist":true,"allowedDomains":["registry.npmjs.org","registry.yarnpkg.com","github.com","objects.githubusercontent.com","codeload.github.com","pypi.org","files.pythonhosted.org","crates.io","static.crates.io","proxy.golang.org"],"deniedDomains":[],"allowLocalBinding":true},"filesystem":{"allowWrite":["~/Library/pnpm","~/Library/Caches/pnpm","~/.local/share/pnpm","~/.cache/pnpm","~/.npm"],"denyRead":["~/.harness","~/.claude","~/.codex","~/.grok","~/.fx","~/.ssh","~/.aws","~/.config/gh","~/.claude.json","~/.netrc","~/.npmrc","~/.gitconfig"]},"credentials":{"files":[{"path":"~/.harness","mode":"deny"},{"path":"~/.claude","mode":"deny"},{"path":"~/.codex","mode":"deny"},{"path":"~/.grok","mode":"deny"},{"path":"~/.fx","mode":"deny"},{"path":"~/.ssh","mode":"deny"},{"path":"~/.aws","mode":"deny"},{"path":"~/.config/gh","mode":"deny"},{"path":"~/.claude.json","mode":"deny"},{"path":"~/.netrc","mode":"deny"},{"path":"~/.npmrc","mode":"deny"},{"path":"~/.gitconfig","mode":"deny"}]}},"permissions":{"blockReadsOutsideWorkingDirectories":true,"deny":["Read(~/.harness/**)","Read(~/.claude/**)","Read(~/.codex/**)","Read(~/.grok/**)","Read(~/.fx/**)","Read(~/.ssh/**)","Read(~/.aws/**)","Read(~/.config/gh/**)","Read(~/.claude.json)","Read(~/.netrc)","Read(~/.npmrc)","Read(~/.gitconfig)","Edit(~/.harness/**)","Edit(~/.claude/**)","Edit(~/.codex/**)","Edit(~/.grok/**)","Edit(~/.fx/**)","Edit(~/.ssh/**)","Edit(~/.aws/**)","Edit(~/.config/gh/**)","Edit(~/.claude.json)","Edit(~/.netrc)","Edit(~/.npmrc)","Edit(~/.gitconfig)"]}}",
+  "--max-turns",
+  "40",
+  "--",
+  "# relay brief
+
+Add hello.",
+]
+`;

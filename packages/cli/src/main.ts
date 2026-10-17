@@ -21,8 +21,9 @@ import { registerInvite } from "./commands/invite.ts";
 import { registerTask } from "./commands/task.ts";
 import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
+import { registerLane } from "./commands/lane.ts";
 import { openReady } from "./commands/_common.ts";
-import { lanesFromChecks, probeTools, type Check } from "./commands/probes.ts";
+import { lanesFromChecks, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 // ../package.json is packages/cli/package.json from src/ and the package root from the bundled dist/relay.js.
@@ -34,6 +35,7 @@ registerInvite(program);
 registerTask(program);
 registerWebhook(program);
 registerWork(program, version);
+registerLane(program);
 
 // ---------- memory layer: setup, link, brief, recall, decide, prefer, capture, memory (packages/cli/src/commands) ----------
 for (const register of [registerSetup, registerLink, registerBrief, registerRecall, registerDecide, registerPrefer, registerCapture, registerMemory]) register(program);
@@ -65,7 +67,7 @@ program
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether the database or site is reachable, and how this machine authenticates")
+  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, whether the database or site is reachable, and how this machine authenticates")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);
@@ -75,6 +77,7 @@ program
     checks.push(...tools);
     const lanes = lanesFromChecks(tools);
     checks.push({ status: lanes.lanes.length ? "ok" : "warn", name: "lanes", detail: lanes.lanes.length ? `${lanes.lanes.join(", ")} (relay work would serve these)${lanes.reasons.length ? `; not: ${lanes.reasons.join("; ")}` : ""}` : `none: ${lanes.reasons.join("; ")}` });
+    checks.push(sandboxCheck());
 
     const cfg = loadConfig();
     const siteMode = !!cfg.site && !!cfg.siteToken;

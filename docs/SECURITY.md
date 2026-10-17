@@ -50,9 +50,10 @@ data, never as instructions:
   Grok with `--permission-mode acceptEdits`; fx with `--auto` under its own permission rules. Reviews are read-only
   (`plan` modes, `--sandbox read-only`). Subagents and planners are disabled (`-c agents.enabled=false`,
   `--no-subagents --no-plan`, MCP servers off) so the lane is one process the runner can account for. **The Claude
-  allowlist is a permission policy, not a sandbox**: it decides which tool calls the CLI accepts without asking, and
-  anything the allowed commands can do (a `package.json` script run by `pnpm test`, a git hook in the clone) runs
-  with the full rights of the OS user the lane runs as. Only the OS gives isolation: see "Workers" below.
+  allowlist is a permission policy, the second layer**: it decides which tool calls the CLI accepts without asking.
+  What the accepted commands and their children (a `package.json` script run by `pnpm test`, a git hook in the
+  clone) can then reach is decided by Claude Code's OS sandbox, which every code run starts inside: see "Workers"
+  below for what it blocks and what it does not.
 - **What the model cannot reach.** On a GitHub Actions runner the lane runs in a fresh clone under `$RUNNER_TEMP` as
   the dedicated `relay` OS user. That user has no SSH keys, no browser profile, no sudo, and no access to your home
   directory. The worktree is deleted after the job. On a worker (`relay work`) the lane runs as the worker's own OS
@@ -72,18 +73,43 @@ else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded fr
 A worker is the operator's own machine running the vendor CLIs under the operator's own logins (`docs/WORKERS.md`).
 State the facts plainly:
 
-- The Claude lane's permission allowlist (`CODE_TOOLS`) **is not a sandbox**. It limits which tool calls Claude Code
-  accepts; it does not limit what `pnpm test` or a repository's own scripts do once they run. Codex's `--sandbox
-  workspace-write` is a sandbox for that lane only; Grok and fx have no OS sandbox of their own.
-- **The lane runs as the worker's OS user.** Whatever that user can read or do, a fooled lane can: its home directory,
-  its keychain logins, its SSH keys, its other repositories. `cleanEnv` strips the API keys and the worker's
-  `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is
-  deleted after the job, but the environment is the only boundary relay itself puts there.
-- **A dedicated OS user or a container for `relay work` is the recommended setup.** Create a user that holds the
-  vendor logins and the `gh` login and nothing else (no SSH keys, no sudo, no browser profile, no access to your home
-  directory) and run the worker service as that user, or run the worker in a container whose only credentials are
-  those logins. A worker on your daily-use account works and is how `relay setup` gets you started; it is the least
-  safe arrangement and should be temporary.
+- **The Claude lane's Bash runs inside Claude Code's OS sandbox** (Seatbelt on macOS, bubblewrap and socat on Linux).
+  Every code run passes one settings document with `--settings` (`claudeSandboxSettings` in
+  `packages/core/src/lanes/sandbox.ts`; `relay lane settings` prints it, `run-lane.sh` uses the same), and
+  `--setting-sources ""` makes it the only settings the run sees, so neither the machine's `~/.claude` nor a
+  `.claude/settings.json` in the clone can loosen it. Inside it, every Bash command and every child process (git,
+  pnpm, a repository's own scripts, a git hook) may write only inside the clone and the pnpm/npm stores, may not read
+  `~/.harness`, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.grok`, `~/.fx`, `~/.ssh`, `~/.aws`, `~/.config/gh`,
+  `~/.netrc`, `~/.npmrc` or `~/.gitconfig`, and may reach only the package registries and GitHub download hosts on the
+  network allowlist (`strictAllowlist`; `RELAY_LANE_ALLOWED_DOMAINS` adds hosts) through Claude Code's local proxy.
+  `failIfUnavailable` and `allowUnsandboxedCommands: false` mean a machine that cannot sandbox fails the job with a
+  message saying what to install; nothing ever falls back to running unsandboxed. Verified on macOS with Claude Code
+  2.1.280: `head ~/.gitconfig` and `touch ~/x` fail with "Operation not permitted", `curl` to an unlisted host gets a
+  proxy 403 with a `deny network-outbound` violation.
+- **What the sandbox does not cover.** It wraps Bash, not the Read/Edit/Write tools, so the same paths are refused
+  again with `permissions.deny` rules (`Read(~/.ssh/**)`, `Edit(~/.gitconfig)`, ...) and
+  `blockReadsOutsideWorkingDirectories` keeps the Read tool inside the clone. The Claude Code process itself (the
+  model call, the login) runs outside the sandbox, which is why the subscription still works. Codex's `--sandbox
+  workspace-write` is that vendor's own sandbox; Grok and fx have no OS sandbox, and run under their permission modes
+  alone.
+- **The permission allowlist (`CODE_TOOLS`, `CODE_DISALLOWED_TOOLS`) is the second layer.** It limits which tool
+  calls Claude Code accepts without asking (named git and pnpm subcommands; no push, no package runners, no
+  fetchers); the sandbox limits what those commands can reach once they run. Either alone is weaker than both.
+- **`relay work --no-sandbox` is the escape hatch, and it is recorded.** The worker logs a warning on start, says
+  `sandbox OFF` in its banner line, and registers with the label `sandbox:off`, which the workers page shows. Use it only on a machine where
+  the Claude lane's Bash may run with the full rights of the worker's OS user.
+- **The lane still runs as the worker's OS user.** The sandbox denies the credential paths above, but any other file
+  that user can read, a fooled lane can read; `cleanEnv` strips the API keys and the worker's `RELAY_TOKEN`,
+  `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is deleted after
+  the job. The next tier is a dedicated OS user or an Apple `container` for the worker (planned as `relay work
+  --isolation container`; not built yet).
+- **A dedicated OS user or a container for `relay work` is the recommended setup** until that exists. Create a user
+  that holds the vendor logins and the `gh` login and nothing else (no SSH keys, no sudo, no browser profile, no access
+  to your home directory) and run the worker service as that user, or run the worker in a container whose only
+  credentials are those logins. A worker on your daily-use account works and is how `relay setup` gets you started;
+  with the sandbox on it is acceptable, without it it should be temporary.
+- **Linux prerequisites.** `bubblewrap` and `socat` must be on PATH (`sudo apt install bubblewrap socat`, or `dnf`);
+  `relay doctor` has a `sandbox` line that says so. macOS needs nothing extra.
 - **Branch protection on the default branch is required.** The worker pushes with the operator's `gh` login; only the
   repository's rules keep a `relay/<lane>-<issue>` branch from becoming `main` without a review.
 - Set `RELAY_ALLOWED_SENDERS`: it is what keeps a label added by anyone with triage on a linked repo from becoming a

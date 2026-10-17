@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { detectGitHub, httpWorkApi, localWorkApi, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
+import { detectGitHub, httpWorkApi, laneRunner, localWorkApi, NO_SANDBOX_LABEL, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
 import { log, openReady } from "./_common.ts";
 import { detectLanes } from "./probes.ts";
 
@@ -28,6 +28,8 @@ interface WorkOptions {
   interval: string;
   maxMinutes: string;
   keep?: boolean;
+  /** commander's `--no-sandbox`: true unless the flag was passed. */
+  sandbox: boolean;
   install?: boolean;
   uninstall?: boolean;
   yes?: boolean;
@@ -57,15 +59,18 @@ async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () =
   return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name">) {
+function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>) {
   const platform = process.platform === "darwin" ? "darwin" : "linux";
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
   if (o.labels) args.push("--labels", o.labels);
   if (o.jobs && o.jobs !== "1") args.push("--jobs", o.jobs);
   if (o.name) args.push("--name", o.name);
+  if (o.sandbox === false) args.push("--no-sandbox");
   const rp = runtimePaths();
-  return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}) });
+  // extra hosts for the Claude lane's sandbox travel with the service when set at install time
+  const domains = process.env.RELAY_LANE_ALLOWED_DOMAINS;
+  return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}), ...(domains ? { env: { RELAY_LANE_ALLOWED_DOMAINS: domains } } : {}) });
 }
 
 const sh = (words: string[]): { ok: boolean; out: string } => {
@@ -96,6 +101,7 @@ export function registerWork(program: Command, version: string): void {
     .option("--interval <seconds>", "seconds between empty polls", "15")
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
+    .option("--no-sandbox", `run the Claude lane's Bash without Claude Code's OS sandbox (allowlist only); logged, and advertised as the label ${NO_SANDBOX_LABEL}`)
     .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it")
     .option("--uninstall", "stop and remove that service; --yes to do it")
     .option("--yes", "write files and start/stop the service")
@@ -113,8 +119,14 @@ export function registerWork(program: Command, version: string): void {
         if (!serving.length) throw new Error(`no lanes to serve: ${d.reasons.join("; ")}. Log in, or force with --lanes.`);
         if (d.reasons.length) out(`not serving: ${d.reasons.join("; ")}`);
       }
+      const labels = list(o.labels);
+      if (!o.sandbox) {
+        // loud on purpose: this machine's Claude jobs run Bash with the rights of this OS user, boxed by the allowlist alone
+        out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers").`);
+        if (!labels.includes(NO_SANDBOX_LABEL)) labels.push(NO_SANDBOX_LABEL);
+      }
       const { api, where, close } = await openWorkApi();
-      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `polling every ${o.interval}s`}, log ${workLogPath()}`);
+      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `polling every ${o.interval}s`}, sandbox ${o.sandbox ? "on" : "OFF"}, log ${workLogPath()}`);
       const ac = new AbortController();
       const stop = () => ac.abort();
       process.once("SIGINT", stop);
@@ -125,14 +137,14 @@ export function registerWork(program: Command, version: string): void {
           name,
           host: hostname(),
           lanes: serving,
-          labels: list(o.labels),
+          labels,
           version,
           jobs,
           ...(o.once ? { once: true } : {}),
           pollMs: Math.max(5, Number(o.interval) || 15) * 1000,
           log: out,
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}) },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox: o.sandbox }) },
         });
         out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed` : ""}`);
         if (r.results.some((x) => x.outcome === "failed")) process.exitCode = 1;
@@ -198,6 +210,7 @@ export function registerWork(program: Command, version: string): void {
     }
     console.log(`would write ${p.path}:\n`);
     console.log(p.content.replace(/^/gm, "    "));
+    if (o.sandbox === false) console.log(`WARNING     the service will run the Claude lane's Bash without Claude Code's OS sandbox (--no-sandbox is baked in; label ${NO_SANDBOX_LABEL})`);
     for (const w of p.load) console.log(`would run   ${w.join(" ")}`);
     console.log(`log file    ${p.logPath}`);
     if (process.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");

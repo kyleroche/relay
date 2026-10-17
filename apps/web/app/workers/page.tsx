@@ -87,11 +87,18 @@ export default async function WorkersPage() {
                     {l}
                   </li>
                 ))}
-                {w.labels.map((l) => (
-                  <li key={`label:${l}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                    {l}
-                  </li>
-                ))}
+                {w.labels.map((l) =>
+                  l === "sandbox:off" ? (
+                    // relay work --no-sandbox: this machine runs the Claude lane's Bash without Claude Code's OS sandbox
+                    <li key={`label:${l}`} className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[10px] text-destructive" title="Started with --no-sandbox: the Claude lane's Bash runs without Claude Code's OS sandbox on this machine">
+                      {l}
+                    </li>
+                  ) : (
+                    <li key={`label:${l}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
+                      {l}
+                    </li>
+                  ),
+                )}
               </ul>
             </li>
           );

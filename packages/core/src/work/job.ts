@@ -19,6 +19,7 @@ import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
 import { runCodex } from "../lanes/codex.ts";
 import { runFx } from "../lanes/fx.ts";
 import { runGrok } from "../lanes/grok.ts";
+import { SANDBOX_UNAVAILABLE } from "../lanes/sandbox.ts";
 import type { LaneRequest, LaneResult } from "../lanes/types.ts";
 import { type Log, noopLog } from "../util.ts";
 import type { WorkApi } from "./api.ts";
@@ -31,8 +32,9 @@ export const DEFAULT_MAX_TURNS = 40;
  * Tools a code run may use without asking: edit files, run the project's own checks, and use git locally. Named
  * subcommands only; `git push`, `git -c`/`config`/`remote` (which could rewrite where a push goes or run a hook),
  * package runners (`pnpm dlx`, `npx`, `exec`) and network fetchers are refused outright (`CODE_DISALLOWED_TOOLS`).
- * The worker itself commits, pushes and opens the PR. This is Claude Code's permission allowlist, not a sandbox: the
- * lane still runs as the worker's OS user (docs/SECURITY.md).
+ * The worker itself commits, pushes and opens the PR. This is Claude Code's permission allowlist, the second layer
+ * behind the OS sandbox the lane's Bash runs in (`lanes/sandbox.ts`): the allowlist decides which tool calls the CLI
+ * accepts, the sandbox decides what the accepted commands and their children can reach (docs/SECURITY.md).
  */
 export const CODE_TOOLS = [
   "Read",
@@ -73,6 +75,17 @@ export interface GitHost {
 }
 
 export type LaneRunner = (req: LaneRequest, lane: string) => Promise<LaneResult & { tool: string }>;
+
+/** The label a worker started with `--no-sandbox` advertises, so the site shows which machines run Claude's Bash unsandboxed. */
+export const NO_SANDBOX_LABEL = "sandbox:off";
+
+/**
+ * What the operator reads (run.failed summary and error, under 300 characters) when Claude Code refused to start
+ * because the machine cannot sandbox (`failIfUnavailable`). Starts with `SANDBOX_UNAVAILABLE` so callers can still tell.
+ */
+export const SANDBOX_UNAVAILABLE_SUMMARY =
+  `${SANDBOX_UNAVAILABLE}: Claude Code could not set up its OS sandbox on this worker, so the job did not run (relay never runs the lane unsandboxed). ` +
+  "Linux: sudo apt install bubblewrap socat (or dnf); macOS has it built in. `relay work --no-sandbox` is the recorded escape hatch.";
 
 export interface JobOptions {
   api: WorkApi;
@@ -182,12 +195,24 @@ export function ghHost(opts: { gh?: string; git?: string } = {}): GitHost {
   };
 }
 
-/** Default lane runner: the native CLI for the lane, fx when only it is installed. Models come from RELAY_MODEL_<LANE>. */
-export const defaultLaneRunner: LaneRunner = async (req, lane) => {
+export interface LaneRunnerOptions {
+  /**
+   * Claude Code's OS sandbox around the lane's Bash (default on). `false` is `relay work --no-sandbox`: the lane runs
+   * with the allowlist alone, as the worker's OS user, and the worker says so in its labels (`NO_SANDBOX_LABEL`).
+   */
+  sandbox?: boolean;
+}
+
+/**
+ * The lane runner `relay work` uses: the native CLI for the lane, fx when only it is installed. Models come from
+ * RELAY_MODEL_<LANE>. The Claude lane runs code requests inside Claude Code's OS sandbox with the allowlist as the
+ * second layer; `RELAY_LANE_ALLOWED_DOMAINS` in the job's environment adds hosts to the sandbox's network allowlist.
+ */
+export const laneRunner = (o: LaneRunnerOptions = {}): LaneRunner => async (req, lane) => {
   const env = process.env;
   if (lane === "claude") {
     const model = (env.RELAY_MODEL_CLAUDE as ClaudeModel | undefined) ?? "opus";
-    return { tool: "claude", ...(await runClaude(req, { model, allowedTools: CODE_TOOLS, disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS })) };
+    return { tool: "claude", ...(await runClaude(req, { model, allowedTools: CODE_TOOLS, disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS, sandbox: o.sandbox ?? true })) };
   }
   const fake = env.RELAY_FAKE_LANES === "1";
   if (lane === "codex") {
@@ -200,6 +225,9 @@ export const defaultLaneRunner: LaneRunner = async (req, lane) => {
   }
   throw new Error(`no lane adapter for '${lane}'`);
 };
+
+/** `laneRunner()` with the defaults: the sandbox on. */
+export const defaultLaneRunner: LaneRunner = laneRunner();
 
 export const branchFor = (lane: string, issue: number): string => `relay/${lane}-${issue}`;
 export const workDirFor = (home: string, taskId: string): string => join(home, "work", taskId.replace(/[^A-Za-z0-9._-]+/g, "_"));
@@ -321,14 +349,26 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
     const prompt = composeJobPrompt({ repo: task.repo, issue, lane, ...(existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}), brief });
 
     log(`${task.id}: running the ${lane} lane`);
-    const result = await laneRun({ lane: "code", prompt, cwd: dir, env: cleanEnv(), timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, project: task.project, task: task.id }, lane);
+    // the lane's git identity comes from the environment: inside the sandbox ~/.gitconfig is unreadable by design
+    const gitName = opts.gitName ?? "relay-agent";
+    const gitEmail = opts.gitEmail ?? "relay-agent@users.noreply.github.com";
+    const laneEnv = { ...cleanEnv(), GIT_AUTHOR_NAME: gitName, GIT_AUTHOR_EMAIL: gitEmail, GIT_COMMITTER_NAME: gitName, GIT_COMMITTER_EMAIL: gitEmail };
+    const result = await laneRun({ lane: "code", prompt, cwd: dir, env: laneEnv, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, project: task.project, task: task.id }, lane);
     usage = toUsage(result);
     summary = result.text;
-    if (!result.ok) return await report("failed", { error: (result.error ?? `${result.tool} did not finish`).slice(0, 300) });
+    if (!result.ok) {
+      if (result.error?.startsWith(SANDBOX_UNAVAILABLE)) {
+        // the machine cannot sandbox: say what to install instead of echoing claude's exit message
+        log(`${task.id}: claude refused to start: ${result.error}`);
+        summary = SANDBOX_UNAVAILABLE_SUMMARY;
+        return await report("failed", { error: SANDBOX_UNAVAILABLE_SUMMARY });
+      }
+      return await report("failed", { error: (result.error ?? `${result.tool} did not finish`).slice(0, 300) });
+    }
 
     await git(["add", "-A"]);
     const staged = await run("git", ["diff", "--cached", "--quiet"], { cwd: dir });
-    if (staged.code !== 0) await git(["-c", `user.name=${opts.gitName ?? "relay-agent"}`, "-c", `user.email=${opts.gitEmail ?? "relay-agent@users.noreply.github.com"}`, "commit", "-q", "-m", `${lane}: ${issue.title || `#${task.issue}`}`, "-m", `relay ${lane} lane for #${task.issue}`]);
+    if (staged.code !== 0) await git(["-c", `user.name=${gitName}`, "-c", `user.email=${gitEmail}`, "commit", "-q", "-m", `${lane}: ${issue.title || `#${task.issue}`}`, "-m", `relay ${lane} lane for #${task.issue}`]);
     const ahead = Number((await git(["rev-list", "--count", `origin/${base}..HEAD`])).trim());
     if (!ahead) return await report("failed", { error: `the ${lane} lane made no changes` });
 

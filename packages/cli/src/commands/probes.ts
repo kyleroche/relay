@@ -3,6 +3,7 @@
  * only a derived status, never command output, so no token or account id can leak into a log.
  */
 import { execFile } from "node:child_process";
+import { sandboxPrerequisites } from "@relay/core";
 import { onPath } from "./_common.ts";
 
 export type Status = "ok" | "warn" | "fail";
@@ -83,6 +84,15 @@ export async function probeTools(): Promise<Check[]> {
     checks.push(await loginCheck(tool, bin));
   }
   return checks;
+}
+
+/**
+ * Can Claude Code sandbox the Claude lane's Bash here? macOS has Seatbelt built in; Linux needs bubblewrap and socat
+ * on PATH (`relay work` fails Claude jobs rather than run them unsandboxed, docs/WORKERS.md).
+ */
+export function sandboxCheck(platform: NodeJS.Platform = process.platform): Check {
+  const r = sandboxPrerequisites(platform, (bin) => !!onPath(bin));
+  return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
 }
 
 /**

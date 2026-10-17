@@ -9,6 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaneRequest, LaneResult } from "./types.ts";
 import { withSubscriptionLock } from "./types.ts";
+import { claudeSandboxSettingsJson, looksLikeSandboxUnavailable, parseDomainList, SANDBOX_UNAVAILABLE, type SandboxOptions } from "./sandbox.ts";
 import { costEquiv } from "../ledger/ledger.ts";
 import { approxTokens } from "../util.ts";
 
@@ -33,6 +34,12 @@ export interface ClaudeOptions {
   maxBudgetUsd?: number;
   /** `--max-turns`: a hard stop for agentic code runs (the worker passes 40). Omit for utility calls. */
   maxTurns?: number;
+  /**
+   * Claude Code's OS sandbox for Bash and its children (`--settings`, see sandbox.ts): on for `code` requests unless
+   * set to false, off for everything else unless set to true or given options. With it on, a run on a machine that
+   * cannot sandbox fails (`failIfUnavailable`) and `error` starts with `SANDBOX_UNAVAILABLE`.
+   */
+  sandbox?: boolean | SandboxOptions;
 }
 
 interface ClaudeJson {
@@ -50,6 +57,48 @@ interface ClaudeJson {
 
 /** A utility call (digest, summary, capture): no tools, the content is already in the prompt. */
 const isUtility = (opts: ClaudeOptions): boolean => opts.tools !== undefined && opts.tools.length === 0;
+
+/** Sandbox options for this call, or undefined when the run is not sandboxed. */
+export function sandboxFor(req: LaneRequest, opts: ClaudeOptions): SandboxOptions | undefined {
+  const on = opts.sandbox ?? req.lane === "code";
+  if (on === false) return undefined;
+  const o: SandboxOptions = on === true ? {} : { ...on };
+  const extra = parseDomainList((req.env ?? process.env)["RELAY_LANE_ALLOWED_DOMAINS"]);
+  if (extra.length) o.allowedDomains = [...(o.allowedDomains ?? []), ...extra];
+  return o;
+}
+
+/** The argv `claude` is started with. Pure, so tests can snapshot it. */
+export function claudeArgs(req: LaneRequest, opts: ClaudeOptions): string[] {
+  const utility = isUtility(opts);
+  const args = ["-p", "--output-format", "json", "--model", opts.model];
+  args.push("--permission-mode", req.readOnly ? "plan" : "acceptEdits");
+  if (opts.tools) args.push("--tools", opts.tools.join(","));
+  if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
+  else if (req.readOnly && opts.tools === undefined) args.push("--allowedTools", "Read,Grep,Glob");
+  if (opts.disallowedTools?.length) args.push("--disallowedTools", opts.disallowedTools.join(","));
+  // no MCP servers and no user/project settings: those are where plugins and skills inflate the prompt, and where a
+  // repository could otherwise loosen the sandbox below
+  args.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "");
+  // the OS sandbox: the only settings document this run sees, so nothing on the machine or in the clone can override it
+  const sandbox = sandboxFor(req, opts);
+  if (sandbox) args.push("--settings", claudeSandboxSettingsJson(sandbox));
+  // Utility calls also drop skills and slash commands and, with the env and scratch cwd set in runClaude, load no
+  // project instruction files, auto-memory, hooks or MCP servers, so the model cannot wander off to "check the memory
+  // files". Baseline on "Reply with exactly the single word: pong", Sonnet, 2026-10-13, cwd = the relay repo with
+  // auto-memory:
+  //   before: 11,364 context tokens (2 in + 7,961 cache write + 3,401 cache read), $0.0328 equivalent
+  //   after:   6,793 context tokens (2 in + 3,390 cache write + 3,401 cache read), $0.0145 equivalent
+  if (utility) args.push("--disable-slash-commands");
+  for (const d of req.addDirs ?? []) args.push("--add-dir", d);
+  if (req.system) args.push("--append-system-prompt", req.system);
+  if (req.jsonSchema) args.push("--json-schema", JSON.stringify(req.jsonSchema));
+  if (opts.resume) args.push("--resume", opts.resume);
+  if (opts.maxBudgetUsd) args.push("--max-budget-usd", String(opts.maxBudgetUsd));
+  if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
+  args.push("--", req.prompt);
+  return args;
+}
 
 /**
  * Canned results for `RELAY_FAKE_LANES=1`: no process is spawned and nothing leaves the machine. The shape follows
@@ -94,27 +143,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
   const model = MODEL_IDS[opts.model];
   const utility = isUtility(opts);
   return withSubscriptionLock("claude:max", async () => {
-    const args = ["-p", "--output-format", "json", "--model", opts.model];
-    args.push("--permission-mode", req.readOnly ? "plan" : "acceptEdits");
-    if (opts.tools) args.push("--tools", opts.tools.join(","));
-    if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
-    else if (req.readOnly && opts.tools === undefined) args.push("--allowedTools", "Read,Grep,Glob");
-    if (opts.disallowedTools?.length) args.push("--disallowedTools", opts.disallowedTools.join(","));
-    // no MCP servers and no user/project settings: those are where plugins and skills inflate the prompt
-    args.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "");
-    // Utility calls also drop skills and slash commands and, with the env and scratch cwd set below, load no project
-    // instruction files, auto-memory, hooks or MCP servers, so the model cannot wander off to "check the memory files".
-    // Baseline on "Reply with exactly the single word: pong", Sonnet, 2026-10-13, cwd = the relay repo with auto-memory:
-    //   before: 11,364 context tokens (2 in + 7,961 cache write + 3,401 cache read), $0.0328 equivalent
-    //   after:   6,793 context tokens (2 in + 3,390 cache write + 3,401 cache read), $0.0145 equivalent
-    if (utility) args.push("--disable-slash-commands");
-    for (const d of req.addDirs ?? []) args.push("--add-dir", d);
-    if (req.system) args.push("--append-system-prompt", req.system);
-    if (req.jsonSchema) args.push("--json-schema", JSON.stringify(req.jsonSchema));
-    if (opts.resume) args.push("--resume", opts.resume);
-    if (opts.maxBudgetUsd) args.push("--max-budget-usd", String(opts.maxBudgetUsd));
-    if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
-    args.push("--", req.prompt);
+    const args = claudeArgs(req, opts);
     const t0 = Date.now();
     const env = { ...(req.env ?? process.env) };
     delete env["CLAUDECODE"];
@@ -165,7 +194,12 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     };
     if (j?.structured_output !== undefined) res.json = j.structured_output;
     if (j?.session_id) res.sessionId = j.session_id;
-    if (!ok) res.error = (j?.result || stderr || `claude exited ${code}`).slice(0, 500);
+    if (!ok) {
+      const msg = j?.result || stderr || `claude exited ${code}`;
+      // failIfUnavailable: Claude Code exited instead of running Bash unsandboxed; name it so the worker can tell the operator
+      const unavailable = sandboxFor(req, opts) !== undefined && !j && looksLikeSandboxUnavailable(`${stderr}\n${stdout}`);
+      res.error = (unavailable ? `${SANDBOX_UNAVAILABLE}: ${msg}` : msg).slice(0, 500);
+    }
     return res;
   });
 }

@@ -66,20 +66,35 @@ START=$(date +%s)   # seconds: macOS date has no %N; a CLI's own duration_ms is 
 case "$LANE" in
   claude)
     TOOL=claude
-    # no MCP servers and no user/project settings: that is where plugins and skills inflate the prompt
+    # no MCP servers and no user/project settings: that is where plugins and skills inflate the prompt, and where a
+    # repository could otherwise loosen the sandbox below
     args=(-p --output-format json --permission-mode "$PERM" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --setting-sources "")
     # Named subcommands only, and an explicit refusal list (push, config/remote rewrites, package runners, fetchers): the
-    # runner itself commits, pushes and opens the PR. A permission allowlist, not a sandbox (docs/SECURITY.md).
+    # runner itself commits, pushes and opens the PR. This allowlist is the second layer behind the OS sandbox (docs/SECURITY.md).
     if (( RO )); then
       args+=(--allowedTools "Read,Glob,Grep")
     else
       args+=(--allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add*),Bash(git commit*),Bash(git checkout*),Bash(git restore*),Bash(pnpm install*),Bash(pnpm test*),Bash(pnpm typecheck*),Bash(pnpm build*),Bash(pnpm -r *),Bash(npm test*)")
       args+=(--disallowedTools "Bash(git push*),Bash(git -c*),Bash(git config*),Bash(git remote*),Bash(pnpm dlx*),Bash(pnpm exec*),Bash(npm exec*),Bash(npx*),Bash(curl*),Bash(wget*)")
+      # Code mode runs Bash and its children inside Claude Code's OS sandbox (Seatbelt / bubblewrap): the one settings
+      # document this run sees comes from `relay lane settings` (packages/core/src/lanes/sandbox.ts), the same JSON
+      # `relay work` passes, so the two paths cannot drift. failIfUnavailable makes claude exit instead of running
+      # unsandboxed; RELAY_NO_SANDBOX=1 is the loud escape hatch. RELAY_LANE_ALLOWED_DOMAINS adds hosts.
+      if [[ "${RELAY_NO_SANDBOX:-}" == 1 ]]; then
+        echo "run-lane: WARNING: RELAY_NO_SANDBOX=1: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on this runner; only the tool allowlist stands" >&2
+      else
+        if command -v relay >/dev/null; then SETTINGS=$(relay lane settings 2>/dev/null || true)
+        else SETTINGS=$(npx -y @kyleroche/relay lane settings 2>/dev/null || true); fi
+        jq -e '.sandbox.enabled == true' <<< "$SETTINGS" >/dev/null 2>&1 || {
+          echo "run-lane: could not get the sandbox settings (relay lane settings): install @kyleroche/relay on the runner, or set RELAY_NO_SANDBOX=1 to run the Claude lane unsandboxed" >&2; exit 2; }
+        args+=(--settings "$SETTINGS")
+        export GIT_AUTHOR_NAME="$GIT_NAME" GIT_AUTHOR_EMAIL="$GIT_EMAIL" GIT_COMMITTER_NAME="$GIT_NAME" GIT_COMMITTER_EMAIL="$GIT_EMAIL"   # ~/.gitconfig is unreadable inside the sandbox
+      fi
     fi
     # --max-turns is not listed by every Claude Code release; pass it only when this build advertises it
     claude --help 2>/dev/null | grep -q -- '--max-turns' && args+=(--max-turns 40)
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")
-    claude "${args[@]}" -- "$PROMPT" > "$OUT" </dev/null || true   # success is judged from the JSON below, not the exit code
+    claude "${args[@]}" -- "$PROMPT" > "$OUT" 2> "$TMP/err" </dev/null || true   # success is judged from the JSON below, not the exit code
     ;;
   codex|grok)
     if command -v fx >/dev/null; then
@@ -118,7 +133,11 @@ USAGE_JSON=$(jq -cn --arg lane "$LANE" --arg mode "$MODE" --arg tool "$TOOL" --a
   '{relay:"step.usage", lane:$lane, mode:$mode, tool:$tool, model:$model, issue:$issue, tokens_in:$ti, tokens_out:$to, cache_read:$cr, cache_write:$cw, duration_ms:$d}')
 echo "run-lane: $USAGE_JSON"   # always in the job log, even when the step fails before a PR exists
 if [[ "${OK:-false}" != true ]]; then
+  if [[ "$TOOL" == claude && "$MODE" == code && "${RELAY_NO_SANDBOX:-}" != 1 ]] && ! jq -e . "$OUT" >/dev/null 2>&1 && cat "$OUT" "$TMP/err" | grep -qiE 'sandbox.*(unavailable|not (available|supported|found|installed)|bubblewrap|bwrap|socat|could not|cannot|failed)'; then
+    echo "run-lane: Claude Code could not set up its OS sandbox on this runner, so the job was not run (relay never runs the lane unsandboxed). On Linux: sudo apt install bubblewrap socat (or dnf). RELAY_NO_SANDBOX=1 is the recorded escape hatch." >&2
+  fi
   echo "run-lane: $TOOL did not finish successfully for #$ISSUE; first 4000 bytes of its output:" >&2; head -c 4000 "$OUT" >&2; echo >&2
+  [[ -s "$TMP/err" ]] && { echo "run-lane: stderr:" >&2; head -c 2000 "$TMP/err" >&2; echo >&2; }
   exit 1
 fi
 
