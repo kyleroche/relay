@@ -12,48 +12,43 @@ relay lets one person's coding-agent subscriptions (Claude, Codex, Grok) work as
 
 Do these steps in order and stop at anything that needs the user's browser.
 
-1. Clone and install:
+relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>` runs it with no checkout. It needs Node 24 or newer (`node -v`); if the machine has an older Node, install 24 with the user's version manager or `brew install node@24` before anything else.
+
+1. Report what is present:
 
    ```bash
-   git clone https://github.com/kyleroche/relay && cd relay
-   pnpm install
+   npx @kyleroche/relay doctor
    ```
 
-   Node 24 is pinned through `.npmrc`; pnpm fetches it. If `pnpm` is missing, run `corepack enable` first.
+   It lists which CLIs are installed and logged in (`claude`, `codex` or `fx`, `grok`, `gh`), the Node version, and database reachability (the first run creates relay's embedded database under `~/.harness`). Tell the user what is missing. Logins are theirs to do: `claude` then `/login`, `codex login` or `fx login codex`, `grok login` or `fx login grok`, `gh auth login`.
 
-2. Report what is present:
+2. Install hooks and the memory MCP server into each detected CLI's config:
 
    ```bash
-   pnpm relay doctor
+   npx @kyleroche/relay setup
    ```
 
-   It lists which CLIs are installed and logged in (`claude`, `codex` or `fx`, `grok`, `gh`), the Node version, and database reachability. Tell the user what is missing. Logins are theirs to do: `claude` then `/login`, `codex login` or `fx login codex`, `grok login` or `fx login grok`, `gh auth login`.
+   It prints every file it will touch and writes nothing. Run `npx @kyleroche/relay setup --yes` only if the user said so. The hooks and the MCP server are recorded as the installed package's own files, run with the Node that ran `setup`.
 
-3. Install hooks and the memory MCP server into each detected CLI's config:
-
-   ```bash
-   pnpm relay setup
-   ```
-
-   It prints every file it will touch and asks before writing. Pass `--yes` only if the user said so.
-
-4. In each repository the user wants managed:
+3. In each repository the user wants managed:
 
    ```bash
-   cd ~/code/some-repo && ~/relay/bin/relay link
+   cd ~/code/some-repo && npx @kyleroche/relay link
    ```
 
    This is the only per-repo step: it registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), writes `relay.md`, and adds the owned section to `AGENTS.md`/`CLAUDE.md`, the `agent:*` GitHub labels, and the caller workflow. Re-running it is safe; `--refresh` rewrites the summary.
 
-5. Optional, for runners: follow `docs/RUNNERS.md` to register a self-hosted GitHub Actions runner on a machine that holds the logins.
+4. Optional, for runners: follow `docs/RUNNERS.md` to register a self-hosted GitHub Actions runner on a machine that holds the logins.
 
-6. Optional, for a model the user will prompt (image or video models):
+5. Optional, for a model the user will prompt (image or video models):
 
    ```bash
-   pnpm relay onboard <provider/model>
+   npx @kyleroche/relay onboard <provider/model>
    ```
 
    relay ingests only the vendor's official docs and skills. Do not add community prompt guides.
+
+Working from source instead (contributing, or a machine that must track `main`): `git clone https://github.com/kyleroche/relay && cd relay && pnpm install`, then `pnpm relay doctor`, `pnpm relay setup`, and `~/relay/bin/relay link` in each repo. Node 24 is pinned through `.node-version`; if `pnpm` is missing, run `corepack enable` first. A checkout's `setup` records the checkout's own hook scripts, so the checkout must stay where it was when `setup` ran (re-run it after moving).
 
 ## Rules you must keep
 
@@ -65,7 +60,7 @@ Do these steps in order and stop at anything that needs the user's browser.
 ## Reading the feed
 
 - Web: the site root is the public overview for anonymous visitors and the feed once signed in; `/docs` explains the system.
-- Terminal: `pnpm relay feed --limit 20`, `pnpm relay usage --window 7d`.
+- Terminal: `npx @kyleroche/relay feed --limit 20`, `npx @kyleroche/relay usage --window 7d` (`pnpm relay …` from a checkout).
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
 - MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`.
 
