@@ -11,7 +11,7 @@ import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { fmtAgo } from "@/lib/format";
 import { requireSession } from "@/lib/session";
-import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath } from "@/lib/tasks";
+import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath, TONE_TEXT } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -93,7 +93,7 @@ export default async function TasksPage() {
           {groups.map(({ state, list }) => (
             <li key={state}>
               <h2 className="flex items-baseline gap-2 bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground" title={STATE_HINT[state]}>
-                <span className={cn("font-mono", STATE_TONE[state])}>{state}</span>
+                <span className={cn(TONE_TEXT[STATE_TONE[state]])}>{state}</span>
                 <span className="font-mono tabular-nums text-foreground">{list.length}</span>
               </h2>
               <ul className="divide-y border-t">

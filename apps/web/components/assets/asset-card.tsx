@@ -1,7 +1,7 @@
 import { FileText, File as FileIcon, Film, Globe, Image as ImageIcon, Music } from "lucide-react";
 import Link from "next/link";
 import { ActorChip } from "@/components/feed/actor-chip";
-import { StatusBadge } from "@/components/assets/status-badge";
+import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { Pill } from "@/components/ui/pill";
 import { fmtAgo } from "@/lib/format";
 import type { Asset, AssetKind } from "@/lib/types";
@@ -57,7 +57,7 @@ export function AssetCard({ asset, now, showProject = true }: { asset: Asset; no
         <div className="flex flex-1 flex-col gap-2 p-3">
           <div className="flex items-start justify-between gap-2">
             <h3 className="line-clamp-2 text-sm font-medium leading-5">{asset.title}</h3>
-            <StatusBadge status={asset.status} className="shrink-0" />
+            <AssetStatusBadge status={asset.status} className="shrink-0" />
           </div>
           <p className="flex flex-wrap items-center gap-x-2 gap-y-1 font-mono text-[11px] text-muted-foreground">
             {showProject && asset.project && <span>{asset.project}</span>}

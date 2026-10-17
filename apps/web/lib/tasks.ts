@@ -1,5 +1,6 @@
 /** Shared bits of the task pages: state copy and tones, the page path, the prompt that drives a review from chat. */
 import type { repo, TaskState, TaskView } from "@relay/core";
+import type { StatusTone } from "@/components/ui/status-badge";
 import { SITE_URL } from "./site.ts";
 
 export const STATE_HINT: Record<TaskState, string> = {
@@ -11,13 +12,22 @@ export const STATE_HINT: Record<TaskState, string> = {
   failed: "The lane exited with an error, made no changes, or timed out; the run's summary says what happened.",
 };
 
-export const STATE_TONE: Record<TaskState, string> = {
-  queued: "text-muted-foreground",
-  claimed: "text-muted-foreground",
-  running: "text-primary",
-  review: "text-warn",
-  done: "text-ok",
-  failed: "text-bad",
+export const STATE_TONE: Record<TaskState, StatusTone> = {
+  queued: "muted",
+  claimed: "muted",
+  running: "primary",
+  review: "warn",
+  done: "ok",
+  failed: "bad",
+};
+
+/** The tone as a text color class, for the one place a state word is colored outside a badge (the Tasks group headers). */
+export const TONE_TEXT: Record<StatusTone, string> = {
+  muted: "text-muted-foreground",
+  primary: "text-primary",
+  ok: "text-ok",
+  warn: "text-warn",
+  bad: "text-bad",
 };
 
 /** The prompt to hand an agent that should drive the review from chat (DESIGN.md, item 7: self-serve first). */

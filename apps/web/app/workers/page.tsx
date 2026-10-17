@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
-import { Circle, Pause, Power } from "lucide-react";
+import { Circle, Pause, Power, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
 import { Pill } from "@/components/ui/pill";
+import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import { getWorkers } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
 import type { WorkerStatus } from "@/lib/types";
@@ -16,10 +17,11 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-const STATUS: Record<WorkerStatus, { label: string; className: string; Icon: typeof Circle; hint: string }> = {
-  online: { label: "online", className: "text-ok", Icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
-  idle: { label: "idle", className: "text-muted-foreground", Icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
-  offline: { label: "offline", className: "text-bad", Icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
+/** A worker's status mapped to {icon, tone, label, hint}; the rendering is components/ui/status-badge.tsx. */
+const STATUS: Record<WorkerStatus, { label: string; tone: StatusTone; icon: LucideIcon; hint: string }> = {
+  online: { label: "online", tone: "ok", icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
+  idle: { label: "idle", tone: "muted", icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
+  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
 };
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
@@ -54,10 +56,7 @@ export default async function WorkersPage() {
                     {w.version ? <span className="ml-2 text-[11px]">relay {w.version}</span> : null}
                   </p>
                 </div>
-                <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-xs", s.className)} title={s.hint}>
-                  <s.Icon className={cn("size-2.5", w.status === "online" && "fill-current")} aria-hidden="true" />
-                  {s.label}
-                </span>
+                <StatusBadge icon={s.icon} tone={s.tone} label={s.label} title={s.hint} iconClassName={cn("size-2.5", w.status === "online" && "fill-current")} />
               </div>
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <div>

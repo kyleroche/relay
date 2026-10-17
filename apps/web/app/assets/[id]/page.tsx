@@ -5,7 +5,7 @@ import { notFound } from "next/navigation";
 import { fmtDims, fmtSize, Thumb } from "@/components/assets/asset-card";
 import { AssetViewer } from "@/components/assets/asset-viewer";
 import { ReviewControls } from "@/components/assets/review-controls";
-import { StatusBadge } from "@/components/assets/status-badge";
+import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { Pill } from "@/components/ui/pill";
 import { getAsset } from "@/lib/data";
@@ -50,7 +50,7 @@ export default async function AssetPage({ params }: Props) {
             <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
               {asset.title}
               <span className="font-mono text-base font-normal text-muted-foreground">v{asset.version}</span>
-              <StatusBadge status={asset.status} />
+              <AssetStatusBadge status={asset.status} />
             </h1>
             {asset.description && <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{asset.description}</p>}
           </div>
@@ -85,7 +85,7 @@ export default async function AssetPage({ params }: Props) {
                           <span>v{v.version}</span>
                           <span className="text-muted-foreground">{fmtAgo(v.created_at, now)}</span>
                         </span>
-                        <StatusBadge status={v.status} className="w-fit" />
+                        <AssetStatusBadge status={v.status} className="w-fit" />
                       </Link>
                     </li>
                   );

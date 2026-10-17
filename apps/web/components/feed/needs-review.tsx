@@ -1,11 +1,11 @@
-import { ArrowRight, ArrowUpRight, Globe } from "lucide-react";
+import { ArrowRight, ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { Thumb } from "@/components/assets/asset-card";
 import { ActorChip } from "@/components/feed/actor-chip";
+import { PreviewBadge } from "@/components/tasks/state-badge";
 import { fmtAgo } from "@/lib/format";
 import { taskPagePath } from "@/lib/tasks";
 import type { Asset, TaskView } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 /**
  * What is waiting for the reader, at the top of the feed: tasks in review (a pull request is open, perhaps a
@@ -41,11 +41,7 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
                         PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />
                       </span>
                     )}
-                    {t.preview_state !== "none" && (
-                      <span className={cn("inline-flex items-center gap-1", t.preview_state === "ready" && "text-ok", t.preview_state === "failed" && "text-bad")}>
-                        <Globe className="size-3" aria-hidden="true" /> preview{t.preview_state === "ready" ? "" : ` (${t.preview_state})`}
-                      </span>
-                    )}
+                    <PreviewBadge state={t.preview_state} />
                     {t.updated_at && <span className="ml-auto shrink-0">{fmtAgo(t.updated_at, now)}</span>}
                   </span>
                 </Link>
