@@ -6,6 +6,7 @@ export * from "./events.ts";
 export * from "./assets.ts";
 export * from "./tokens.ts";
 export * from "./tasks.ts";
+export * from "./task-state.ts";
 export * from "./webhooks.ts";
 export * from "./oauth.ts";
 export * from "./settings.ts";

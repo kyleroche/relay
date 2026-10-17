@@ -191,5 +191,7 @@ Use the raw request body, not a re-serialised object, and dedupe on `X-Relay-Del
 - Web: the feed page groups rows by issue, with the usage meter per subscription in the header.
 - CLI: `pnpm relay feed` (last 50 rows) and `pnpm relay usage --days 7` (per-subscription totals, the same query as
   the `ledger` view). In site mode both read the hosted site (`GET /api/v1/feed`, `GET /api/v1/usage`).
-- Bots: `relay_task_list` / `relay_task_get` fold a task's rows into one state (`docs/INTEGRATIONS.md`).
+- Bots: `relay_task_list` / `relay_task_get` fold a task's rows into one state (`docs/INTEGRATIONS.md`). The fold is
+  also cached on the task row after every write that names the task (`tasks.state`, `station`, `since`, …), which is
+  what the flow map and state-filtered lists read; the rows here remain the source of truth.
 - SQL: `select * from ledger where ts > now() - interval '7 days' order by ts desc`.

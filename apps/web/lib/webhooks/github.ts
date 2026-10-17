@@ -123,7 +123,7 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         const label = get<string>(payload, "label.name");
         const l = laneOf(label);
         if (!l) return null; // only lane labels are events of record
-        return { ...base, kind: "issue.labeled", issue: number, lane: l, summary: `Labelled ${label}`, url, payload: { label } };
+        return { ...base, kind: "issue.labeled", issue: number, lane: l, summary: `Labelled ${label}`, url, payload: { label, title } };
       }
       if (action === "closed") {
         return { ...base, kind: "issue.closed", issue: number, lane, summary: `Closed #${number}: ${title}`, url, payload: { state_reason: get(issue, "state_reason") } };

@@ -87,7 +87,7 @@ export async function openTask(db: Db, github: GitHubClient | undefined, input: 
   // Some installations ignore labels on create (no triage permission for the token); apply them explicitly then.
   const missing = labels.filter((l) => !issue.labels.includes(l));
   if (missing.length) await github.addLabels(project.repo, issue.number, missing).catch(() => {});
-  const { task, created } = await createTask(db, { project: project.slug, repo: project.repo, issue: issue.number, idempotencyKey: key, createdBy: input.actor, lane: input.lane });
+  const { task, created } = await createTask(db, { project: project.slug, repo: project.repo, issue: issue.number, idempotencyKey: key, createdBy: input.actor, lane: input.lane, title: input.title.trim() });
   const events: EventRow[] = [];
   const base = { actor: input.actor, project: project.slug, repo: project.repo, issue: issue.number, lane: input.lane, url: issue.html_url };
   const opened = await writeEvent(db, { ...base, kind: "issue.opened", summary: input.title.trim(), payload: { labels, via: "relay_task_create" }, dedupe_key: `task:${task.id}:opened` });

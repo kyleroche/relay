@@ -18,8 +18,7 @@ type ModelRow = repo.ModelRow;
 import { getStore, taskUrl, toAsset, toVersion } from "./assets.ts";
 import { getDb } from "./db.ts";
 import type { EventKind } from "./events.ts";
-import { deriveStation, failureLine, IN_MOTION, type FlowSnapshot, type FlowTask } from "./flow.ts";
-import { taskTitle } from "./tasks.ts";
+import type { FlowProject, FlowSnapshot, FlowTask } from "./flow.ts";
 import { composeMeters } from "./meters.ts";
 import type {
   Asset,
@@ -281,52 +280,44 @@ export const dbSource: DataSource = {
   },
 
   /**
-   * The flow map: every task folded to its state (the same fold /tasks uses), then to a station and the moment it
-   * got there (lib/flow.ts). In motion: queued, claimed, running, review. Done tasks ride along for 90 s after the
-   * merge so a client sees them reach Merged and fade; failed ones for a day, so the siding shows what stalled
-   * today without turning into an archive. Workers come from getWorkers (the same rows the workers page shows).
+   * The flow map, from the task state cache (packages/core/src/db/task-state.ts): one query over `tasks` returns
+   * everything in motion (queued, claimed, running, review), done tasks for 90 s after the merge so a client sees them
+   * reach Merged and fade, and failed ones for a day, so the siding shows what stalled today without turning into an
+   * archive. Each row already carries its state, station and the moment it got there, written by the fold that ran
+   * when the last event, claim or release landed; nothing is folded here. Expired leases are released first so a
+   * vanished worker's task reads `queued`, as the fold would have said. Workers come from getWorkers (the same rows
+   * the workers page shows). /api/flow memoizes the result per instance for a few seconds.
    */
   async getFlow(): Promise<FlowSnapshot> {
     const db = await getDb();
     const now = Date.now();
-    const [rows, workers] = await Promise.all([repo.listTasks(db, { limit: 200 }), dbSource.getWorkers()]);
-    const views = await Promise.all(
-      rows.map(async (row) => {
-        const [events, claims] = await Promise.all([repo.taskEvents(db, row), repo.taskClaims(db, row.id)]);
-        const status = repo.deriveTaskStatus(row, events, claims, now);
-        const live = [...claims].sort((a, b) => a.claimed_at.localeCompare(b.claimed_at)).at(-1);
-        const claimedAt = live && !live.released_at && new Date(live.lease_until).getTime() > now ? live.claimed_at : null;
-        const { station, since } = deriveStation({ ...status, created_at: row.created_at }, events, { claimedAt, now });
-        const task: FlowTask = {
-          id: row.id,
-          project: row.project,
-          repo: row.repo,
-          issue: row.issue,
-          title: taskTitle(row, events),
-          lane: status.lane ?? row.lane,
-          state: status.state,
-          station,
-          since,
-          pr: status.pr,
-          pr_url: status.pr_url,
-          preview_state: status.preview_state,
-          preview_url: status.preview_url,
-          runner: status.runner,
-          ...(status.usage ? { cost: status.usage.cost_equiv } : {}),
-        };
-        if (status.state === "failed") {
-          const error = failureLine(events);
-          if (error) task.error = error;
-        }
-        return task;
-      }),
-    );
-    const sinceMs = (t: FlowTask) => new Date(t.since).getTime();
-    const tasks = views.filter((t) => IN_MOTION.has(t.state) || (t.state === "done" && now - sinceMs(t) < 90_000) || (t.state === "failed" && now - sinceMs(t) < D));
-    const moving = new Set(tasks.filter((t) => t.state !== "done").map((t) => t.project));
-    const projects = (await repo.listProjects(db)).filter((p) => moving.has(p.slug)).map((p) => ({ slug: p.slug, repo: p.repo ?? "" }));
-    // a task whose project row is gone still has a repo: draw its stop from the task
-    for (const slug of moving) if (!projects.some((p) => p.slug === slug)) projects.push({ slug, repo: tasks.find((t) => t.project === slug)?.repo ?? "" });
+    await repo.expireLeases(db, now);
+    const [rows, workers] = await Promise.all([repo.flowTasks(db, { now, limit: 200 }), dbSource.getWorkers()]);
+    const tasks: FlowTask[] = rows.map((r) => ({
+      id: r.id,
+      project: r.project,
+      repo: r.repo,
+      issue: r.issue,
+      title: r.title ?? `#${r.issue}`,
+      lane: r.lane,
+      state: r.state,
+      station: r.station,
+      since: r.since,
+      pr: r.pr,
+      pr_url: r.pr_url,
+      preview_state: r.preview_state,
+      preview_url: r.preview_url,
+      runner: r.runner,
+      ...(r.cost != null ? { cost: r.cost } : {}),
+      ...(r.state === "failed" && r.last_error ? { error: r.last_error } : {}),
+    }));
+    // one stop per project with a task that is not done; the repo from the project row, else from the task itself
+    const projects: FlowProject[] = [];
+    for (const r of rows) {
+      if (r.state === "done" || projects.some((p) => p.slug === r.project)) continue;
+      projects.push({ slug: r.project, repo: r.project_repo ?? r.repo });
+    }
+    projects.sort((a, b) => a.slug.localeCompare(b.slug));
     return {
       ts: new Date(now).toISOString(),
       projects,

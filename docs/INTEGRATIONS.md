@@ -203,7 +203,9 @@ and `priority:*` labels are created by GitHub on first use when the app may.
 
 ### Task state
 
-State is never stored. Every read folds the task's feed events (same repo and issue number), oldest first:
+State is never written by hand: it is the fold of the task's feed events (same repo and issue number), oldest first.
+`relay_task_get` folds them on every read; lists (`relay_task_list(state)`, the flow map) read the copy of that fold
+relay caches on the task row after every write that can change it (`docs/ARCHITECTURE.md`, "A task's life", step 7).
 
 | Event | State after it |
 |---|---|

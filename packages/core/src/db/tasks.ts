@@ -1,11 +1,14 @@
 /**
- * Tasks are GitHub issues with a relay id. The row holds only identity (project, repo, issue, who created it and the
- * idempotency key); the state a bot asks about is DERIVED from the feed every time, so the table can never disagree
- * with what GitHub and the runners actually did.
+ * Tasks are GitHub issues with a relay id. The row holds identity (project, repo, issue, who created it and the
+ * idempotency key) and the title; the state a bot asks about is DERIVED from the feed by `deriveTaskStatus`, so the
+ * table can never disagree with what GitHub and the runners actually did. Since migration 010 the row also carries a
+ * CACHE of that fold (`state`, `station`, `since`, the PR, the preview, the runner: db/task-state.ts), rewritten after
+ * every write that can change the task, so lists and the flow map read one query instead of folding every history.
  */
 import { type Db, iso, num } from "./client.ts";
 import { EVENT_COLS, toEvent, type EventRow } from "./events.ts";
 import { bumpQueueVersion } from "./queue.ts";
+import { refreshTaskState } from "./task-state.ts";
 
 export interface TaskRow {
   /** "<owner>/<repo>#<n>" */
@@ -18,6 +21,8 @@ export interface TaskRow {
   created_at: string;
   /** The lane the task was opened with (`agent:<lane>`), when known; the scheduler matches on it. */
   lane: string | null;
+  /** The issue title, when the creator or the feed supplied it (`taskTitle` in tasks/station.ts fills the gaps). */
+  title: string | null;
 }
 
 export type TaskState = "queued" | "claimed" | "running" | "review" | "done" | "failed";
@@ -85,7 +90,7 @@ export function parseTaskId(id: string): { repo: string; issue: number } | undef
   return m ? { repo: m[1]!, issue: Number(m[2]) } : undefined;
 }
 
-const cols = "id, project, repo, issue, idempotency_key, created_by, created_at, lane";
+const cols = "id, project, repo, issue, idempotency_key, created_by, created_at, lane, title";
 /** Row normaliser shared with the scheduler (db/workers.ts). */
 export const toTask = (r: Record<string, unknown>): TaskRow => ({
   id: r.id as string,
@@ -96,6 +101,7 @@ export const toTask = (r: Record<string, unknown>): TaskRow => ({
   created_by: r.created_by as string,
   created_at: iso(r.created_at) ?? "",
   lane: (r.lane as string | null) ?? null,
+  title: (r.title as string | null) ?? null,
 });
 export const TASK_COLS = cols;
 
@@ -111,21 +117,24 @@ export async function getTask(db: Db, id: string): Promise<TaskRow | undefined> 
 
 /**
  * Record a task for an issue. Idempotent twice over: the same (repo, issue) is one row, and a repeated
- * idempotency_key returns the row it created the first time. `created` says whether this call inserted.
+ * idempotency_key returns the row it created the first time. `created` says whether this call inserted. A new row
+ * gets its state cache written at once (`queued`, at Queue since it was created), so a list sees it without a fold.
  */
-export async function createTask(db: Db, t: { project: string; repo: string; issue: number; idempotencyKey?: string | null; createdBy: string; lane?: string | null }): Promise<{ task: TaskRow; created: boolean }> {
+export async function createTask(db: Db, t: { project: string; repo: string; issue: number; idempotencyKey?: string | null; createdBy: string; lane?: string | null; title?: string | null }): Promise<{ task: TaskRow; created: boolean }> {
   const id = taskId(t.repo, t.issue);
   const key = t.idempotencyKey?.trim() || null;
+  const title = t.title?.trim() || null;
   if (key) {
     const existing = await findTaskByKey(db, key);
     if (existing) return { task: existing, created: false };
   }
   const r = await db.query(
-    `INSERT INTO tasks (id, project, repo, issue, idempotency_key, created_by, lane) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO tasks (id, project, repo, issue, idempotency_key, created_by, lane, title) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (id) DO NOTHING RETURNING ${cols}`,
-    [id, t.project, t.repo, t.issue, key, t.createdBy, t.lane ?? null],
+    [id, t.project, t.repo, t.issue, key, t.createdBy, t.lane ?? null, title],
   );
   if (r[0]) {
+    await refreshTaskState(db, id);
     await bumpQueueVersion(db); // a new task: idle workers' doorbells ring (docs/WORKERS.md)
     return { task: toTask(r[0]), created: true };
   }
@@ -136,6 +145,10 @@ export async function createTask(db: Db, t: { project: string; repo: string; iss
     await db.query("UPDATE tasks SET lane = $2 WHERE id = $1", [id, t.lane]);
     existing.lane = t.lane;
     await bumpQueueVersion(db);
+  }
+  if (title && !existing.title) {
+    await db.query("UPDATE tasks SET title = $2 WHERE id = $1", [id, title]);
+    existing.title = title;
   }
   return { task: existing, created: false };
 }
@@ -392,10 +405,31 @@ export async function taskView(db: Db, task: TaskRow): Promise<TaskView> {
   return { ...task, ...(await taskState(db, task)) };
 }
 
-/** Tasks with their derived state, optionally filtered to one state. */
+/**
+ * Tasks with their derived state, optionally filtered to one state. The filter comes from the cached `state` column
+ * (db/task-state.ts), so only the rows returned are folded instead of four pages of candidates; a row whose cache was
+ * never written (`state IS NULL`, before the backfill ran) is folded and filled in on the way.
+ */
 export async function listTaskViews(db: Db, opts: { project?: string; state?: TaskState; limit?: number } = {}): Promise<TaskView[]> {
-  const rows = await listTasks(db, { ...(opts.project ? { project: opts.project } : {}), limit: opts.state ? Math.max((opts.limit ?? 50) * 4, 200) : opts.limit ?? 50 });
-  const views = await Promise.all(rows.map((t) => taskView(db, t)));
-  const filtered = opts.state ? views.filter((v) => v.state === opts.state) : views;
-  return filtered.slice(0, opts.limit ?? 50);
+  const limit = opts.limit ?? 50;
+  const params: unknown[] = [];
+  const where: string[] = [];
+  if (opts.project) {
+    params.push(opts.project);
+    where.push(`project = $${params.length}`);
+  }
+  if (opts.state) {
+    params.push(opts.state);
+    where.push(`(state = $${params.length} OR state IS NULL)`);
+  }
+  params.push(limit);
+  const rows = await db.query(`SELECT ${cols}, state FROM tasks ${where.length ? "WHERE " + where.join(" AND ") : ""} ORDER BY created_at DESC, id DESC LIMIT $${params.length}`, params);
+  const views = await Promise.all(
+    rows.map(async (r) => {
+      const task = toTask(r);
+      if (r.state == null) await refreshTaskState(db, task.id); // first read after the migration: fill the cache
+      return taskView(db, task);
+    }),
+  );
+  return opts.state ? views.filter((v) => v.state === opts.state) : views;
 }

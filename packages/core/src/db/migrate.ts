@@ -6,8 +6,20 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { Db } from "./client.ts";
+import { backfillTaskState } from "./task-state.ts";
 import { runtimePaths } from "../runtime.ts";
 import { type Log, noopLog } from "../util.ts";
+
+/**
+ * Work a migration needs done in TypeScript once its SQL is in: keyed by version, run after the version is recorded.
+ * 010 adds the task state cache; the backfill folds every existing task once so no reader meets an empty row.
+ */
+const AFTER_APPLY: Record<number, (db: Db, log: Log) => Promise<void>> = {
+  10: async (db, log) => {
+    const n = await backfillTaskState(db);
+    if (n) log(`schema: cached the state of ${n} task${n === 1 ? "" : "s"}`);
+  },
+};
 
 /** `migrations/` beside this module (packages/core/src/db in a checkout, dist/ in the bundle), else where the running layout keeps them. */
 const beside = join(dirname(fileURLToPath(import.meta.url)), "migrations");
@@ -62,6 +74,7 @@ export async function migrate(db: Db, opts: { log?: Log; dir?: string } = {}): P
         [JSON.stringify(m.version)],
       );
     });
+    await AFTER_APPLY[m.version]?.(db, log);
     applied = m.version;
   }
   return applied;
