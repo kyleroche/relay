@@ -49,11 +49,9 @@ export const FLOW: Array<{ step: string; detail: string; where: string }> = [
 
 export const INSTALL_AGENT_PROMPT = `Set up relay from ${REPO_URL} following its AGENTS.md "Installing relay for a user" section. Stop and tell me when a step needs my browser.`;
 
-export const INSTALL_SHELL = `git clone ${REPO_URL} && cd relay
-pnpm install
-pnpm relay doctor     # what is installed, logged in, and reachable
-pnpm relay setup      # hooks + memory server into each CLI you have
-cd ~/code/some-repo && pnpm --dir ~/relay relay link`;
+export const INSTALL_SHELL = `npx @kyleroche/relay doctor     # what is installed, logged in, and reachable (Node 24+)
+npx @kyleroche/relay setup      # hooks + memory server into each CLI you have; --yes writes
+cd ~/code/some-repo && npx @kyleroche/relay link`;
 
 export const ACCOUNTS: Array<{ tool: string; login: string; plan: string }> = [
   { tool: "Claude Code", login: "claude then /login", plan: "Pro or Max" },

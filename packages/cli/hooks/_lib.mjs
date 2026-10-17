@@ -1,6 +1,6 @@
 // Shared helpers for the relay hook scripts. Plain Node ESM with no dependencies, because a hook runs on every
 // session start and prompt: it must answer fast and must never break the session. The heavy work (PGlite, the
-// brief compiler) lives in the CLI, which these scripts spawn through the repo's own tsx only when the cache misses.
+// brief compiler) lives in the CLI, which these scripts spawn (dist/relay.js, or the repo's own tsx) only when the cache misses.
 import { spawnSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
@@ -10,6 +10,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
+/** In the published package the hooks sit at dist/hooks beside the bundled CLI, dist/relay.js. */
+export const BUNDLED_CLI = resolve(HOOKS_DIR, "..", "relay.js");
+/** In a checkout they sit at packages/cli/hooks and the CLI is TypeScript, run through the repo's tsx. */
 export const RELAY_ROOT = resolve(HOOKS_DIR, "..", "..", "..");
 export const CLI_MAIN = join(RELAY_ROOT, "packages", "cli", "src", "main.ts");
 export const RELAY_HOME = process.env.RELAY_HOME ?? join(homedir(), ".harness");
@@ -72,8 +75,9 @@ export function readCachedBrief(project, key) {
   }
 }
 
-/** The command line that runs the relay CLI: this node, the repo's tsx, packages/cli/src/main.ts. */
+/** The command line that runs the relay CLI with this node: dist/relay.js in the package; the repo's tsx and packages/cli/src/main.ts in a checkout. */
 export function relayArgv(args) {
+  if (existsSync(BUNDLED_CLI)) return [process.execPath, [BUNDLED_CLI, ...args]];
   const tsx = createRequire(import.meta.url).resolve("tsx/cli");
   return [process.execPath, [tsx, CLI_MAIN, ...args]];
 }

@@ -94,8 +94,8 @@ Nothing reads memory inside the model loop. Memory is injected at two edges and 
    stored and never sent whole.
 
 Cloud agents and the web app reach the same data through the memory MCP server (`packages/mcp`): the `relay-mcp`
-stdio binary for local CLIs (`packages/mcp/bin/relay-mcp.mjs`, run through the repo's `tsx` with the node that ran
-`relay setup`), and `createMcpHandler(db, {token, publicRead?})` for a Next.js route at `/api/memory`
+stdio binary for local CLIs (`dist/relay-mcp.js` in the published `@kyleroche/relay`; `packages/mcp/bin/relay-mcp.mjs`
+run through the repo's `tsx` in a checkout; either way with the node that ran `relay setup`), and `createMcpHandler(db, {token, publicRead?})` for a Next.js route at `/api/memory`
 (Streamable HTTP, stateless; `RELAY_MEMORY_TOKEN` as the bearer enables `relay_decide` and `relay_prefer`, reads
 are open only when `publicRead` is set). Tools: `relay_recall(query, project?)`, `relay_decide(text, project,
 source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`, `relay_guidance(model, query)`,

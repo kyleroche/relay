@@ -1,8 +1,68 @@
 {
-  "name": "@relay/cli",
-  "version": "0.0.1",
-  "private": true,
+  "name": "@kyleroche/relay",
+  "version": "0.1.0",
+  "description": "relay: your coding-agent subscriptions (Claude Code, Codex, Grok) as one system. The CLI, the session hooks and the memory MCP server.",
   "type": "module",
-  "scripts": { "typecheck": "tsc --noEmit", "test": "vitest run" },
-  "dependencies": { "@relay/core": "workspace:*", "commander": "^14.0.0" }
+  "license": "Apache-2.0",
+  "homepage": "https://relay.kyro.house",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kyleroche/relay.git",
+    "directory": "packages/cli"
+  },
+  "bugs": "https://github.com/kyleroche/relay/issues",
+  "keywords": [
+    "relay",
+    "claude-code",
+    "codex",
+    "grok",
+    "coding-agents",
+    "mcp",
+    "agent-memory",
+    "github-actions",
+    "self-hosted-runners",
+    "cli"
+  ],
+  "bin": {
+    "relay": "dist/relay.js",
+    "relay-mcp": "dist/relay-mcp.js"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "pnpm build"
+  },
+  "dependencies": {
+    "@ai-sdk/gateway": "^4.0.0",
+    "@electric-sql/pglite": "^0.5.9",
+    "@electric-sql/pglite-pgvector": "0.0.10",
+    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@vercel/blob": "^2.8.1",
+    "ai": "^7.0.111",
+    "cheerio": "^1.2.0",
+    "commander": "^14.0.0",
+    "pg": "^8.23.1",
+    "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "@relay/core": "workspace:*",
+    "@relay/mcp": "workspace:*",
+    "tsup": "^8.5.0"
+  }
 }

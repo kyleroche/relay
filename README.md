@@ -21,13 +21,23 @@ Paste this into whichever coding agent you use:
 Set up relay from https://github.com/kyleroche/relay following its AGENTS.md "Installing relay for a user" section. Stop and tell me when a step needs my browser.
 ```
 
-Or by hand:
+Or by hand, with Node 24 or newer and no checkout:
+
+```bash
+npx @kyleroche/relay doctor     # what is installed, logged in, and reachable
+npx @kyleroche/relay setup      # hooks + memory server into each CLI you have; --yes writes
+cd ~/code/some-repo && npx @kyleroche/relay link
+```
+
+The published package (`@kyleroche/relay` on npm) carries the CLI, the session hooks and the memory MCP server;
+`relay setup` points the CLIs at the installed copy. To work from source instead, clone the repo and use its own
+entry points, which the hooks then call through `tsx`:
 
 ```bash
 git clone https://github.com/kyleroche/relay && cd relay   # needs Node 24+ (.node-version) and pnpm
 pnpm install
-pnpm relay doctor     # what is installed, logged in, and reachable
-pnpm relay setup      # hooks + memory server into each CLI you have
+pnpm relay doctor
+pnpm relay setup
 cd ~/code/some-repo && ~/relay/bin/relay link
 ```
 

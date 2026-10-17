@@ -2,13 +2,16 @@
  * Plain-SQL migrations: packages/core/src/db/migrations/NNN_name.sql, applied in order inside one transaction
  * each, tracked in meta.schema_version. Running twice is a no-op. Never edit a shipped migration; add a new file.
  */
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import type { Db } from "./client.ts";
+import { runtimePaths } from "../runtime.ts";
 import { type Log, noopLog } from "../util.ts";
 
-export const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), "migrations");
+/** `migrations/` beside this module (packages/core/src/db in a checkout, dist/ in the bundle), else where the running layout keeps them. */
+const beside = join(dirname(fileURLToPath(import.meta.url)), "migrations");
+export const MIGRATIONS_DIR = existsSync(beside) ? beside : runtimePaths().migrationsDir;
 
 export interface Migration {
   version: number;

@@ -8,7 +8,7 @@
  */
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { HOOK_MARKER, hookCommand, hookPaths, binOnPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
+import { isRelayHookCommand, hookCommand, hookPaths, binOnPath, planFile, readJson, toJson, type HookContext, type InstallPlan, type Installer } from "./types.ts";
 
 type HookEntry = { matcher?: string; hooks: Array<{ type: "command"; command: string; timeout?: number }> };
 
@@ -16,7 +16,7 @@ const EVENTS = ["SessionStart", "UserPromptSubmit", "SessionEnd"] as const;
 
 function stripRelay(entries: unknown): HookEntry[] {
   if (!Array.isArray(entries)) return [];
-  return (entries as HookEntry[]).filter((e) => !(Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === "string" && h.command.includes(HOOK_MARKER))));
+  return (entries as HookEntry[]).filter((e) => !(Array.isArray(e?.hooks) && e.hooks.some((h) => typeof h?.command === "string" && isRelayHookCommand(h.command))));
 }
 
 export function relayClaudeHooks(ctx: HookContext): Record<(typeof EVENTS)[number], HookEntry> {

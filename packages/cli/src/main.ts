@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { writeFileSync, existsSync, statSync } from "node:fs";
 import { execFile } from "node:child_process";
+import { createRequire } from "node:module";
 import { delimiter, join, resolve } from "node:path";
 import {
   openHarness, loadConfig, ensureHome, openDb, migrate, currentVersion, seedRegistry, onboardModel, retrieveGuidance, assertOnboarded, NotOnboardedError, repo,
@@ -22,7 +23,9 @@ import { registerWebhook } from "./commands/webhook.ts";
 import { openReady } from "./commands/_common.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
-const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version("0.0.1");
+// ../package.json is packages/cli/package.json from src/ and the package root from the bundled dist/relay.js.
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
+const program = new Command().name("relay").description("relay: your coding-agent subscriptions as one system").version(version);
 registerAssetCommands(program);
 registerToken(program);
 registerTask(program);

@@ -6,6 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
+import { runtimePaths } from "../runtime.ts";
 
 export type CliName = "claude" | "codex" | "grok";
 export const CLI_NAMES: readonly CliName[] = ["claude", "codex", "grok"];
@@ -15,7 +16,7 @@ export interface HookContext {
   userHome: string;
   /** relay's own home (`~/.harness`, or RELAY_HOME) for the brief cache and capture logs. */
   relayHome: string;
-  /** Absolute path of the relay checkout; hook scripts and the MCP entry are referenced from here. */
+  /** Absolute path of the relay checkout or installed package; hook scripts and the MCP entry are referenced from here (see `runtimePaths`). */
   repoRoot: string;
   /** Node binary used to run hook scripts and the MCP server (absolute, so hooks do not depend on PATH). */
   node: string;
@@ -25,7 +26,7 @@ export function defaultHookContext(repoRoot: string, overrides: Partial<HookCont
   return {
     userHome: process.env.RELAY_USER_HOME ?? homedir(),
     relayHome: process.env.RELAY_HOME ?? join(homedir(), ".harness"),
-    repoRoot,
+    repoRoot: runtimePaths(repoRoot).root,
     node: process.execPath,
     ...overrides,
   };
@@ -93,16 +94,10 @@ export function readJson(path: string): Record<string, unknown> {
 
 export const toJson = (v: unknown): string => JSON.stringify(v, null, 2) + "\n";
 
-/** Paths of the pieces hooks point at, all absolute. */
+/** Paths of the pieces hooks point at, all absolute: packages/cli/hooks and packages/mcp/bin in a checkout, dist/ in the package. */
 export function hookPaths(ctx: HookContext) {
-  const hooksDir = join(ctx.repoRoot, "packages", "cli", "hooks");
-  return {
-    hooksDir,
-    sessionStart: join(hooksDir, "session-start.mjs"),
-    userPrompt: join(hooksDir, "user-prompt.mjs"),
-    sessionEnd: join(hooksDir, "session-end.mjs"),
-    mcpBin: join(ctx.repoRoot, "packages", "mcp", "bin", "relay-mcp.mjs"),
-  };
+  const r = runtimePaths(ctx.repoRoot);
+  return { hooksDir: r.hooksDir, sessionStart: r.sessionStart, userPrompt: r.userPrompt, sessionEnd: r.sessionEnd, mcpBin: r.mcpEntry };
 }
 
 const q = (s: string): string => (/[\s"'$`\\]/.test(s) ? `"${s.replace(/(["\\$`])/g, "\\$1")}"` : s);
@@ -112,5 +107,5 @@ export function hookCommand(ctx: HookContext, script: string, cli: CliName): str
   return `${q(ctx.node)} ${q(script)} --cli ${cli}`;
 }
 
-/** The marker every relay-owned hook command carries, so installers can find and replace their own entries. */
-export const HOOK_MARKER = "/packages/cli/hooks/";
+/** True for a hook command relay installed, in either layout, so installers can find and replace their own entries. */
+export const isRelayHookCommand = (command: string): boolean => /[\\/](?:packages[\\/]cli[\\/]hooks|dist[\\/]hooks)[\\/](?:session-start|user-prompt|session-end)\.mjs(?:\s|"|$)/.test(command);
