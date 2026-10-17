@@ -10,7 +10,7 @@ No person hands you a token. Register and ask, a person approves once, then retr
 2. Tell the person "approve `RLAY-XXXX` at https://relay.kyro.house/activate" (or a bot with `tokens:write` posts `POST /api/v1/access/RLAY-XXXX/approve`); meanwhile poll `POST /oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…` every 5 s until it returns `access_token` (24 h) and `refresh_token` (90 d).
 3. Call `/mcp` or `/api/v1/*` with `Authorization: Bearer <access_token>`; refresh with `grant_type=refresh_token` before it expires. `relay_whoami` / `GET /api/v1/whoami` confirm who you are.
 
-Zero-browser path: an operator runs `relay invite create --for <you> --scopes …` and you redeem the code with `grant_type=urn:relay:invite&invite=<code>`. Browser clients use `POST /oauth/register` + `GET /oauth/authorize` (PKCE S256). Metadata: `/.well-known/oauth-authorization-server`; guide: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md); the human fallback is the `/tokens` page.
+Zero-browser path: an operator runs `relay invite create --for <you> --scopes …` and you redeem the code with `grant_type=urn:relay:invite&invite=<code>`. Browser clients use `POST /oauth/register` + `GET /oauth/authorize` (PKCE S256). Metadata: `/.well-known/oauth-authorization-server`; guide: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md); the operator approves, revokes and (as a fallback) mints by hand on the Access page (`/tokens`).
 
 ## Start here
 

@@ -99,7 +99,8 @@ The CLI appears on `/activate` as `relay-cli@<hostname>` (`--name` changes it) a
 hooks use (`--scopes` narrows them). It stores the access token, the refresh token and the expiry; `openHarness()`
 refreshes before the token lapses, so hooks never see a 401. `relay doctor` shows the source (`approved on /activate`,
 `redeemed an invite`, `pasted with --token`, `RELAY_TOKEN`), the token's name and expiry, and what the site says the
-token is (`whoami`). `--token <t>` still pastes a token minted on `/tokens`; `--no-site` goes back to local mode.
+token is (`whoami`). `--token <t>` still pastes a token minted by hand on the Access page (`/tokens`); `--no-site` goes
+back to local mode.
 
 ### Invite codes
 
@@ -151,7 +152,7 @@ When the app is installed on a repository, relay writes `project.github_connecte
 
 Every write the bot makes is attributed to `bot:<token name>` in the feed (`bot:oauth:grok-bot` for a token the
 authorization server issued). The bot cannot choose another actor: the server derives it from the token, and the only
-event kinds it may write start with `external.`. Revoking the token (`/tokens`, `relay token revoke oauth:grok-bot`,
+event kinds it may write start with `external.`. Revoking the token (the Access page, `relay token revoke oauth:grok-bot`,
 `POST /oauth/revoke`) stops it at once. `relay_whoami` (public) or `GET /api/v1/whoami` tells a bot what it is: name,
 scopes, expiry, source.
 
@@ -268,7 +269,7 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
 9. **Leave a trace.** `relay_event_log({kind: "external.briefing", project: "site", summary: "Sent the morning brief: 2 in review, 1 failed", url: …})`.
    It shows in the feed as `bot:oauth:grok-bot`, next to what the runners did.
 10. **Stay connected.** Every day `grant_type=refresh_token` gives a new pair. If the user revokes `oauth:grok-bot` on
-    `/tokens`, the next call is `401` and the bot starts again at step 1; nothing else changes.
+    the Access page (`/tokens`), the next call is `401` and the bot starts again at step 1; nothing else changes.
 
 ## Site mode for the CLI
 

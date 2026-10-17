@@ -37,6 +37,10 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `access.granted` | consent on `/oauth/authorize`, approval on `/activate` or `POST /api/v1/access/<code>/approve`, a code or device exchange, an invite redeemed | `human:<login>` (who approved) or the invite's creator | payload.via, user_code, client_id, token_id, scopes | who approved what, or which client received a token |
 | `access.denied` | Deny on `/activate` or `{"decision":"deny"}` over the API | `human:<login>` | payload.user_code, client_name, scopes | who denied which code |
 | `access.revoked` | `POST /oauth/revoke`, or a reused refresh token cutting its lineage | the grant's actor | payload.token_id, client_id, reason, revoked_tokens | what was revoked and why |
+| `access.invite_created` | `relay invite create`, `POST /api/v1/invites`, New invite on the Access page | `human:<login>` or `bot:<token name>` | payload.invite_id, name, scopes, uses, expires_at | who created an invite for whom (never the code) |
+| `access.invite_revoked` | `relay invite revoke`, `DELETE /api/v1/invites/{id}`, Revoke on the Access page | who revoked it | payload.invite_id, name, uses_left | which invite stopped |
+| `access.client_removed` | Remove under Clients on the Access page (`removeClient`; refused while anything live depends on the client) | `human:<login>` | payload.client_id, client_name, origin | who removed which client |
+| `access.purged` | the daily `/api/cron/access-expire` sweep (`purgeAccess`), only when something was removed | `bot:relay` | payload.device_codes, auth_codes, refresh_tokens, clients (names) | the counts |
 | `project.github_connected` | GitHub App `installation` (created) or `installation_repositories` (added) | `human:<installer>` | repo, project (when known), url, payload.installation_id, registered | installed on which repo; "registered project" when `relay.md` was present |
 | `project.github_disconnected` | GitHub App `installation` (deleted, suspend) or `installation_repositories` (removed) | `human:<login>` | repo, project, payload.installation_id | removed from which repo |
 

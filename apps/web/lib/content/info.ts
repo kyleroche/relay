@@ -69,7 +69,7 @@ export const ACCESS_STEPS: string[] = [
   `Tell the person "approve RLAY-XXXX at ${SITE_URL}/activate" (or a bot holding tokens:write calls POST ${SITE_URL}/api/v1/access/RLAY-XXXX/approve). Poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, device_code and client_id every 5 s until it returns access_token (24 h) and refresh_token (90 d).`,
   `Call ${SITE_URL}/mcp or ${SITE_URL}/api/v1/* with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before it expires. relay_whoami or GET ${SITE_URL}/api/v1/whoami confirm who you are.`,
 ];
-export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. The ${SITE_URL}/tokens page is the fallback for a person minting a token by hand.`;
+export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. ${SITE_URL}/tokens is the operator's Access page: approve requests, revoke, invite; minting a token by hand is its fallback.`;
 
 /** The Markdown mirror of /info. */
 export function infoMarkdown(): string {

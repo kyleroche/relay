@@ -31,7 +31,7 @@ Nobody copies tokens. This site runs an OAuth 2.1 authorization server ([metadat
 | a CLI or a headless bot | \`POST /oauth/device\` (RFC 8628) returns a code like \`RLAY-4F7Q\`; poll \`/oauth/token\` with \`grant_type=urn:ietf:params:oauth:grant-type:device_code\` | the person opens [\`/activate\`](/activate), or a bot calls \`POST /api/v1/access/RLAY-4F7Q/approve\` from a chat reply; \`relay setup --site <url>\` does all of this for a machine |
 | anything the operator trusts in advance | \`relay invite create --for <name> --scopes <a,b>\` prints a one-time code; redeem it with \`grant_type=urn:relay:invite\` or \`relay setup --site <url> --invite <code>\` | none: the invite is the approval |
 
-Access tokens last **24 hours** and are rows in the same \`tokens\` table as operator-minted ones, named \`oauth:<client name>\`, so every scope check and \`relay token ls|revoke\` applies to them. Refresh tokens last **90 days** and rotate on every use; reusing an old one revokes the whole lineage. Revoke either kind at \`POST /oauth/revoke\` (\`token=…\`), on [/tokens](/tokens), or with \`relay token revoke\`. Every request and decision is an \`access.*\` row in the feed, so a webhook on \`access.requested\` lets a chat bot relay the approval. The [connect guide](/docs/integrations) walks through each case.
+Access tokens last **24 hours** and are rows in the same \`tokens\` table as operator-minted ones, named \`oauth:<client name>\`, so every scope check and \`relay token ls|revoke\` applies to them. Refresh tokens last **90 days** and rotate on every use; reusing an old one revokes the whole lineage. Revoke either kind at \`POST /oauth/revoke\` (\`token=…\`), on the [Access page](/tokens), or with \`relay token revoke\`. That page also lists pending device requests (Approve and Deny), approvals waiting for the client to poll, invites and registered clients. Every request and decision is an \`access.*\` row in the feed, so a webhook on \`access.requested\` lets a chat bot relay the approval. The [connect guide](/docs/integrations) walks through each case.
 
 \`GET /api/v1/whoami\` (and the \`relay_whoami\` MCP tool) tells any credential what it is: name, scopes, expiry, source.
 
@@ -52,7 +52,7 @@ Scopes are named and granted per token:
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
 | \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode) |
 
-The operator can also mint tokens by hand, on the [tokens page](/tokens) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
+The operator can also mint tokens by hand, under "Mint a token by hand" on the [Access page](/tokens) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
 
 \`\`\`bash
 pnpm relay token create --name ci-runner --scopes feed:read,assets:write   # prints the token once

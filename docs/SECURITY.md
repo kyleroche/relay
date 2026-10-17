@@ -153,7 +153,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Session required | |
 |---|---|
-| `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/tokens` | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/tokens` (the Access page) | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
 | `/activate`, `/setup/*` | approving a device code; the GitHub App setup |
 | `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |
@@ -181,7 +181,17 @@ covered by `packages/core/test/oauth.test.ts`; the routes under `apps/web/app/oa
 | authorization code (`rac_…`) | `oauth_codes`, SHA-256, bound to the client, redirect URI and PKCE challenge | 10 minutes, one use | a second exchange fails and the code stays spent (a wrong `code_verifier` also spends it) |
 | device code (`rdc_…`) | `oauth_device_codes`, SHA-256, with the `RLAY-XXXX` user code | 15 minutes, one redemption | polling faster than `interval` answers `slow_down` |
 | invite code (`rin_…`) | `invites`, SHA-256, with `uses_left` | what `--expires` says (default 24 h), `--uses` redemptions (default 1) | spent atomically; revocable by id or name |
-| operator token (`relay token create`, `/tokens`) | the same `tokens` table, no expiry | until revoked | none |
+| operator token (`relay token create`, "Mint a token by hand" on `/tokens`) | the same `tokens` table, no expiry | until revoked | none |
+
+The Access page (`/tokens`) shows all of this to the operator: device requests with Approve and Deny (pending,
+approved and waiting for the client to poll `/oauth/token`, and the last day's decisions), every token with how it was
+issued (OAuth client, invite, by hand) and whether it renews, invites, registered clients, and the by-hand form folded
+away at the bottom. Retention: a daily cron (`GET /api/cron/access-expire`, `CRON_SECRET`, 04:30 UTC in
+`apps/web/vercel.json`) runs `purgeAccess`: device and authorization codes expired for more than a day, refresh tokens
+expired for more than 30 days, and orphan clients (registered on the fly by the device flow, older than a day, with no
+tokens, refresh tokens or live codes) are deleted; `access.*` feed rows stay as the audit trail and one `access.purged`
+row records the counts when anything went. Any other client can be removed on the Access page once nothing live
+depends on it (`removeClient` refuses otherwise).
 
 PKCE `S256` is mandatory and `plain` is refused; `code_challenge_methods_supported` says only `S256`. Redirect URIs are
 registered at `POST /oauth/register` and must be `https`, loopback `http` (any port, RFC 8252) or a private-use scheme;
@@ -194,7 +204,7 @@ site. The device flow registers a public client per machine (`client_name`), so 
 `/oauth/authorize` (and `/activate` for device codes) renders, for the signed-in person: the client's registered name
 (`relay-cli@studio`, `Grok Bot`), each requested scope with the one-line description from `TOKEN_SCOPE_DESCRIPTIONS`,
 where the browser returns afterwards (the redirect URI's host) and, when present, the `resource`, plus the two facts
-that matter: the token lasts 24 hours and renews itself for 90 days, and it can be revoked on `/tokens`. Approve and
+that matter: the token lasts 24 hours and renews itself for 90 days, and it can be revoked on `/tokens` (Access). Approve and
 Deny are plain form posts; the session cookie is `SameSite=Lax`, so a cross-site form cannot approve on the person's
 behalf, and the decision route re-validates the client and redirect URI against the registration before issuing
 anything the hidden fields could not have changed. A request that was not started by the person should be denied,
@@ -208,10 +218,11 @@ and a webhook can relay it.
 
 ### Revocation
 
-- `relay token revoke oauth:<client>`, the `/tokens` page, or `DELETE /api/v1/tokens/{id}` revoke an access token at
+- `relay token revoke oauth:<client>`, the Access page (`/tokens`), or `DELETE /api/v1/tokens/{id}` revoke an access token at
   once; its refresh token keeps working until it is also revoked, so revoke the refresh token too when the holder is
   not trusted: `POST /oauth/revoke` with `token=<refresh or access token>` (RFC 7009) does both at once.
-- `relay invite revoke <id|name>` or `DELETE /api/v1/invites/{id}` stops an unredeemed code.
+- `relay invite revoke <id|name>`, Revoke under Invites on the Access page, or `DELETE /api/v1/invites/{id}` stops an
+  unredeemed code.
 - Rotating `RELAY_SESSION_SECRET` signs every browser session out and makes the sealed GitHub App key unreadable;
   it does not touch tokens, which live in the database by hash.
 - A reused refresh token revokes its lineage automatically; the holder sees `invalid_grant` and must be approved again.
