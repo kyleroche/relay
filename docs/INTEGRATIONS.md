@@ -160,7 +160,7 @@ When the app is installed on a repository, relay writes `project.github_connecte
 | `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`): state, PR, preview URL, run summary, usage, review decision |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
 | `webhooks:write` | subscribe itself to events (`relay_webhook_subscribe`, `POST /api/v1/webhooks`) |
-| `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write` |
+| `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write`; release a task the injection gate held (`relay_task_release`, `POST /api/v1/tasks/{id}/release`), never one the bot opened itself |
 | `feed:read` | optional: read the whole feed, the projects and the workers |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
 | `work:claim` | not for a bot: the scope a machine's `relay work` token carries to register, heartbeat, claim and report (`docs/WORKERS.md`) |
@@ -185,6 +185,7 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 | `relay_task_approve(id)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/approve` | `tasks:write` | approve a task in review: relay squash-merges the PR through GitHub, deletes its branch and writes `task.approved`; the task is `done`. A bot may not approve a PR its own lane produced (the `run.started` / `pr.opened` actor carries its name); GitHub's refusal comes back as an error with `task.merge_failed` in the feed |
 | `relay_task_request_changes(id, note)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/request-changes` | `tasks:write` | send it back: relay posts `relay: changes requested by <actor>:` + the note on the PR, writes `task.changes_requested`, and the task is `queued`; the next run gets the note under "Review feedback" in its brief and pushes to the same branch and PR |
 | `relay_task_requeue(id, lane?, reason?)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/requeue` | `tasks:write` | put a task back in the queue from any state but `done`, optionally on another lane: relay updates the task's lane and moves the issue's `agent:*` label (best effort; a GitHub failure is in the event payload), releases a live worker claim, writes `task.requeued` and rings the doorbell; the next worker that serves the lane claims it and starts over from the base branch (an open PR is reused). For a task stuck `running` (a cloud lane nobody wired, a run that never reported) or on the wrong lane |
+| `relay_task_release(id, note?)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/release` | `tokens:write` | release a task the injection gate `held` (`docs/SECURITY.md`, "The gate"): writes `task.released`, the task is `queued` again and the next worker grades it again before running. For text a person has read and judged safe; a bot never releases a task it opened itself. 409 when the task is not held |
 | `relay_event_log(kind, project?, summary, url?, cost_equiv?, source?)` | `POST /api/v1/events` | `events:write` | one `external.*` row in the feed, actor `bot:<token name>` |
 | `relay_webhook_subscribe(url, events[], bearer?, project?)` | `POST /api/v1/webhooks` | `webhooks:write` | register an outbound webhook; the signing secret is returned once |
 | `relay_webhook_unsubscribe(id)` | `DELETE /api/v1/webhooks/{id}` | `webhooks:write` | remove it |
@@ -210,6 +211,8 @@ relay caches on the task row after every write that can change it (`docs/ARCHITE
 | Event | State after it |
 |---|---|
 | none yet, or `issue.labeled` | `queued` |
+| `task.held` (the injection gate flagged the text: at creation by the site's pre-check, or on the worker before the lane ran) | `held`: not claimable; the row's payload has `score`, `reasons` and `grader` (`precheck` or `model`) |
+| `task.released` | `queued` (the next worker grades it again) |
 | a worker holds a live lease on it (no run event yet; `docs/WORKERS.md`) | `claimed` (and `runner` = `runner:<worker>`) |
 | `run.started`, or `run.dispatched` (a cloud lane) | `running` (and `runner` = the worker that claimed it) |
 | `run.finished` with a failing conclusion, or `run.failed` | `failed` |
@@ -222,7 +225,9 @@ relay caches on the task row after every write that can change it (`docs/ARCHITE
 | the lease behind a `run.started` expired with no finish (the worker vanished) | `queued` |
 
 So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a decision, each with
-its `pr_url` and, once Vercel built the branch, its `preview_url`. Workers (`relay work`) write the `run.*`
+its `pr_url` and, once Vercel built the branch, its `preview_url`. `relay_task_list(state: "held")` is what the
+injection gate stopped: tell the person what the `task.held` row says and let them decide; a chat bot that relays
+`task.held` ("task held: <reasons>") and calls `relay_task_release` only after a person said so is the intended shape. Workers (`relay work`) write the `run.*`
 transitions as they go; the GitHub webhook (`docs/FEED.md`) adds the PR and merge ones; the review tools write the
 `task.*` decisions. Without any worker online a task stays `queued`.
 

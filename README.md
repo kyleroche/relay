@@ -9,7 +9,7 @@ relay turns Claude Code, Codex, and Grok Build into a team that shares memory, p
 ## What you get
 
 - **One memory.** Decisions made in Codex show up in Claude and Grok. A generated rules file in each repo plus a small MCP server keep every tool on the same page.
-- **Work from anywhere.** File an issue from your phone, a chat bot, or a terminal. A worker on your own machine claims it, opens a PR, and your deploy preview appears on the task page. Approve there, from the chat bot, or with `relay task approve`, and relay merges; send it back with a note and the next run picks the note up; a task stuck or on the wrong lane goes back to the queue with `relay task requeue`.
+- **Work from anywhere.** File an issue from your phone, a chat bot, or a terminal. A worker on your own machine claims it, opens a PR, and your deploy preview appears on the task page. Approve there, from the chat bot, or with `relay task approve`, and relay merges; send it back with a note and the next run picks the note up; a task stuck or on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the issue text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
 
