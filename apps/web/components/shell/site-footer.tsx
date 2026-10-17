@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { ThemeToggle } from "@/components/shell/theme-toggle";
 import { AUTHOR, REPO_URL } from "@/lib/site";
-import { dataMode } from "@/lib/data";
 import { getSession } from "@/lib/session";
 
-/** The public and reference pages. Anonymous visitors get their theme control here; signed-in viewers have it in the avatar menu. */
+/**
+ * The public and reference pages (DESIGN.md, "Information architecture"). Anonymous visitors get their theme control
+ * here; signed-in viewers have it in the avatar menu, whose header row also carries the "demo" tag in mock mode.
+ */
 export async function SiteFooter() {
-  const mode = dataMode();
   const session = await getSession();
   return (
     <footer className="mt-16 border-t">
@@ -17,18 +18,18 @@ export async function SiteFooter() {
             {AUTHOR.name}
           </a>
           . Apache-2.0.
-          {mode === "mock" && <span className="ml-2 rounded bg-muted px-1.5 py-0.5 font-mono text-[11px]">demo data</span>}
         </p>
         <div className="flex items-center gap-3">
           <nav aria-label="Footer" className="flex flex-wrap gap-x-4 gap-y-1">
-            <Link href="/about" className="hover:text-foreground">About</Link>
-            <Link href="/contact" className="hover:text-foreground">Contact</Link>
-            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+            <Link href="/info" className="hover:text-foreground">Overview</Link>
             <Link href="/docs" className="hover:text-foreground">Docs</Link>
             <Link href="/docs/api" className="hover:text-foreground">API</Link>
             <a href="/openapi.json" className="hover:text-foreground">OpenAPI</a>
             <a href="/llms.txt" className="hover:text-foreground">llms.txt</a>
-            <a href={REPO_URL} className="hover:text-foreground" rel="noopener">GitHub</a>
+            <Link href="/about" className="hover:text-foreground">About</Link>
+            <Link href="/contact" className="hover:text-foreground">Contact</Link>
+            <Link href="/privacy" className="hover:text-foreground">Privacy</Link>
+            <a href={REPO_URL} className="hover:text-foreground" rel="noopener">Source</a>
           </nav>
           {!session && <ThemeToggle />}
         </div>
