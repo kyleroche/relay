@@ -2,7 +2,93 @@
 
 A runner is a machine you own that holds your vendor logins and executes lanes. GitHub Actions only schedules the
 work; the vendor CLI runs locally under your subscription, and nothing secret ever leaves the machine. This guide
-takes one machine from zero to serving a lane.
+takes one machine from zero to serving a lane. If you own no machine that can stay on, start with the cloud lanes
+below and move to a runner when you hit their limits.
+
+## Cloud lanes (no machine)
+
+A cloud lane hands a labelled issue to the vendor's own hosted tier on your subscription. Nothing runs on a machine
+you own: `relay-cloud.yml` (installed by `relay link`) runs on GitHub's `ubuntu-latest`, fetches the memory brief
+from the relay site, and posts one issue comment that mentions the vendor's GitHub bot with the brief underneath. The
+vendor's agent reads the issue, works in its sandbox, and pushes a branch or pull request; relay sees that PR through
+the GitHub webhook and attributes it to the lane (`docs/FEED.md`). The research behind this section, with sources, is
+`docs/research/2026-10-16-cloud-lanes.md`.
+
+| Label | Who executes | Where the result lands |
+|---|---|---|
+| `agent:codex-cloud` | Codex cloud on your ChatGPT plan (Plus, Pro, Business, Enterprise), via `@codex` | A `codex/...` branch and PR opened through the Codex connector |
+| `agent:claude-cloud` | Claude Code's cloud tier on your Pro/Max/Team plan, via `@claude` plus, optionally, a Routine API trigger | A `claude/...` branch; the PR is opened from the session or by the action |
+
+The one credential this path needs is a relay bearer token, so the workflow can read the brief and write the
+dispatch to the feed:
+
+```text
+pnpm relay token create --name cloud-dispatch --scopes memory:read,events:write
+```
+
+Store it as the repository (or org) secret `RELAY_TOKEN`. `RELAY_ALLOWED_SENDERS` gates who may label, as for the
+runner lanes. `RELAY_URL` (default `https://relay.kyro.house`) and `RELAY_PROJECT` (default: the repo name) are
+optional variables. No vendor login, API key or `auth.json` is stored anywhere: the vendor authenticates its own
+agent through the app you installed, and your subscription is charged the same way as an interactive session.
+
+### Once per vendor
+
+**Codex.** In ChatGPT, open Codex settings and connect GitHub: GitHub asks you to authorise the **ChatGPT Codex
+Connector** app and to choose the repositories it may reach; a Codex cloud environment is created for the repo on
+first use. After that, `@codex` in an issue or PR comment on those repos starts a cloud task, which is what the
+dispatch comment does. OpenAI lists "GitHub issue and PR delegation with `@codex`" as a feature of the Plus, Pro,
+Business and Enterprise plans; an API key alone has no cloud features. The connector's GitHub login is
+`chatgpt-codex-connector[bot]`; branches are named `codex/<description>`.
+
+**Claude.** Sign in at claude.ai/code and connect GitHub, then install the **Claude GitHub App**
+(github.com/apps/claude) on the account or organization that owns the repo; a private repo is reachable only when
+the app is installed on it. This gives cloud sessions and Routines their GitHub access and enables auto-fix on PRs.
+Two things to know before you label:
+
+- An `@claude` comment on an issue is acted on by **claude-code-action** when that workflow is installed (opt-in,
+  below). Anthropic's hosted services do not watch issue comments on their own: Code Review answers `@claude
+  review` on pull requests (Team and Enterprise plans only), and Routines' GitHub triggers cover pull request and
+  release events, not issues.
+- To make `agent:claude-cloud` run with zero machines and no subscription token in GitHub, create a Routine at
+  claude.ai/code/routines with your repo selected, a prompt such as "Implement the GitHub issue described in the
+  routine-fire-payload block, run the project's checks, push a branch and open a pull request that closes the
+  issue", and an **API trigger**. Copy the trigger URL into the repo variable `RELAY_CLAUDE_ROUTINE_URL` and the
+  token (shown once) into the secret `RELAY_CLAUDE_ROUTINE_TOKEN`. That token can only start that one routine; it is
+  not a login. The workflow then fires the routine with the issue link and the brief as `text`, which Anthropic
+  wraps as untrusted data, so the prompt above has to say to act on it. Routine runs create `claude/` branches
+  under your own GitHub identity and appear as sessions at claude.ai/code.
+
+### Opt-in: claude-code-action on GitHub's runners
+
+`anthropics/claude-code-action` runs Claude Code on a GitHub-hosted runner and answers `@claude` mentions in issues
+and PRs; the dispatch comment is exactly such a mention, so with the action installed `agent:claude-cloud` works on
+any plan with no routine. It authenticates either with an API key or with a one-year subscription token from
+`claude setup-token`, stored as the `CLAUDE_CODE_OAUTH_TOKEN` secret (Pro, Max, Team and Enterprise). **relay does
+not install this.** That token is a login to your subscription living in GitHub's secret store, which is what
+`docs/SECURITY.md` rules out ("never stored as a GitHub secret"). If you choose it anyway, install it yourself with
+`/install-github-app` from Claude Code, keep the repository private, set `--max-turns` in `claude_args`, and treat
+the token as compromised the moment the repo gains an outside collaborator. Results appear as `claude[bot]`
+comments and a `claude/issue-<n>-...` branch with a link to open the PR.
+
+### Limits, and when to move to a runner
+
+- **Usage** comes out of the same subscription windows as interactive use. Codex: local messages and cloud tasks
+  share the plan's five-hour and weekly allowance, and "cloud tasks may use more of your allowance than local
+  messages"; Pro has no five-hour limit. Claude: cloud sessions and routines "share rate limits with all other
+  Claude and Claude Code usage"; routines add hourly caps (100 scheduled runs per hour per account, 30 API fires
+  per hour per routine, 100 per account) and GitHub-trigger events have unpublished per-routine and per-account
+  hourly caps. Neither vendor publishes a daily cap; third-party figures for routines (5 per day on Pro, 15 on Max)
+  are not confirmed by Anthropic's docs.
+- **No usage line.** The vendor's sandbox does not post relay's `<!-- relay:usage -->` block, so the ledger shows
+  the dispatch and the PR but not tokens. Read spend on the vendor's usage page.
+- **No cross-model review.** `relay-review.yml` only reviews `relay/` branches from a runner; a cloud PR is reviewed
+  by whatever the vendor offers (Codex automatic review, Claude Code Review on Team/Enterprise) or by you.
+- **Vendor sandbox rules.** Network access, setup scripts and installed tools are the vendor environment's, not
+  yours; a repo whose checks need private services may not pass there.
+
+Move an issue to `agent:claude`, `agent:codex` or `agent:grok` (a self-hosted runner, below) when you need the
+usage line in the ledger, the cross-model review, a lane the vendor has no cloud tier for (Grok), your own
+network, or more runs than the cloud caps allow.
 
 ## 1. One OS user that holds only the agent logins
 
