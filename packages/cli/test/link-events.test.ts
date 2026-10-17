@@ -72,7 +72,7 @@ async function link(...extra: string[]): Promise<string[]> {
   try {
     const program = new Command().exitOverride();
     registerLink(program);
-    await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-workflows", "--no-digest", ...extra], { from: "user" });
+    await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-digest", ...extra], { from: "user" });
   } finally {
     console.error = orig;
   }

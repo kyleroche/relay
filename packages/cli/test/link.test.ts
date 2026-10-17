@@ -1,6 +1,6 @@
 /**
  * The real `relay link` flow against a throwaway git repo, with RELAY_FAKE_LANES=1 so the Claude lane returns canned
- * JSON instead of spawning `claude` (no network, no login). --no-labels --no-workflows keep gh and the templates out.
+ * JSON instead of spawning `claude` (no network, no login). --no-labels keeps gh out (the caller workflows are opt-in since --workflows).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -46,7 +46,7 @@ afterAll(() => {
 async function link(...extra: string[]): Promise<void> {
   const program = new Command().exitOverride();
   registerLink(program);
-  await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-workflows", ...extra], { from: "user" });
+  await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", ...extra], { from: "user" });
 }
 
 async function inspect() {
