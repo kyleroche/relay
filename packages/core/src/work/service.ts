@@ -2,8 +2,12 @@
  * The service file that keeps `relay work` running on a machine (docs/WORKERS.md "Run it as a service"): a LaunchAgent
  * on macOS (user context, so the vendor CLIs find their keychain logins), a systemd user unit on Linux. Pure: it
  * returns the path, the content and the commands; `relay work --install` prints them and writes with --yes.
+ *
+ * With `isolation: container` the service keeps the `relay-work` container running instead: it runs
+ * `container start --attach relay-work`, which returns when the worker inside exits, and KeepAlive starts it again.
  */
 import { join } from "node:path";
+import { CONTAINER_NAME } from "./container.ts";
 
 export const SERVICE_LABEL = "house.kyro.relay.work";
 export const SYSTEMD_UNIT = "relay-work.service";
@@ -22,6 +26,8 @@ export interface ServiceSpec {
   path: string;
   env?: Record<string, string>;
   uid?: number;
+  /** Container mode: the service runs `<bin> start --attach <name>` instead of `relay work` (docs/WORKERS.md, "Isolation"). */
+  isolation?: { kind: "container"; bin: string; name?: string };
 }
 
 export interface ServicePlan {
@@ -40,8 +46,11 @@ const xml = (s: string): string => s.replace(/&/g, "&amp;").replace(/</g, "&lt;"
 
 export function servicePlan(spec: ServiceSpec): ServicePlan {
   const logPath = join(spec.home, "work.log");
-  const argv = [spec.node, ...spec.cliArgv, "work", ...(spec.args ?? [])];
-  const env: Record<string, string> = { PATH: spec.path, HOME: spec.userHome, RELAY_HOME: spec.home, ...(spec.env ?? {}) };
+  const container = spec.isolation?.kind === "container" ? spec.isolation : undefined;
+  // container mode: the worker's own arguments and environment were baked into the container at create time; the
+  // service only needs the `container` CLI, which keeps its state under the user's home
+  const argv = container ? [container.bin, "start", "--attach", container.name ?? CONTAINER_NAME] : [spec.node, ...spec.cliArgv, "work", ...(spec.args ?? [])];
+  const env: Record<string, string> = container ? { PATH: spec.path, HOME: spec.userHome } : { PATH: spec.path, HOME: spec.userHome, RELAY_HOME: spec.home, ...(spec.env ?? {}) };
   if (spec.platform === "darwin") {
     const uid = spec.uid ?? 501;
     const path = join(spec.userHome, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`);
@@ -83,7 +92,7 @@ export function servicePlan(spec: ServiceSpec): ServicePlan {
   const quote = (a: string) => (/^[\w./:=-]+$/.test(a) ? a : `"${a.replace(/(["\\$])/g, "\\$1")}"`);
   const content = [
     "[Unit]",
-    "Description=relay worker: runs claimed tasks with this machine's own CLI logins",
+    container ? `Description=relay worker: keeps the ${container.name ?? CONTAINER_NAME} container running` : "Description=relay worker: runs claimed tasks with this machine's own CLI logins",
     "After=network-online.target",
     "",
     "[Service]",

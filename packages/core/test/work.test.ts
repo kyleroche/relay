@@ -12,6 +12,7 @@ import { localWorkApi, type WorkApi } from "../src/work/api.ts";
 import type { JobResult } from "../src/work/job.ts";
 import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
 import { servicePlan } from "../src/work/service.ts";
+import { CONTAINER_NAME, CONTAINER_VOLUME, containerPlan, containerStateFrom, containerWorkerName, lanesFromDoctorOutput } from "../src/work/container.ts";
 import { runWorker } from "../src/work/worker.ts";
 
 let db: Db;
@@ -240,6 +241,81 @@ describe("service files", () => {
     expect(p.content).toContain("Environment=PATH=/opt/node/bin:/usr/bin:/bin");
     expect(p.content).toContain("Environment=RELAY_HOME=/home/relay/.harness");
     expect(p.load.at(-1)).toEqual(["systemctl", "--user", "enable", "--now", "relay-work.service"]);
+  });
+  it("container mode, macOS: the LaunchAgent keeps `container start --attach relay-work` alive and runs no relay itself", () => {
+    const p = servicePlan({ ...base, platform: "darwin", args: ["--lanes", "claude"], isolation: { kind: "container", bin: "/usr/local/bin/container" } });
+    expect(p.path).toBe("/Users/relay/Library/LaunchAgents/house.kyro.relay.work.plist");
+    const argv = [...p.content.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1]);
+    expect(argv.slice(1, 5)).toEqual(["/usr/local/bin/container", "start", "--attach", "relay-work"]);
+    expect(p.content).not.toContain("/opt/node/bin/node");
+    expect(p.content).not.toContain("<string>work</string>");
+    expect(p.content).not.toContain("claude"); // the worker's arguments live in the container, not the service
+    expect(p.content).toContain("<key>KeepAlive</key><true/>");
+    expect(p.content).toContain("<key>HOME</key><string>/Users/relay</string>");
+    expect(p.content).not.toContain("RELAY_HOME"); // the container has its own
+    expect(p.content).toContain("<key>StandardOutPath</key><string>/Users/relay/.harness/work.log</string>");
+    expect(p.load).toEqual([["launchctl", "bootstrap", "gui/502", p.path]]);
+  });
+  it("container mode, Linux: the unit's ExecStart is the container command", () => {
+    const p = servicePlan({ ...base, platform: "linux", userHome: "/home/relay", home: "/home/relay/.harness", isolation: { kind: "container", bin: "/usr/bin/container" } });
+    expect(p.content).toContain("ExecStart=/usr/bin/container start --attach relay-work");
+    expect(p.content).toContain("Description=relay worker: keeps the relay-work container running");
+    expect(p.content).toContain("Restart=always");
+    expect(p.content).not.toContain("RELAY_HOME");
+  });
+});
+
+describe("container plan (relay work --isolation container)", () => {
+  const spec = { bin: "/usr/local/bin/container", image: "relay-worker:0.1.0", context: "/Users/kyle/.harness/container", site: "https://relay.example.com", workerName: "mac-container", host: "mac.local" };
+  it("names the worker after the host", () => {
+    expect(containerWorkerName("Kyles-MacBook.local")).toBe("kyles-macbook-container");
+    expect(containerWorkerName("mac")).toBe("mac-container");
+  });
+  it("creates relay-work on the named volume with no host mounts, the runtime masks off, and the worker identity in the environment", () => {
+    const p = containerPlan({ ...spec, args: ["--lanes", "claude,codex"], env: { RELAY_LANE_ALLOWED_DOMAINS: "pkg.example" } });
+    expect(p.build).toEqual(["/usr/local/bin/container", "build", "--tag", "relay-worker:0.1.0", "/Users/kyle/.harness/container"]);
+    expect(p.volumeCreate).toEqual(["/usr/local/bin/container", "volume", "create", CONTAINER_VOLUME]);
+    expect(p.create.slice(0, 4)).toEqual(["/usr/local/bin/container", "create", "--name", CONTAINER_NAME]);
+    expect(p.create).toContain(`${CONTAINER_VOLUME}:/home/relay`);
+    expect(p.create.join(" ")).toContain("--masked-path NONE --read-only-path NONE --memory 4G --cpus 4");
+    expect(containerPlan({ ...spec, memory: "8G", cpus: 6 }).create.join(" ")).toContain("--memory 8G --cpus 6");
+    expect(p.create.join(" ")).toContain("--env RELAY_HOME=/home/relay/.harness");
+    expect(p.create.join(" ")).toContain("--env RELAY_ISOLATION=container");
+    expect(p.create.join(" ")).toContain("--env RELAY_WORKER_NAME=mac-container");
+    expect(p.create.join(" ")).toContain("--env RELAY_WORKER_HOST=mac.local");
+    expect(p.create.join(" ")).toContain("--env RELAY_LANE_ALLOWED_DOMAINS=pkg.example");
+    expect(p.create.slice(-4)).toEqual(["relay-worker:0.1.0", "relay", "work", "--lanes", "claude,codex"].slice(1));
+    expect(p.create.filter((w) => w === "--mount" || w.startsWith("type=bind"))).toEqual([]);
+    expect(p.create.join(" ")).not.toContain("/Users/");
+  });
+  it("installs relay from npm when the context has no tarball", () => {
+    const p = containerPlan({ ...spec, relaySpec: "@kyleroche/relay@0.1.0" });
+    expect(p.build).toContain("--build-arg");
+    expect(p.build).toContain("RELAY_SPEC=@kyleroche/relay@0.1.0");
+  });
+  it("runs setup, the shell and doctor inside as the relay user; the service attaches", () => {
+    const p = containerPlan({ ...spec, invite: "abc" });
+    expect(p.setup).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-it", "relay-work", "relay", "setup", "--site", "https://relay.example.com", "--name", "relay-cli@mac-container", "--invite", "abc"]);
+    expect(p.shell).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-it", "relay-work", "bash"]);
+    expect(p.doctor).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "relay-work", "relay", "doctor"]);
+    expect(p.attach).toEqual(["/usr/local/bin/container", "start", "--attach", "relay-work"]);
+    expect(p.logs(true, 20)).toEqual(["/usr/local/bin/container", "logs", "--follow", "-n", "20", "relay-work"]);
+    expect(p.remove).toEqual(["/usr/local/bin/container", "delete", "relay-work"]);
+  });
+  it("reads the container's state from `container list --all --format json`", () => {
+    const json = JSON.stringify([
+      { configuration: { id: "buildkit", image: { reference: "ghcr.io/apple/container-builder-shim/builder:0.13.1" } }, status: { state: "running" } },
+      { configuration: { id: "relay-work", image: { reference: "relay-worker:0.1.0" } }, status: { state: "stopped" } },
+    ]);
+    expect(containerStateFrom(json)).toEqual({ exists: true, running: false, state: "stopped", image: "relay-worker:0.1.0" });
+    expect(containerStateFrom(JSON.stringify([{ configuration: { id: "relay-work" }, status: { state: "running" } }]))).toEqual({ exists: true, running: true, state: "running" });
+    expect(containerStateFrom("[]")).toEqual({ exists: false, running: false });
+    expect(containerStateFrom("not json")).toEqual({ exists: false, running: false });
+  });
+  it("reads the lanes line of `relay doctor` output", () => {
+    expect(lanesFromDoctorOutput("ok    node          v24.1.0\nok    lanes         claude, codex (relay work would serve these); not: grok: no grok CLI or fx login\nok    sandbox       x")).toEqual(["claude", "codex"]);
+    expect(lanesFromDoctorOutput("warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it")).toEqual([]);
+    expect(lanesFromDoctorOutput("ok    node          v24.1.0")).toBeUndefined();
   });
 });
 
