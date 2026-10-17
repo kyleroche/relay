@@ -3,7 +3,7 @@
  * routes under /api/v1/workers and /api/v1/work, the local-mode CLI and the tests all run the same code:
  *
  *   register   POST /api/v1/workers                       upsert by name; worker.registered on first sight, worker.online when it comes back
- *   heartbeat  POST /api/v1/workers/{id}/heartbeat        touch last_seen, renew the worker's leases; `offline` writes worker.offline
+ *   heartbeat  POST /api/v1/workers/{id}/heartbeat        touch last_seen, store the plan meters, renew the worker's leases; `offline` writes worker.offline
  *   doorbell   GET  /api/v1/work/doorbell                 the queue version and a queued estimate; what an idle worker reads instead of claiming
  *   claim      POST /api/v1/work/claim                    the oldest queued task for the worker's lanes and labels, under a 30-minute lease
  *   start      POST /api/v1/work/{task}/start             run.started (the clone is ready and the lane is about to run)
@@ -18,6 +18,7 @@ import { getProject } from "../db/projects.ts";
 import { getTask, type TaskRow } from "../db/tasks.ts";
 import { claimNext, doorbell, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
+import type { MeterReading } from "../meters.ts";
 
 export class WorkError extends Error {
   constructor(message: string, readonly status: 400 | 404 | 409 = 400) {
@@ -36,6 +37,8 @@ export interface HeartbeatInput {
   status?: "online" | "offline";
   /** The poll interval the worker is on (ms), for the workers page and `relay work status`. */
   interval_ms?: number;
+  /** The plan meters read on this machine (`meters.ts`); present replaces the stored list, absent keeps it. */
+  meters?: MeterReading[];
 }
 
 export interface DoorbellInput {
@@ -128,7 +131,7 @@ export async function registerWorkerServer(db: Db, input: WorkerInput): Promise<
 }
 
 export async function heartbeatServer(db: Db, workerId: string, input: HeartbeatInput = {}): Promise<HeartbeatResult> {
-  const r = await heartbeatWorker(db, workerId, { ...(input.status ? { status: input.status } : {}), ...(input.interval_ms ? { pollMs: input.interval_ms } : {}) });
+  const r = await heartbeatWorker(db, workerId, { ...(input.status ? { status: input.status } : {}), ...(input.interval_ms ? { pollMs: input.interval_ms } : {}), ...(input.meters ? { meters: input.meters } : {}) });
   if (!r) throw new WorkError(`No worker ${workerId}; register first.`, 404);
   const events: EventRow[] = [];
   if (input.status === "offline") {

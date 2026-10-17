@@ -6,11 +6,14 @@
  * thousand and a Neon database behind the site is left alone. A claimed task runs, and when it finishes the loop
  * claims once more right away (there may be more work) before going back to the doorbell. Heartbeats go every
  * minute while a lease is held (they renew it) and at most every `idleHeartbeatMs` otherwise, carrying the current
- * interval so the workers page can show it. One job at a time by default; `jobs` raises it, and the lane adapters'
- * per-subscription locks still keep one process per vendor login. A stop (SIGTERM, --once with an empty queue) lets
- * running jobs finish, then reports the worker offline.
+ * interval so the workers page can show it, and the plan meters relay's status line saved under ~/.harness/meters
+ * (`meters.ts`), so the site's header can show the login's own 5-hour and 7-day usage. One job at a time by default;
+ * `jobs` raises it, and the lane adapters' per-subscription locks still keep one process per vendor login. A stop
+ * (SIGTERM, --once with an empty queue) lets running jobs finish, then reports the worker offline.
  */
 import type { WorkerRow } from "../db/workers.ts";
+import { relayHome } from "../hooks/cache.ts";
+import { readMeterFiles, type MeterReading } from "../meters.ts";
 import { type Log, noopLog } from "../util.ts";
 import type { WorkApi } from "./api.ts";
 import { runJob, type JobOptions, type JobResult } from "./job.ts";
@@ -53,6 +56,8 @@ export interface WorkerLoopOptions {
   onInterval?: (ms: number) => void;
   /** The job runner (`runJob`); the loop tests substitute one that does no git. */
   runJob?: (claim: ClaimResult, opts: JobOptions) => Promise<JobResult>;
+  /** The plan meters to send with each heartbeat (default: the fresh files under `$RELAY_HOME/meters`). */
+  meters?: () => MeterReading[];
 }
 
 export interface WorkerLoopResult {
@@ -96,6 +101,15 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   /** Claim on the next pass whatever the doorbell says: at start, after a claim, and when a job finishes. */
   let claimNow = true;
   const run = opts.runJob ?? runJob;
+  const readMeters = opts.meters ?? (() => readMeterFiles(relayHome()));
+  /** Never let a bad meter file cost a heartbeat. */
+  const meters = (): MeterReading[] => {
+    try {
+      return readMeters();
+    } catch {
+      return [];
+    }
+  };
   let lastBeat = Date.now();
   let beating: Promise<void> | undefined;
 
@@ -109,7 +123,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
     if (beating) return beating;
     lastBeat = Date.now();
     beating = opts.api
-      .heartbeat(worker.id, { interval_ms: interval })
+      .heartbeat(worker.id, { interval_ms: interval, meters: meters() })
       .then(() => undefined)
       .catch((e: unknown) => log(`heartbeat failed: ${e instanceof Error ? e.message : String(e)}`))
       .finally(() => (beating = undefined));
@@ -197,7 +211,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
     opts.signal?.removeEventListener("abort", onAbort);
     await beating?.catch(() => {});
     try {
-      await opts.api.heartbeat(worker.id, { status: "offline", interval_ms: interval });
+      await opts.api.heartbeat(worker.id, { status: "offline", interval_ms: interval, meters: meters() });
     } catch {
       /* the site will see the silence */
     }
