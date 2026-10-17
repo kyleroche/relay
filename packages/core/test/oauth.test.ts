@@ -16,9 +16,11 @@ import {
   exchangeToken,
   GRANT_DEVICE_CODE,
   GRANT_INVITE,
+  grantCeilingError,
   issueAuthorizationCode,
   listApprovedAwaitingPoll,
   listClients,
+  listInvites,
   listPendingAccess,
   listRecentAccess,
   lookupDeviceRequest,
@@ -495,5 +497,61 @@ describe("the Access page and retention", () => {
     const late = await purgeAccess(db, o);
     expect(late.refresh_tokens).toBeGreaterThan(0);
     expect((await db.query("SELECT 1 FROM oauth_refresh_tokens")).length).toBe(0);
+  });
+});
+
+describe("the grant ceiling: a bot never grants more than it holds, and never tokens:write", () => {
+  // Its own database: the Access page tests above count what is live in the shared one.
+  let cdb: Db;
+  const held = ["tasks:read", "tasks:write", "events:write", "tokens:write"];
+  beforeAll(async () => {
+    cdb = await openDb({ file: ":memory:" });
+    await migrate(cdb);
+  });
+  afterAll(async () => {
+    await cdb.close();
+  });
+
+  it("approvals: wider than held and tokens:write are refused, the subset passes, deny is always allowed, a person is unrestricted", async () => {
+    const wide = await deviceAuthorization(cdb, { client_name: "wide", scope: "tasks:read memory:write" }, o);
+    const e1 = await fails(decideDeviceRequest(cdb, wide.user_code, "approve", "bot:oauth:woodhouse", o, held), "invalid_scope");
+    expect(e1.status).toBe(403);
+    expect(e1.description).toContain("a bot can approve only scopes it holds itself, and never tokens:write; ask a person to approve this one at https://relay.test/activate");
+    expect(e1.description).toContain("memory:write");
+    expect((await lookupDeviceRequest(cdb, wide.user_code, o))?.status).toBe("pending");
+
+    const approver = await deviceAuthorization(cdb, { client_name: "would-be-approver", scope: "tasks:read tokens:write" }, o);
+    const e2 = await fails(decideDeviceRequest(cdb, approver.user_code, "approve", "bot:oauth:woodhouse", o, held), "invalid_scope");
+    expect(e2.description).toContain("over the ceiling: tokens:write");
+
+    // a credential whose scopes are not passed holds nothing
+    const subset = await deviceAuthorization(cdb, { client_name: "newcomer", scope: "tasks:read tasks:write" }, o);
+    await fails(decideDeviceRequest(cdb, subset.user_code, "approve", "token:ci", o), "invalid_scope");
+    expect(grantCeilingError("token:ci", ["tasks:read"], undefined, o)?.status).toBe(403);
+    expect(grantCeilingError("bot:x", ["tasks:read"], ["tasks:read"], o)).toBeUndefined();
+    expect(grantCeilingError("human:kyle", ["tokens:write"], undefined, o)).toBeUndefined();
+
+    expect((await decideDeviceRequest(cdb, wide.user_code, "deny", "bot:oauth:woodhouse", o, held)).status).toBe("denied");
+    const ok = await decideDeviceRequest(cdb, subset.user_code, "approve", "bot:oauth:woodhouse", o, held);
+    expect(ok.status).toBe("approved");
+    expect(ok.actor).toBe("bot:oauth:woodhouse");
+    expect((await exchangeToken(cdb, { grant_type: GRANT_DEVICE_CODE, device_code: subset.device_code, client_id: subset.client_id }, o)).scope).toBe("tasks:read tasks:write");
+
+    expect((await decideDeviceRequest(cdb, approver.user_code, "approve", "human:kyle", o)).status).toBe("approved");
+  });
+
+  it("invites: the same ceiling on what the code will grant", async () => {
+    const e = await fails(createInvite(cdb, { name: "too-wide", scopes: ["tasks:read", "feed:read"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o), "invalid_scope");
+    expect(e.status).toBe(403);
+    expect(e.description).toContain("a bot can mint invites only for scopes it holds itself, and never tokens:write; ask a person to create this one at https://relay.test/tokens");
+    expect(e.description).toContain("feed:read");
+    await fails(createInvite(cdb, { name: "approver", scopes: ["tokens:write"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o), "invalid_scope");
+    await fails(createInvite(cdb, { name: "unknown-holdings", scopes: ["tasks:read"], createdBy: "token:ci" }, o), "invalid_scope");
+    expect((await listInvites(cdb)).length).toBe(0);
+
+    const ok = await createInvite(cdb, { name: "within", scopes: ["tasks:read", "tasks:write"], createdBy: "bot:oauth:woodhouse", creatorScopes: held }, o);
+    expect(ok.invite.scopes).toEqual(["tasks:read", "tasks:write"]);
+    expect((await exchangeToken(cdb, { grant_type: GRANT_INVITE, invite: ok.code }, o)).token_name).toBe("oauth:within");
+    expect((await createInvite(cdb, { name: "by-a-person", scopes: ["tokens:write"], createdBy: "human:kyle" }, o)).invite.scopes).toEqual(["tokens:write"]);
   });
 });

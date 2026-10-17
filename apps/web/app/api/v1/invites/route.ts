@@ -20,7 +20,8 @@ export const GET = api(
 /**
  * operationId: createInvite. Body: { name, scopes: string[], expires_in?: "24h" | seconds, uses?: 1 }. The code is
  * returned once; whoever redeems it (`relay setup --site <url> --invite <code>`, or grant urn:relay:invite at
- * /oauth/token) gets a token named oauth:<name> with exactly these scopes, no approval step.
+ * /oauth/token) gets a token named oauth:<name> with exactly these scopes, no approval step. A token may invite only
+ * to scopes it holds itself and never tokens:write (403); a signed-in person is unrestricted.
  */
 export const POST = api(
   async (req) => {
@@ -38,9 +39,10 @@ export const POST = api(
     const uses = int(body.uses);
     const grant = await callerGrant(req);
     try {
-      const r = await createInvite(await getDb(), { name, scopes, ...(expires ? { expiresInSeconds: expires } : {}), ...(uses ? { uses } : {}), createdBy: grant?.actor ?? "token:unknown" }, oauthOptions());
+      const r = await createInvite(await getDb(), { name, scopes, ...(expires ? { expiresInSeconds: expires } : {}), ...(uses ? { uses } : {}), createdBy: grant?.actor ?? "token:unknown", creatorScopes: grant?.scopes ?? [] }, oauthOptions());
       return json({ invite: r.invite, code: r.code }, { status: 201, headers: { "cache-control": "no-store" } });
     } catch (e) {
+      if (e instanceof OAuthError && e.status === 403) return problem(403, "Forbidden", e.description, instance, { error: e.code, scopes: grant?.scopes ?? [] });
       if (e instanceof OAuthError) return problem(400, "Bad Request", e.description, instance, { error: e.code });
       throw e;
     }

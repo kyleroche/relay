@@ -545,14 +545,47 @@ export async function lookupDeviceRequest(db: Db, typed: string, o: OAuthServerO
   return { ...d, expired: d.status === "pending" && isPast(o, d.expires_at) };
 }
 
-/** Approve or deny from /activate, the API, or a chat reply. Throws OAuthError when the code is not pending. */
-export async function decideDeviceRequest(db: Db, typed: string, decision: "approve" | "deny", actor: string, o: OAuthServerOptions): Promise<q.DeviceCodeRow> {
+/** The one scope no credential may hand out: holding it is what makes an approver, and only a person makes approvers. */
+export const APPROVER_SCOPE: TokenScope = "tokens:write";
+
+export const isHumanActor = (actor: string): boolean => actor.startsWith("human:");
+
+/**
+ * What an actor may grant. A person signed in here (`human:<login>`: the Access page, /activate, the operator's own
+ * CLI) is unrestricted. Every other actor is a credential (a bot's token over the API or MCP) and may grant only the
+ * scopes it holds itself (`held`), never `tokens:write`: a bot that could approve a wider request, or mint another
+ * approver, would turn one approved token into every token. Returns the refusal to throw, or undefined when allowed.
+ */
+export function grantCeilingError(actor: string, requested: readonly string[], held: readonly string[] | undefined, o: OAuthServerOptions, what: "approve" | "invite" = "approve"): OAuthError | undefined {
+  if (isHumanActor(actor)) return undefined;
+  const have = new Set(held ?? []);
+  const over = requested.filter((s) => s === APPROVER_SCOPE || !have.has(s));
+  if (!over.length) return undefined;
+  const site = o.issuer.replace(/\/+$/, "");
+  const text =
+    what === "approve"
+      ? `a bot can approve only scopes it holds itself, and never tokens:write; ask a person to approve this one at ${site}/activate`
+      : `a bot can mint invites only for scopes it holds itself, and never tokens:write; ask a person to create this one at ${site}/tokens`;
+  return new OAuthError("invalid_scope", `${text} (over the ceiling: ${over.join(", ")}).`, 403);
+}
+
+/**
+ * Approve or deny from /activate, the API, a chat reply or the relay_access_approve tool. Throws OAuthError when the
+ * code is not pending. `approverScopes` is what the deciding credential holds: required for every actor that is not a
+ * signed-in person, since an approval may grant no more than that and never tokens:write (`grantCeilingError`); a
+ * deny is always allowed.
+ */
+export async function decideDeviceRequest(db: Db, typed: string, decision: "approve" | "deny", actor: string, o: OAuthServerOptions, approverScopes?: readonly string[]): Promise<q.DeviceCodeRow> {
   const code = normalizeUserCode(typed);
   if (!code) throw new OAuthError("invalid_request", "That does not look like a code (RLAY-XXXX).");
   const current = await q.getDeviceByUserCode(db, code);
   if (!current) throw new OAuthError("invalid_grant", "Unknown code.");
   if (current.status !== "pending") throw new OAuthError("invalid_grant", `That request was already ${current.status}.`);
   if (isPast(o, current.expires_at)) throw new OAuthError("expired_token", "That request expired; ask the device to start again.");
+  if (decision === "approve") {
+    const ceiling = grantCeilingError(actor, current.scopes, approverScopes, o, "approve");
+    if (ceiling) throw ceiling;
+  }
   const row = await q.decideDevice(db, code, { status: decision === "approve" ? "approved" : "denied", actor, now: new Date(nowMs(o)) });
   if (!row) throw new OAuthError("invalid_grant", "That request was decided by someone else.");
   await emit(db, o, {
@@ -673,6 +706,8 @@ export interface CreateInviteInput {
   expiresInSeconds?: number;
   uses?: number;
   createdBy: string;
+  /** What `createdBy` holds when it is a credential rather than a signed-in person: the invite may carry no more, and never tokens:write. */
+  creatorScopes?: readonly string[];
 }
 
 /** `relay invite create`: the code is in the result and nowhere else. */
@@ -682,6 +717,8 @@ export async function createInvite(db: Db, input: CreateInviteInput, o: OAuthSer
   if (name.length > 80) throw new OAuthError("invalid_request", "name must be at most 80 characters.");
   const scopes = resolveScopes(input.scopes, null, []);
   if (!scopes.length) throw new OAuthError("invalid_scope", "An invite needs at least one scope.");
+  const ceiling = grantCeilingError(input.createdBy, scopes, input.creatorScopes, o, "invite");
+  if (ceiling) throw ceiling;
   const uses = input.uses ?? 1;
   if (!Number.isInteger(uses) || uses < 1 || uses > 1000) throw new OAuthError("invalid_request", "uses must be between 1 and 1000.");
   const ttl = input.expiresInSeconds ?? INVITE_DEFAULT_TTL_SECONDS;

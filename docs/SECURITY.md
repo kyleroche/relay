@@ -183,6 +183,24 @@ covered by `packages/core/test/oauth.test.ts`; the routes under `apps/web/app/oa
 | invite code (`rin_…`) | `invites`, SHA-256, with `uses_left` | what `--expires` says (default 24 h), `--uses` redemptions (default 1) | spent atomically; revocable by id or name |
 | operator token (`relay token create`, "Mint a token by hand" on `/tokens`) | the same `tokens` table, no expiry | until revoked | none |
 
+### Who may approve, and how much
+
+Three kinds of actor decide a device request or mint an invite, and the server tells them apart by the actor string:
+
+| Actor | Where | May grant |
+|---|---|---|
+| a signed-in person (`human:<login>`) | the Access page, `/activate`, the operator's own CLI | anything, including `tokens:write` |
+| a credential with `tokens:write` (`bot:oauth:woodhouse`, `token:ci`) | `relay_access_approve`, `relay_invite_create` over `/mcp`; `POST /api/v1/access/{code}/approve`, `POST /api/v1/invites` | only scopes it holds itself, and never `tokens:write` |
+| anything else | nothing: the scope gate refuses before the decision | nothing |
+
+The ceiling is `grantCeilingError` in `packages/core/src/oauth/server.ts`, checked by `decideDeviceRequest` (approve
+only; a deny is always allowed) and `createInvite` from the scopes the caller's grant carries, which the API routes and
+the MCP server pass explicitly. A refusal is `403` / an MCP tool error reading "a bot can approve only scopes it holds
+itself, and never tokens:write; ask a person to approve this one at `<site>/activate`" and changes nothing: the code
+stays pending for a person. So a chief-of-staff bot lets other agents in without anyone clicking, but an approved bot
+can never widen itself, and `tokens:write` (the scope that makes an approver) is only ever handed out by a person.
+Every decision is an `access.granted` or `access.denied` row naming the actor.
+
 The Access page (`/tokens`) shows all of this to the operator: device requests with Approve and Deny (pending,
 approved and waiting for the client to poll `/oauth/token`, and the last day's decisions), every token with how it was
 issued (OAuth client, invite, by hand) and whether it renews, invites, registered clients, and the by-hand form folded
