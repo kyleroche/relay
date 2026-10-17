@@ -51,8 +51,15 @@ jobs:
       - name: Build, pack, install the tarball into an empty directory and run it
         run: scripts/check-package.sh
 
-      - name: Publish
+      - name: Stage the release on npm
         working-directory: packages/cli
-        # pnpm rewrites the workspace:* devDependencies to versions and hands the rest to npm publish; --provenance
-        # attaches the SLSA attestation npm shows on the package page. No NODE_AUTH_TOKEN: the OIDC token is used.
-        run: pnpm publish --provenance --access public --no-git-checks
+        # Staged publishing: the package's trusted publisher may only stage (npm's "stage publish" permission), and a
+        # person approves the staged version on npmjs.com with 2FA before it goes live. `pnpm pack` rewrites the
+        # workspace:* dependencies into real versions inside the tarball; --provenance attaches the SLSA attestation.
+        # No token anywhere: the job's OIDC identity is what npm trusts. npm stage needs npm 11.15 or newer.
+        run: |
+          npm install -g npm@latest
+          npm --version
+          pnpm pack
+          npm stage publish ./kyleroche-relay-*.tgz --provenance --access public
+          echo "::notice::staged @kyleroche/relay $(jq -r .version package.json): approve it at https://www.npmjs.com/package/@kyleroche/relay (Staged packages) or with npm stage approve"

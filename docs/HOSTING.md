@@ -222,6 +222,8 @@ Node 24 or newer is required (`engines`). A `relay setup` run from the installed
 `<package>/dist/hooks/*.mjs` and `<package>/dist/relay-mcp.js` in the CLIs' configs, so `npm update -g` keeps them
 valid; a checkout records its `packages/cli/hooks` and `packages/mcp/bin` paths instead.
 
+Releases are staged, not published, by the workflow: pushing a `v<version>` tag (matching `packages/cli/package.json`) runs the checks and `npm stage publish` through the package's trusted publisher, then a maintainer approves the staged version on npmjs.com (Staged packages, 2FA) or with `npm stage approve`. Nothing goes live without that approval, and no npm token exists anywhere.
+
 ## 9. Checklist
 
 - [ ] Project imported with root directory `apps/web`
