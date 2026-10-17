@@ -3,9 +3,11 @@
  * plan, against recorded shell words instead of the real `container` CLI.
  */
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { Command } from "commander";
 import { CONTAINER_NAME, CONTAINER_VOLUME } from "@relay/core";
 import { bakedArgs, isolationOf, registerWork, type WorkDeps } from "../src/commands/work.ts";
@@ -26,7 +28,10 @@ afterAll(() => {
   rmSync(userHome, { recursive: true, force: true });
   delete process.env.RELAY_USER_HOME;
 });
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  process.exitCode = undefined;
+});
 
 const LIST_STOPPED = JSON.stringify([{ configuration: { id: CONTAINER_NAME, image: { reference: "relay-worker:0.1.0" } }, status: { state: "stopped" } }]);
 /** `relay-work` running on an older image, created by `--install --lanes claude --jobs 2 --cpus 6` with an allowed-domains passthrough. */
@@ -62,14 +67,27 @@ const DOCTOR_ALL = DOCTOR_PARTIAL.replace("ok    login:fx      connected: codex"
   .replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in")
   .replace("warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it", "ok    lanes         claude, codex, grok (relay work would serve these)");
 
-/** A `container` CLI that answers the probes (including the ones inside the container) and records everything else. */
-function fakeDeps(opts: { list?: string; hasContainer?: boolean; credentials?: boolean; doctor?: string } = {}) {
+/** The stand-in for `fx login` inside the container: prints an authorize URL for FAKE_PORT, then waits for the code on stdin (fixtures/fake-fx-login.mjs). */
+const FAKE_FX = resolve(import.meta.dirname, "fixtures", "fake-fx-login.mjs");
+
+/**
+ * A `container` CLI that answers the probes (including the ones inside the container) and records everything else.
+ * `login` adds a fake fx process in place of `container exec … fx login` (its port, code and behaviour from `fx`) and
+ * a fake browser: what `open <url>` does, usually a fetch of the redirect to the listener on this machine.
+ */
+function fakeDeps(opts: { list?: string; hasContainer?: boolean; credentials?: boolean; doctor?: string; fx?: { port: number; code?: string; mode?: string }; browser?: (url: string) => void; publishedPorts?: number[] } = {}) {
   const sh: string[][] = [];
   const run: string[][] = [];
+  const spawned: string[][] = [];
+  const children: ChildProcess[] = [];
   const deps: WorkDeps = {
     sh(words) {
       sh.push(words);
       const [, sub, sub2] = words;
+      if (words[0] === "open" || words[0] === "xdg-open") {
+        opts.browser?.(words[1]!);
+        return { ok: true, out: "" };
+      }
       if (sub === "system" && sub2 === "status") return { ok: true, out: "FIELD   VALUE\nstatus  running\nclient.version 1.5.0" };
       if (sub === "list") return { ok: true, out: opts.list ?? "[]" };
       if (sub === "volume" && sub2 === "list") return { ok: true, out: "NAME  TYPE  DRIVER  OPTIONS" };
@@ -83,11 +101,46 @@ function fakeDeps(opts: { list?: string; hasContainer?: boolean; credentials?: b
       run.push(words);
       return 0;
     },
+    spawn(words) {
+      spawned.push(words);
+      const provider = words.at(-1)!;
+      const child = spawn(process.execPath, [FAKE_FX, provider], {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, FAKE_PORT: String(opts.fx?.port ?? 0), FAKE_CODE: opts.fx?.code ?? "", FAKE_MODE: opts.fx?.mode ?? "paste" },
+      });
+      children.push(child);
+      return child;
+    },
+    ...(opts.publishedPorts ? { publishedPorts: opts.publishedPorts } : {}),
     onPath: (bin) => (bin === "container" && opts.hasContainer !== false ? "/usr/local/bin/container" : undefined),
     platform: "darwin",
   };
-  return { deps, sh, run };
+  return { deps, sh, run, spawned, children };
 }
+
+/** A port nothing listens on right now. */
+function freePort(): Promise<number> {
+  return new Promise((res) => {
+    const s = createServer();
+    s.listen(0, "127.0.0.1", () => {
+      const port = (s.address() as AddressInfo).port;
+      s.close(() => res(port));
+    });
+  });
+}
+/** A port this test holds, so the login's listener cannot have it. */
+function holdPort(): Promise<{ port: number; server: Server }> {
+  return new Promise((res) => {
+    const server = createServer();
+    server.listen(0, "127.0.0.1", () => res({ port: (server.address() as AddressInfo).port, server }));
+  });
+}
+const exited = (c: ChildProcess): Promise<void> => (c.exitCode !== null || c.signalCode !== null ? Promise.resolve() : new Promise((res) => c.once("exit", () => res())));
+/** The browser: the redirect fx registered, with the state and this code, to whatever listens at `url`'s redirect port. */
+const redirectTo = (url: string, code: string): Promise<Response> => {
+  const redirect = new URL(new URL(url).searchParams.get("redirect_uri")!);
+  return fetch(`${redirect.origin}${redirect.pathname}?state=st4te&code=${encodeURIComponent(code)}`);
+};
 
 function program(deps: WorkDeps): Command {
   // as main.ts builds it: positional options the whole way down, so `container rm --yes` is rm's option
@@ -201,10 +254,12 @@ describe("relay work --isolation container --install (plan only)", () => {
     expect(logged).toContain("removed the previous relay-work (relay-worker:0.1.0)");
     // the service file went under RELAY_USER_HOME, and the login list marks what the volume holds
     expect(existsSync(join(userHome, "Library", "LaunchAgents", "house.kyro.relay.work.plist"))).toBe(true);
-    expect(printed).toMatch(/^ {2}claude\s+kept \(already in the volume\)$/m);
-    expect(printed).toMatch(/^ {2}fx login codex\s+kept \(already in the volume\)$/m);
-    expect(printed).toMatch(/^ {2}gh auth login && gh auth setup-git\s+the account the worker clones/m);
-    expect(printed).toMatch(/^ {2}fx login --no-browser grok\s+optional: the grok lane/m);
+    // the one command first, the by-hand list under it
+    expect(printed).toMatch(/^ {2}relay work container login all\s+one command; opens this Mac's browser for each login/m);
+    expect(printed).toMatch(/^ {4}claude\s+kept \(already in the volume\)$/m);
+    expect(printed).toMatch(/^ {4}fx login codex\s+kept \(already in the volume\)$/m);
+    expect(printed).toMatch(/^ {4}gh auth login && gh auth setup-git\s+the account the worker clones/m);
+    expect(printed).toMatch(/^ {4}FX_NO_OPEN_BROWSER=1 fx login grok\s+optional: the grok lane/m);
   });
   it("--uninstall keeps the volume and says how to delete it", async () => {
     const f = fakeDeps({ list: LIST_STOPPED });
@@ -232,11 +287,12 @@ describe("relay work container update", () => {
     expect(printed).toContain(`would run   /usr/local/bin/container exec --user relay ${CONTAINER_NAME} test -f /home/relay/.harness/credentials.json  (a site token in the volume means no device flow)`);
     expect(printed).toContain("site        joined as oauth:relay-cli@mac-container (kept: /home/relay/.harness/credentials.json is in the volume)");
     expect(printed).not.toContain("relay setup --site");
-    expect(printed).toContain("then        log in inside, in this order:");
+    expect(printed).toContain("then        log in inside:");
+    expect(printed).toMatch(/^ +relay work container login all\s+one command/m);
     expect(printed).toMatch(/^ +claude\s+kept \(already in the volume\)$/m);
     expect(printed).toMatch(/^ +fx login codex\s+kept \(already in the volume\)$/m);
     expect(printed).toMatch(/^ +gh auth login && gh auth setup-git\s+the account the worker clones/m);
-    expect(printed).toMatch(/^ +fx login --no-browser grok\s+optional: the grok lane; open the printed address/m);
+    expect(printed).toMatch(/^ +FX_NO_OPEN_BROWSER=1 fx login grok\s+optional: the grok lane; open the printed URL/m);
     expect(printed).toContain("re-run with --yes to rebuild the image, recreate the container and restart the service");
     // only probes ran, on the Mac and inside
     expect(f.run).toEqual([]);
@@ -297,7 +353,7 @@ describe("relay work container status", () => {
     expect(printed).toContain(`container: ${CONTAINER_NAME} running`);
     expect(printed).toContain("image:     relay-worker:0.1.0; this relay would build relay-worker:0.1.0-test: rebuild with relay work container update");
     expect(printed).toContain("  fail  login:gh      not logged in; run: gh auth login");
-    expect(printed).toContain("lanes:     none yet; log in with: relay work container shell");
+    expect(printed).toContain("lanes:     none yet; log in with: relay work container login all");
     expect(f.sh).toContainEqual(["/usr/local/bin/container", "exec", "--user", "relay", CONTAINER_NAME, "relay", "doctor"]);
   });
   it("says the image is current when the tags match, and stops at a stopped container", async () => {
@@ -315,5 +371,173 @@ describe("relay work container status", () => {
     expect(printed).toContain("image:     relay-worker:0.1.0; this relay would build relay-worker:0.1.0-test: rebuild with relay work container update");
     expect(printed).toContain("start it with: relay work container start");
     expect(g.sh.filter((w) => w[1] === "exec")).toEqual([]);
+  });
+});
+
+describe("relay work container login", () => {
+  const CODE = "xai-c0de.single-use";
+  const login = (deps: WorkDeps, ...args: string[]) => program(deps).parseAsync(["node", "relay", "work", "container", "login", ...args]);
+  const capture = () => {
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    return () => out.mock.calls.map((c) => String(c[0])).join("\n");
+  };
+
+  it("grok: reads fx's authorize URL, listens on this Mac at the redirect port, opens the browser, answers the redirect and pastes the code to fx", async () => {
+    const port = await freePort();
+    let page = "";
+    const f = fakeDeps({
+      list: LIST_RUNNING_OLD,
+      doctor: DOCTOR_PARTIAL,
+      fx: { port, code: CODE },
+      browser: (url) => void redirectTo(url, CODE).then(async (r) => (page = await r.text())),
+    });
+    const printed = capture();
+    await login(f.deps, "grok");
+    const text = printed();
+    // fx ran inside with its browser off and stdin open
+    expect(f.spawned).toEqual([["/usr/local/bin/container", "exec", "--user", "relay", "-i", CONTAINER_NAME, "env", "FX_NO_OPEN_BROWSER=1", "fx", "login", "grok"]]);
+    expect(text).toContain("fx  Open this URL in your browser to sign in:");
+    expect(text).toContain(`listening on 127.0.0.1:${port} for the browser's redirect`);
+    // the browser was opened on the URL fx printed
+    const opened = f.sh.find((w) => w[0] === "open");
+    expect(opened?.[1]).toMatch(new RegExp(`^https://auth\\.x\\.ai/oauth2/authorize\\?.*redirect_uri=http%3A%2F%2F127\\.0\\.0\\.1%3A${port}%2Fcallback`));
+    expect(text).toContain("opened https://auth.x.ai/oauth2/authorize in this Mac's browser; finish the sign-in there");
+    // the redirect got the "signed in" page; the code went to fx's stdin and fx accepted it
+    expect(page).toContain("grok: signed in");
+    expect(text).toContain("redirect received; pasting the code to fx");
+    expect(text).toContain("fx  Signed in to grok.");
+    expect(text).toMatch(/^grok\s+signed in$/m);
+    expect(text).toContain("logins:    claude ok, gh missing, codex ok, grok missing (relay doctor inside)");
+    expect(text).toContain("lanes:     none yet; log in with: relay work container login all");
+    expect(process.exitCode).toBeUndefined();
+    await exited(f.children[0]!);
+  });
+
+  it("codex with the port free on this Mac: the host listener catches the redirect, replays it to the Codex listener inside with curl, and pastes the code too", async () => {
+    const port = await freePort();
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port, code: CODE }, browser: (url) => void redirectTo(url, CODE) });
+    const printed = capture();
+    await login(f.deps, "codex", "--force");
+    const text = printed();
+    expect(f.spawned[0]!.slice(-3)).toEqual(["fx", "login", "codex"]);
+    expect(f.sh).toContainEqual(["/usr/local/bin/container", "exec", "--user", "relay", CONTAINER_NAME, "curl", "-fsS", "-o", "/dev/null", `http://localhost:${port}/auth/callback?state=st4te&code=${encodeURIComponent(CODE)}`]);
+    expect(text).toContain(`redirect received; replayed to the Codex listener inside (localhost:${port}) and the code pasted to fx`);
+    expect(text).toMatch(/^codex\s+signed in$/m);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("codex when the redirect port is the container's published port: no host listener, the browser opens, fx finishes through the forwarder", async () => {
+    const held = await holdPort();
+    try {
+      const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port: held.port, mode: "finish" }, publishedPorts: [held.port] });
+      const printed = capture();
+      await login(f.deps, "codex", "--force");
+      const text = printed();
+      expect(text).toContain(`127.0.0.1:${held.port} is the container's published port: the browser's redirect reaches the login server inside through it; waiting for fx to finish`);
+      expect(f.sh.some((w) => w[0] === "open")).toBe(true);
+      expect(f.sh.some((w) => w.includes("curl"))).toBe(false);
+      expect(text).toMatch(/^codex\s+signed in$/m);
+      expect(process.exitCode).toBeUndefined();
+    } finally {
+      held.server.close();
+    }
+  });
+
+  it("grok when the redirect port is taken on this Mac: refuses, kills fx and prints the by-hand steps", async () => {
+    const held = await holdPort();
+    try {
+      const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port: held.port, code: CODE } });
+      const printed = capture();
+      await login(f.deps, "grok");
+      const text = printed();
+      expect(text).toContain(`grok    FAILED: cannot listen on 127.0.0.1:${held.port} for the browser's redirect (the port is in use on this Mac)`);
+      expect(text).toContain("by hand:");
+      expect(text).toContain("FX_NO_OPEN_BROWSER=1 fx login grok");
+      expect(text).toContain("paste only the code value");
+      expect(f.sh.some((w) => w[0] === "open")).toBe(false);
+      expect(process.exitCode).toBe(1);
+      await exited(f.children[0]!);
+      expect(f.children[0]!.exitCode === null ? f.children[0]!.signalCode : "exited").toBe("SIGTERM");
+    } finally {
+      held.server.close();
+    }
+  });
+
+  it("times out when the browser never comes back, kills fx and prints the by-hand steps", async () => {
+    const port = await freePort();
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port, mode: "hang" } });
+    const printed = capture();
+    await login(f.deps, "grok", "--timeout", "1");
+    const text = printed();
+    expect(text).toContain("grok    FAILED: timed out after 1s waiting for the browser login");
+    expect(text).toContain("relay work container shell");
+    expect(process.exitCode).toBe(1);
+    await exited(f.children[0]!);
+  });
+
+  it("--no-open prints the URL instead of opening the browser; the redirect still completes the login", async () => {
+    const port = await freePort();
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port, code: CODE } });
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    // the person opens the printed URL themselves: here, as soon as it is printed
+    const browser = (async () => {
+      for (;;) {
+        const line = out.mock.calls.flatMap((c) => String(c[0]).split("\n")).find((l) => l.trim().startsWith("https://auth.x.ai/"));
+        if (line) return redirectTo(line.trim(), CODE);
+        await new Promise((r) => setTimeout(r, 20));
+      }
+    })();
+    await login(f.deps, "grok", "--no-open");
+    await browser;
+    const text = out.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(text).toContain("open this URL on this Mac:");
+    expect(f.sh.some((w) => w[0] === "open")).toBe(false);
+    expect(text).toMatch(/^grok\s+signed in$/m);
+  });
+
+  it("fails cleanly when fx exits before printing a URL", async () => {
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port: 1, mode: "fail" } });
+    const printed = capture();
+    await login(f.deps, "grok");
+    expect(printed()).toContain("grok    FAILED: fx login grok exited 1 before printing an authorize URL");
+    expect(process.exitCode).toBe(1);
+  });
+
+  it("all: skips the logins the volume holds, runs gh on a TTY then gh auth setup-git, grok through the browser, and ends with the lanes line", async () => {
+    const port = await freePort();
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL, fx: { port, code: CODE }, browser: (url) => void redirectTo(url, CODE) });
+    const printed = capture();
+    await login(f.deps);
+    const text = printed();
+    expect(text).toMatch(/^claude\s+already in the volume \(relay doctor inside\); skipped \(--force logs in again\)$/m);
+    expect(text).toMatch(/^codex\s+already in the volume/m);
+    expect(f.run).toEqual([["/usr/local/bin/container", "exec", "--user", "relay", "-it", CONTAINER_NAME, "gh", "auth", "login", "--git-protocol", "https", "--web"]]);
+    expect(f.sh).toContainEqual(["/usr/local/bin/container", "exec", "--user", "relay", CONTAINER_NAME, "gh", "auth", "setup-git"]);
+    expect(text).toContain("the device code prints below; enter it at github.com/login/device on this Mac");
+    expect(text).toMatch(/^gh\s+signed in \(gh auth setup-git done\)$/m);
+    expect(f.spawned.map((w) => w.at(-1))).toEqual(["grok"]);
+    expect(text).toMatch(/^grok\s+signed in$/m);
+    // doctor inside before (what to skip) and after (the report)
+    expect(f.sh.filter((w) => w.includes("doctor")).length).toBe(2);
+    expect(text.trim().split("\n").at(-1)).toBe("lanes:     none yet; log in with: relay work container login all");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("all with --force logs claude in on a TTY too, with the /login instruction", async () => {
+    const port = await freePort();
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_ALL, fx: { port, code: CODE }, browser: (url) => void redirectTo(url, CODE) });
+    const printed = capture();
+    await login(f.deps, "all", "--force");
+    const text = printed();
+    expect(f.run[0]).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-it", CONTAINER_NAME, "claude"]);
+    expect(text).toContain("type /login, open the URL it prints on this Mac, paste the code back, then /exit");
+    expect(f.spawned.map((w) => w.at(-1))).toEqual(["codex", "grok"]);
+    expect(text).toContain("lanes:     claude, codex, grok (the container worker serves these)");
+  });
+
+  it("needs a running container and a known provider", async () => {
+    await expect(login(fakeDeps().deps, "grok")).rejects.toThrow(/no relay-work container; create it with/);
+    await expect(login(fakeDeps({ list: LIST_STOPPED }).deps, "grok")).rejects.toThrow(/relay-work is not running; start it with: relay work container start/);
+    await expect(login(fakeDeps({ list: LIST_RUNNING_OLD }).deps, "vercel")).rejects.toThrow(/login: 'vercel' is not one of claude, gh, codex, grok, all/);
   });
 });

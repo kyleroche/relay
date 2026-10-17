@@ -9,6 +9,8 @@
  * tests can check them and the CLI can print the plan before it does anything.
  */
 
+import { fxLoginWords } from "./login.ts";
+
 /** The container `--install` creates; one per machine. */
 export const CONTAINER_NAME = "relay-work";
 /** The named volume at /home/relay: logins, ~/.harness (site token, work dir, log), the model's shell history. */
@@ -79,9 +81,10 @@ export const CODEX_CALLBACK_PORT = 1455;
  * Every login callback port the container publishes to the Mac's loopback. The published port delivers to the
  * container's eth0 address while the login servers bind its loopback, so relay-entry runs one socat per port
  * (eth0 → 127.0.0.1); the list reaches it as LOGIN_PORTS_ENV. Grok's login picks a random port and cannot be
- * published: inside, `fx login --no-browser grok` with the callback address pasted back is the way.
+ * published: `relay work container login grok` catches the redirect on the Mac instead and pastes the code to fx
+ * (login.ts).
  */
-export const LOGIN_CALLBACK_PORTS = [FX_CALLBACK_PORT, CODEX_CALLBACK_PORT] as const;
+export const LOGIN_CALLBACK_PORTS: readonly number[] = [FX_CALLBACK_PORT, CODEX_CALLBACK_PORT];
 export const LOGIN_PORTS_ENV = "RELAY_LOGIN_PORTS";
 export const CONTAINER_CPUS = 4;
 
@@ -105,10 +108,24 @@ export interface ContainerPlan {
   logs: (follow: boolean, lines?: number) => string[];
   /** `container exec --user relay …` for any command inside. */
   exec: (argv: string[], interactive?: boolean) => string[];
+  /**
+   * `relay work container login` (login.ts): fx with its browser turned off, stdin kept open (`-i`, no TTY) so the
+   * Mac side can paste the code; Claude Code and gh as TTY passthroughs; `gh auth setup-git` after gh's login; and a
+   * `curl` inside to replay the browser's redirect to a login server on the container's loopback.
+   */
+  login: {
+    fx: (provider: "codex" | "grok") => string[];
+    claude: string[];
+    gh: string[];
+    ghSetupGit: string[];
+    replay: (url: string) => string[];
+  };
 }
 
 /** The exec prefix every command inside shares: as the relay user, whose home is the volume. */
 const execWords = (bin: string, interactive: boolean): string[] => [bin, "exec", "--user", CONTAINER_USER, ...(interactive ? ["-it"] : []), CONTAINER_NAME];
+/** `-i` alone: stdin stays open for a paste, no TTY, so the output can be read line by line. */
+const execStdinWords = (bin: string): string[] => [bin, "exec", "--user", CONTAINER_USER, "-i", CONTAINER_NAME];
 
 export function containerPlan(s: ContainerSpec): ContainerPlan {
   const exec = (argv: string[], interactive = false) => [...execWords(s.bin, interactive), ...argv];
@@ -163,21 +180,33 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
     credentials: exec(["test", "-f", CONTAINER_CREDENTIALS]),
     logs: (follow, lines) => [s.bin, "logs", ...(follow ? ["--follow"] : []), ...(lines ? ["-n", String(lines)] : []), CONTAINER_NAME],
     exec,
+    login: {
+      fx: (provider) => [...execStdinWords(s.bin), ...fxLoginWords(provider)],
+      claude: exec(["claude"], true),
+      gh: exec(["gh", "auth", "login", "--git-protocol", "https", "--web"], true),
+      ghSetupGit: exec(["gh", "auth", "setup-git"]),
+      replay: (url) => exec(["curl", "-fsS", "-o", "/dev/null", url]),
+    },
   };
 }
 
+/** The one command that makes every missing login from the Mac (docs/WORKERS.md, "Isolation"; login.ts). */
+export const CONTAINER_LOGIN_COMMAND = "relay work container login all";
+export const CONTAINER_LOGIN_COMMAND_WHY = "one command; opens this Mac's browser for each login and skips the ones already in the volume (claude, gh, then the optional codex and grok)";
+
 /**
- * The login commands the operator runs inside after `--install`, in order; printed by the CLI and the docs. `login`
- * names the login the step makes, so `update` can mark the ones the volume already holds as kept.
+ * The manual fallback: the login commands the operator runs inside, in order; printed under CONTAINER_LOGIN_COMMAND
+ * by the CLI and the docs. `login` names the login the step makes, so `update` can mark the ones the volume already
+ * holds as kept.
  */
 export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; login?: keyof LoginStates }> = [
   { cmd: "relay work container shell", why: "a shell inside the container, as the relay user" },
-  { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back)", login: "claude" },
-  { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as", login: "gh" },
+  { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back, /exit)", login: "claude" },
+  { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as (device code)", login: "gh" },
   { cmd: "fx login codex", why: "optional: the codex lane (the browser's redirect to localhost:1455 reaches the container through the published port)", login: "codex" },
   {
-    cmd: "fx login --no-browser grok",
-    why: "optional: the grok lane; open the printed address on this Mac, and when the browser ends on a 127.0.0.1:<port>/callback page that cannot load, paste that full address (or the code xAI shows) back into the fx prompt",
+    cmd: "FX_NO_OPEN_BROWSER=1 fx login grok",
+    why: "optional: the grok lane; open the printed URL on this Mac, and when the browser ends on an unreachable 127.0.0.1:<port>/callback?…&code=… page, paste only the code value into fx's prompt",
     login: "grok",
   },
   { cmd: "exit", why: "then on the Mac: relay work container status" },

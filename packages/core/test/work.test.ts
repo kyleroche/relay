@@ -13,7 +13,9 @@ import { localWorkApi, type WorkApi } from "../src/work/api.ts";
 import type { JobResult } from "../src/work/job.ts";
 import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
 import { servicePlan } from "../src/work/service.ts";
+import { fxLoginWords, isLoginProvider, LOGIN_PROVIDERS, loginDonePage, manualLoginSteps, OAUTH_PROVIDERS, parseLoginCallback, parseLoginUrl, replayUrl } from "../src/work/login.ts";
 import {
+  CONTAINER_LOGIN_COMMAND,
   CONTAINER_LOGIN_STEPS,
   CONTAINER_NAME,
   CONTAINER_VOLUME,
@@ -337,6 +339,15 @@ describe("container plan (relay work --isolation container)", () => {
     expect(p.credentials).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "relay-work", "test", "-f", "/home/relay/.harness/credentials.json"]);
     expect(p.create.join(" ")).toContain("--env RELAY_LOGIN_PORTS=3000 1455");
   });
+  it("spells the login commands: fx with its browser off and stdin open, claude and gh on a TTY, the redirect replay with curl inside", () => {
+    const p = containerPlan(spec);
+    expect(p.login.fx("grok")).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-i", "relay-work", "env", "FX_NO_OPEN_BROWSER=1", "fx", "login", "grok"]);
+    expect(p.login.fx("codex").slice(-2)).toEqual(["login", "codex"]);
+    expect(p.login.claude).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-it", "relay-work", "claude"]);
+    expect(p.login.gh).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "-it", "relay-work", "gh", "auth", "login", "--git-protocol", "https", "--web"]);
+    expect(p.login.ghSetupGit).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "relay-work", "gh", "auth", "setup-git"]);
+    expect(p.login.replay("http://localhost:1455/auth/callback?code=c&state=s")).toEqual(["/usr/local/bin/container", "exec", "--user", "relay", "relay-work", "curl", "-fsS", "-o", "/dev/null", "http://localhost:1455/auth/callback?code=c&state=s"]);
+  });
 
   const DOCTOR_INSIDE = [
     "ok    node          v24.11.0",
@@ -378,7 +389,7 @@ describe("container plan (relay work --isolation container)", () => {
       ["claude", true],
       ["gh auth login && gh auth setup-git", false],
       ["fx login codex", true],
-      ["fx login --no-browser grok", false],
+      ["FX_NO_OPEN_BROWSER=1 fx login grok", false],
       ["exit", undefined],
     ]);
     const all = containerLoginSteps(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in"));
@@ -703,5 +714,42 @@ describe("runWorker loop: doorbell and backoff", () => {
     const once = await runWorker({ api: g.api, name: "fake", host: "fake.local", lanes: ["claude"], version: "0.1.0", once: true });
     expect(once.ran).toBe(0);
     expect(g.calls.map((c) => c.what)).toEqual(["register", "claim", "heartbeat:offline"]);
+  });
+});
+
+describe("container login helpers (relay work container login)", () => {
+  const GROK_URL = "https://auth.x.ai/oauth2/authorize?response_type=code&client_id=fx&redirect_uri=http%3A%2F%2F127.0.0.1%3A42723%2Fcallback&scope=openid&state=st4te&code_challenge=abc";
+  const CODEX_URL = "https://auth.openai.com/oauth/authorize?response_type=code&client_id=app&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&state=xyz";
+  it("finds fx's authorize URL in its output and reads the loopback redirect it registered", () => {
+    const grok = parseLoginUrl(`Open this URL in your browser to sign in:\n\n  ${GROK_URL}\n\nPaste the code shown by xAI and press enter: `);
+    expect(grok).toEqual({ url: GROK_URL, redirectUri: "http://127.0.0.1:42723/callback", host: "127.0.0.1", port: 42723, path: "/callback", state: "st4te" });
+    const codex = parseLoginUrl(`Sign in at ${CODEX_URL}.`);
+    expect(codex).toMatchObject({ url: CODEX_URL, host: "localhost", port: 1455, path: "/auth/callback", state: "xyz" });
+    // a URL without a redirect, a redirect to another host, or a cut chunk: not yet
+    expect(parseLoginUrl("see https://docs.x.ai/login for help")).toBeUndefined();
+    expect(parseLoginUrl("https://auth.example/authorize?redirect_uri=https%3A%2F%2Fexample.com%2Fcb")).toBeUndefined();
+    expect(parseLoginUrl(GROK_URL.slice(0, 60))).toBeUndefined();
+    expect(parseLoginUrl("")).toBeUndefined();
+  });
+  it("reads the code, state and errors from the browser's redirect, and replays it to the listener inside", () => {
+    expect(parseLoginCallback("/callback?state=st4te&code=abc.def-123")).toEqual({ code: "abc.def-123", state: "st4te" });
+    expect(parseLoginCallback("/auth/callback?error=access_denied&error_description=The+user+denied")).toEqual({ error: "access_denied", errorDescription: "The user denied" });
+    expect(parseLoginCallback("/callback")).toEqual({});
+    const codex = parseLoginUrl(CODEX_URL)!;
+    expect(replayUrl(codex, "/auth/callback?code=c0de&state=xyz")).toBe("http://localhost:1455/auth/callback?code=c0de&state=xyz");
+  });
+  it("names the providers, their words and the by-hand steps", () => {
+    expect(LOGIN_PROVIDERS).toEqual(["claude", "gh", "codex", "grok"]);
+    expect(OAUTH_PROVIDERS).toEqual(["codex", "grok"]);
+    expect(isLoginProvider("grok")).toBe(true);
+    expect(isLoginProvider("vercel")).toBe(false);
+    expect(fxLoginWords("grok")).toEqual(["env", "FX_NO_OPEN_BROWSER=1", "fx", "login", "grok"]);
+    expect(manualLoginSteps("grok")[1]).toContain("paste only the code value");
+    expect(manualLoginSteps("codex")[1]).toContain("fx login codex");
+    expect(manualLoginSteps("gh")[1]).toContain("gh auth setup-git");
+    expect(manualLoginSteps("claude")[1]).toContain("/login");
+    expect(loginDonePage("grok", true)).toContain("grok: signed in");
+    expect(loginDonePage("grok", false, "access_denied <x>")).toContain("access_denied &lt;x&gt;");
+    expect(CONTAINER_LOGIN_COMMAND).toBe("relay work container login all");
   });
 });
