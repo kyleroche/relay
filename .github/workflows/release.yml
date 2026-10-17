@@ -57,9 +57,13 @@ jobs:
         # person approves the staged version on npmjs.com with 2FA before it goes live. `pnpm pack` rewrites the
         # workspace:* dependencies into real versions inside the tarball; --provenance attaches the SLSA attestation.
         # No token anywhere: the job's OIDC identity is what npm trusts. npm stage needs npm 11.15 or newer.
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           npm install -g npm@latest
           npm --version
           pnpm pack
-          npm stage publish ./kyleroche-relay-*.tgz --provenance --access public
+          # provenance attestations are only accepted from public source repositories; attach one when the repo is public
+          if [ "$(gh api "repos/$GITHUB_REPOSITORY" --jq .private)" = "false" ]; then PROV="--provenance"; else PROV=""; echo "::notice::repository is private: staging without provenance"; fi
+          npm stage publish ./kyleroche-relay-*.tgz $PROV --access public
           echo "::notice::staged @kyleroche/relay $(jq -r .version package.json): approve it at https://www.npmjs.com/package/@kyleroche/relay (Staged packages) or with npm stage approve"
