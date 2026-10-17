@@ -181,8 +181,7 @@ A machine that cannot sandbox does not run the job unsandboxed: `failIfUnavailab
 reported `failed` with a summary saying what to install (`relay doctor` has a `sandbox` line). Linux needs `bubblewrap`
 and `socat` on PATH (`sudo apt install bubblewrap socat`, or `dnf`); macOS needs nothing. `relay work --no-sandbox`
 turns the sandbox off for that worker: it logs a warning and registers the label `sandbox:off`, which the workers page
-shows. A dedicated OS user or an Apple `container` for the worker is the next tier (planned as `relay work --isolation
-container`, not built yet).
+shows. The next tier puts the whole worker in a container: "Isolation" below.
 
 Behind the sandbox, the Claude lane gets an allowlist of named commands and a refusal list (`CODE_TOOLS`,
 `CODE_DISALLOWED_TOOLS` in `packages/core/src/work/job.ts`; `scripts/runner/run-lane.sh` carries the same lists for
@@ -201,15 +200,100 @@ workspace-write`; Grok and fx run under their permission modes with no OS sandbo
 The allowlist is a permission policy, the second layer: it decides which tool calls the CLI accepts, the sandbox
 decides what the accepted commands can reach. `pnpm test` still runs whatever the repository's `package.json` says,
 as the OS user the worker runs as, boxed by the sandbox above. Three things still follow (`docs/SECURITY.md`,
-"Workers"): prefer running `relay work` as a dedicated OS user or in a container that holds the vendor and `gh` logins
-and nothing else (no SSH keys, no sudo, no access to your home directory); turn on branch protection on every linked
+"Workers"): prefer the container tier (`relay work --isolation container`, "Isolation" below) or a dedicated OS user,
+so the worker holds the vendor and `gh` logins and nothing else (no SSH keys, no sudo, no access to your home
+directory); turn on branch protection on every linked
 repository's default branch, since the worker pushes as your `gh` account; and set `RELAY_ALLOWED_SENDERS` so that
 only the logins you name can turn a label into a job on your machine.
+
+## Isolation
+
+What a fooled lane can reach depends on where the worker runs. Three tiers, each a superset of the one before:
+
+| Tier | `relay work …` | What the lane runs in | What it protects | What it cannot protect |
+|---|---|---|---|---|
+| 1. sandbox on the host | `relay work` (default) | your OS user, Claude's Bash inside Claude Code's OS sandbox (Seatbelt / bubblewrap), the tool allowlist | the credential paths, writes outside the clone, hosts off the allowlist | every other file your user can read; Codex, Grok and fx have no OS sandbox; the vendor logins are your daily ones |
+| 2. container | `relay work --isolation container` | one persistent Linux VM (Apple's `container`), as the `relay` user inside, Claude's sandbox nested when the kernel allows it | the Mac's home directory, your logins and SSH keys, every file outside the container; the lane's shell cannot see the host at all | the container's own logins (made for it, inside it); the network, beyond what the nested sandbox allows |
+| 3. VM / separate machine | a Linux box or VM that runs `relay work` and nothing else (`docs/RUNNERS.md` has the dedicated-user recipe) | its own OS | everything on your machine | nothing on that machine, which is why it holds only the logins |
+
+Tier 2 is built in. `relay work --isolation container --install` on a Mac with [Apple's `container`
+CLI](https://github.com/apple/container) (the service running: `container system start`) does, and prints before it
+does anything:
+
+1. **Builds the image** `relay-worker:<version>` from the Dockerfile the package ships (`packages/cli/container/`,
+   `dist/container/` when installed): `node:24-bookworm-slim`, git, curl, bubblewrap, socat, ripgrep, `gh` from
+   GitHub's apt repo, pnpm through corepack, Claude Code, fx (the release tarball, verified against its `.sha256`), and
+   relay itself: the npm package at the host's version, or, from a checkout, that checkout packed with `npm pack` so
+   the container runs the same relay as the host. A non-root user `relay` with home `/home/relay`. The build context
+   is `$RELAY_HOME/container`; about a minute to build (plus the base image's download the first time), 300 MB to
+   fetch and 800 MB unpacked, most of it Claude Code.
+2. **Creates the volume and the container**: `container volume create relay-work-home`, then `container create
+   --name relay-work --volume relay-work-home:/home/relay --masked-path NONE --read-only-path NONE --memory 4G
+   --cpus 4 --env RELAY_HOME=/home/relay/.harness --env RELAY_ISOLATION=container --env
+   RELAY_WORKER_NAME=<host>-container --env RELAY_WORKER_HOST=<host> relay-worker:<version> relay work [--lanes …]`.
+   No bind mount: nothing from the Mac is visible inside. The volume (an ext4 image under `~/Library/Application
+   Support/com.apple.container/volumes`) holds the logins, `~/.harness` with the site token and the clones, and the
+   model's shell. The two `NONE` flags turn off the runtime's default masks over `/proc` and `/sys`; with them on,
+   bubblewrap cannot mount `/proc` in a user namespace and Claude Code's sandbox cannot start inside. The VM is the
+   boundary, so the masks add nothing. `--memory` and `--cpus` (the flags of the same name on `--install`) size the
+   VM: the runtime's own default of 1 GB is too little, PGlite alone reserves about that when it opens and the kernel
+   kills the worker. An existing `relay-work` is replaced (the volume, and so the logins, stay).
+3. **Joins the site from inside**: `container exec --user relay -it relay-work relay setup --site <site>`. The device
+   flow prints its code to your terminal; approve it at `<site>/activate` (`--invite <code>` skips the approval).
+   The token lands in the volume, never on the Mac. Container mode needs a hosted relay: the container cannot see
+   the Mac's local database. `--site` defaults to the site this Mac is in.
+4. **Installs the service** that keeps the container running: the LaunchAgent (or systemd unit) runs
+   `container start --attach relay-work` with KeepAlive, so when the worker inside exits the container is started
+   again. The Mac's `$RELAY_HOME/work.log` gets the container's output; inside, the worker also writes
+   `/home/relay/.harness/work.log`.
+5. **Prints the login sequence**, which is yours to do, in this order:
+
+   ```text
+   relay work container shell                 # a shell inside, as the relay user (container exec -it relay-work bash)
+   claude                                     # then /login: the OAuth paste-code flow (open the URL on the Mac, paste the code back)
+   gh auth login && gh auth setup-git         # the account the worker clones, pushes and opens PRs as
+   fx login codex                             # optional: the codex lane
+   fx login grok                              # optional: the grok lane
+   exit
+   relay work container status                # relay doctor inside, and the lanes the container worker serves
+   ```
+
+Inside, `relay work` knows it is the container worker (`RELAY_ISOLATION=container`): it registers as
+`<hostname>-container` on the Mac's hostname, so the workers page and the flow map show it as a separate machine; it
+adds the label `isolation:container`; and instead of exiting on "no lanes" it waits, re-probing the site token and the
+logins every 30 seconds, so `container exec` can always reach it. On start it probes bubblewrap (the smallest invocation
+Claude Code's sandbox needs). When it starts, the Claude lane's Bash runs inside Claude Code's sandbox nested in the
+VM, with the same allowlist and denied paths as on a host, and the worker advertises `sandbox:on`. When it cannot
+(a `container` version that ignores the two flags, another runtime), the lane runs with the tool allowlist alone and
+the container is the boundary; the worker says so with the label `sandbox:container`, never `sandbox:off`, which means
+a bare host. Verified on `container` 1.5.0: with the flags, Anthropic's sandbox runtime starts bubblewrap as the
+`relay` user, puts the command in its own pid namespace, denies writes outside the clone and answers 403 for a host off
+the allowlist; without them bubblewrap fails with "Can't mount proc".
+
+Day to day:
+
+```text
+relay work container status      # relay-work running?, then relay doctor inside, and the lanes it would serve
+relay work container shell       # exec into it as the relay user (logins, a look at a clone kept with --keep)
+relay work container logs -f     # the worker's output (container logs)
+relay work container stop        # stop it and unload the service that would restart it
+relay work container start       # the service when installed, else `container start`
+relay work container rm --yes    # remove the container; --volume also deletes the volume, that is, every login inside
+relay work --isolation container --uninstall --yes   # service and container gone; the volume stays
+relay doctor                     # on the Mac: a `container` line (CLI, services, relay-work, the lanes inside)
+```
+
+Rebuilding after a relay upgrade is `relay work --isolation container --install --yes` again: new image, the same
+volume, the same logins. The host and the container worker use the same service label, so one Mac runs one or the
+other, not both. Credentials never leave the machine: the logins exist only in the volume, created on this Mac, and
+`relay work container rm --volume` is how they are destroyed.
 
 ## Run it as a service
 
 `relay work --install` prints the file it would write and the commands it would run; `--yes` does it. Options you
-pass (`--lanes`, `--labels`, `--jobs`, `--name`, `--max-interval`) are baked into the service.
+pass (`--lanes`, `--labels`, `--jobs`, `--name`, `--max-interval`) are baked into the service. With
+`--isolation container` the same command installs the container tier instead ("Isolation" above): the service then
+runs `container start --attach relay-work` and the options are baked into the container's command.
 
 - **macOS**: `~/Library/LaunchAgents/house.kyro.relay.work.plist`, loaded with `launchctl bootstrap gui/<uid>`.
   A LaunchAgent runs in your user session, which is where the vendor CLIs keep their keychain logins (a LaunchDaemon
@@ -249,4 +333,12 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
   bakes it into the service when it is set at install time).
 - The service does not start on macOS: `launchctl print gui/$(id -u)/house.kyro.relay.work` shows the last exit
   status; `tail -f ~/.harness/work.log` the reason (usually a login or a PATH without the CLIs).
+- Container mode: `relay work container status` says `waiting: no site yet` or `no lanes yet`; the worker inside is
+  up and waits for `relay setup --site` or the logins (`relay work container shell`). The service's log on the Mac
+  says `attach is currently unsupported on already running containers` when something else started the container;
+  `relay work container stop` then `relay work container start` hands it back to the service. After a reboot the
+  first attempt can fail while `container`'s own services are still starting; KeepAlive retries 30 seconds later.
+  The volume is private to the container runtime; a `container system stop` takes the worker down with it. `relay doctor` inside
+  warns `bubblewrap cannot start` when the container was created without `--masked-path NONE --read-only-path NONE`
+  (an older relay); recreate it with `--install --yes`.
 - Codex logins go stale when unused; a weekly `relay probe codex:<model>` keeps the refresh token warm.

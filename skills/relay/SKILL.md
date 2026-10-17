@@ -41,7 +41,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    npx @kyleroche/relay work status             # the service, the site's workers, the log tail
    ```
 
-   Run `--install --yes` when the user asked to make this machine a worker or to set relay up here; ask first only if they did not. Then report the lanes the worker now serves (from `relay work status` or the `lanes` line of `doctor`), and that tasks labelled with those lanes will be claimed by this machine. Force a subset with `--lanes claude,codex`; advertise capabilities with `--labels gpu`.
+   Run `--install --yes` when the user asked to make this machine a worker or to set relay up here; ask first only if they did not. Then report the lanes the worker now serves (from `relay work status` or the `lanes` line of `doctor`), and that tasks labelled with those lanes will be claimed by this machine. Force a subset with `--lanes claude,codex`; advertise capabilities with `--labels gpu`. On a Mac with Apple's `container` CLI (`doctor` shows a `container` line), `npx @kyleroche/relay work --isolation container --install --yes` runs the whole worker in a Linux container instead, with the logins made inside it (`relay work container shell`, then `claude`, `gh auth login && gh auth setup-git`, `fx login codex|grok`; `relay work container status` shows its lanes); the Mac's home is never mounted into it.
 
 4. Install hooks and the memory MCP server into each detected CLI's config (optional but recommended):
 
