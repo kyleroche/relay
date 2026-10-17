@@ -56,6 +56,7 @@ function fakeGitHub(opts: { refuseMerge?: string; prState?: string; merged?: boo
       return { number: 1, title: input.title, body: input.body, state: "open", html_url: `https://github.com/${repo}/issues/1`, labels: input.labels ?? [] };
     },
     async addLabels() {},
+    async removeLabel() {},
     async getIssue(repo, issue): Promise<GitHubIssue> {
       return { number: issue, title: "t", body: "", state: "open", html_url: `https://github.com/${repo}/issues/${issue}`, labels: [] };
     },

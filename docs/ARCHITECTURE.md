@@ -64,6 +64,11 @@ the worker lanes for people who already operate them.
    again, the next run reads the note under "Review feedback" in its brief and pushes to the same branch and PR. A bot
    may decide only with `tasks:write` and never on a PR its own lane produced. On merge, a job extracts decisions into
    memory and regenerates the rules file.
+   At any point before `done`, a requeue (the task page, `relay_task_requeue`, `POST …/requeue`, `relay task requeue`)
+   puts the task back in the queue, optionally on another lane: relay moves the `agent:*` label on the issue (best
+   effort), releases a live claim, writes `task.requeued` (`queued`) and rings the doorbell; the next run starts over
+   from the base branch and reuses an open PR. That is how a task opened on a cloud lane nobody wired, or one whose
+   worker vanished, gets to a machine without waiting for a GitHub webhook that may never arrive.
 7. Every step above is a row in the feed.
 
 ## What relay deliberately does not do

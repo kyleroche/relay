@@ -162,12 +162,13 @@ export async function expireLeases(db: Db, now: number = Date.now()): Promise<Cl
 }
 
 /** State-changing kinds the doorbell looks at; the latest one per task decides whether it still looks queued. */
-const QUEUE_KINDS = ["issue.labeled", "run.started", "run.dispatched", "run.failed", "run.finished", "pr.opened", "pr.merged", "pr.closed", "issue.closed", "task.approved", "task.changes_requested"];
+const QUEUE_KINDS = ["issue.labeled", "run.started", "run.dispatched", "run.failed", "run.finished", "pr.opened", "pr.merged", "pr.closed", "issue.closed", "task.approved", "task.changes_requested", "task.requeued"];
 
 /**
  * How many tasks look claimable right now, in one query: a worker lane (optionally only `lanes`), no live lease, and
  * the latest state-changing event is none, `issue.labeled`, `pr.closed`, `task.changes_requested` (a reviewer sent
- * the PR back), or a `run.started` whose lease has since ended (the worker vanished). It is the quick estimate the doorbell returns, not the fold `claimNext` runs: labels a
+ * the PR back), `task.requeued` (an operator put it back), or a `run.started` whose lease has since ended (the worker
+ * vanished). It is the quick estimate the doorbell returns, not the fold `claimNext` runs: labels a
  * task requires are not checked here, so a worker may see `queued > 0` and still get `claim: null`.
  */
 export async function queuedCount(db: Db, opts: { lanes?: string[]; now?: number } = {}): Promise<number> {
@@ -180,7 +181,7 @@ export async function queuedCount(db: Db, opts: { lanes?: string[]; now?: number
      LEFT JOIN LATERAL (SELECT e.kind FROM events e WHERE e.repo = t.repo AND e.issue = t.issue AND e.kind = ANY($2::text[]) ORDER BY e.ts DESC, e.id DESC LIMIT 1) le ON true
      WHERE t.lane IS NOT NULL ${laneFilter}
        AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.task_id = t.id AND c.released_at IS NULL AND c.lease_until > $1::timestamptz)
-       AND (le.kind IS NULL OR le.kind IN ('issue.labeled', 'pr.closed', 'task.changes_requested')
+       AND (le.kind IS NULL OR le.kind IN ('issue.labeled', 'pr.closed', 'task.changes_requested', 'task.requeued')
             OR (le.kind = 'run.started' AND EXISTS (SELECT 1 FROM claims c WHERE c.task_id = t.id)))`,
     params,
   );

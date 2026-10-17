@@ -246,6 +246,10 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
       const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/request-changes`, { note });
       return r.body;
     },
+    async requeueTask(id, o = {}) {
+      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/requeue`, { ...(o.lane ? { lane: o.lane } : {}), ...(o.reason ? { reason: o.reason } : {}) });
+      return r.body;
+    },
 
     async addWebhook(input) {
       const r = await rest<{ webhook: PublicWebhook; secret: string }>("POST", "/webhooks", input);

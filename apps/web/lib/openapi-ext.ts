@@ -192,6 +192,44 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         },
       },
     },
+    "/tasks/{owner}/{repo}%23{issue}/requeue": {
+      post: {
+        operationId: "requeueTask",
+        tags: ["tasks"],
+        summary: "Put a task back in the queue, optionally on another lane",
+        description:
+          "For a task that is stuck (`running` on a cloud lane nobody wired, a run that never reported) or on the wrong lane. With `lane`, relay updates the task's lane and moves the `agent:*` label on the GitHub issue (best effort: a GitHub failure is recorded in the event payload, not fatal). A live worker claim is released. Relay writes `task.requeued`, which folds to `queued`, and rings the workers' doorbell; the next idle worker that serves the lane claims it and starts over from the base branch. Allowed from every state except `done`. A signed-in person may requeue anything; a bot's token must hold `tasks:write`.",
+        security: [{ bearer: ["tasks:write"] }],
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" } },
+          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  lane: { type: "string", enum: TASK_LANES, description: "The lane to move the task to; omitted keeps its lane. claude, codex and grok run on the user's own workers; the cloud lanes dispatch nothing until the operator wires them." },
+                  reason: { type: "string", maxLength: 2000, description: "Why, for the feed row." },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": response("Requeued; the updated task (state queued).", "#/components/schemas/Task"),
+          "400": problemResponse("Bad task id, unknown lane or a reason over 2000 characters."),
+          "403": problemResponse("A token without tasks:write."),
+          "404": problemResponse("No such task."),
+          "409": problemResponse("The task is done (merged or closed)."),
+          "501": notImplemented,
+          ...commonErrors,
+        },
+      },
+    },
     "/events": {
       post: {
         operationId: "logEvent",
@@ -551,7 +589,7 @@ export const integrationSchemas: Record<string, unknown> = {
       idempotency_key: nullable("string"),
       created_by: { type: "string" },
       created_at: { type: "string", format: "date-time" },
-      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, run.started → running, pr.opened or a finished run → review, task.changes_requested → queued, task.approved, pr.merged or issue.closed → done, run.failed or a failed run → failed." },
+      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, run.started → running, pr.opened or a finished run → review, task.changes_requested or task.requeued → queued, task.approved, pr.merged or issue.closed → done, run.failed or a failed run → failed." },
       runner: nullable("string", { description: "runner:<name> that last claimed it." }),
       lane: nullable("string"),
       pr: nullable("integer"),

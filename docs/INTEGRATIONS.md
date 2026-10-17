@@ -156,7 +156,7 @@ When the app is installed on a repository, relay writes `project.github_connecte
 
 | Scope | Lets the bot |
 |---|---|
-| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`); approve or send back a task in review (`relay_task_approve`, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/approve`, `…/request-changes`), never a PR the bot's own lane produced |
+| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`); approve or send back a task in review (`relay_task_approve`, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/approve`, `…/request-changes`), never a PR the bot's own lane produced; requeue a task from any state but done, optionally on another lane (`relay_task_requeue`, `…/requeue`) |
 | `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`): state, PR, preview URL, run summary, usage, review decision |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
 | `webhooks:write` | subscribe itself to events (`relay_webhook_subscribe`, `POST /api/v1/webhooks`) |
@@ -184,6 +184,7 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 | `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&limit=` | `tasks:read` | tasks newest first; `state: "review"` is what waits for a decision |
 | `relay_task_approve(id)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/approve` | `tasks:write` | approve a task in review: relay squash-merges the PR through GitHub, deletes its branch and writes `task.approved`; the task is `done`. A bot may not approve a PR its own lane produced (the `run.started` / `pr.opened` actor carries its name); GitHub's refusal comes back as an error with `task.merge_failed` in the feed |
 | `relay_task_request_changes(id, note)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/request-changes` | `tasks:write` | send it back: relay posts `relay: changes requested by <actor>:` + the note on the PR, writes `task.changes_requested`, and the task is `queued`; the next run gets the note under "Review feedback" in its brief and pushes to the same branch and PR |
+| `relay_task_requeue(id, lane?, reason?)` | `POST /api/v1/tasks/<owner>/<repo>%23<n>/requeue` | `tasks:write` | put a task back in the queue from any state but `done`, optionally on another lane: relay updates the task's lane and moves the issue's `agent:*` label (best effort; a GitHub failure is in the event payload), releases a live worker claim, writes `task.requeued` and rings the doorbell; the next worker that serves the lane claims it and starts over from the base branch (an open PR is reused). For a task stuck `running` (a cloud lane nobody wired, a run that never reported) or on the wrong lane |
 | `relay_event_log(kind, project?, summary, url?, cost_equiv?, source?)` | `POST /api/v1/events` | `events:write` | one `external.*` row in the feed, actor `bot:<token name>` |
 | `relay_webhook_subscribe(url, events[], bearer?, project?)` | `POST /api/v1/webhooks` | `webhooks:write` | register an outbound webhook; the signing secret is returned once |
 | `relay_webhook_unsubscribe(id)` | `DELETE /api/v1/webhooks/{id}` | `webhooks:write` | remove it |
@@ -214,6 +215,7 @@ State is never stored. Every read folds the task's feed events (same repo and is
 | `task.approved` (relay merged the PR), `pr.merged` or `issue.closed` | `done` (`merged_at` set) |
 | `task.changes_requested` | `queued` (`review.note` holds what to change; the next run reuses the branch and PR) |
 | `task.merge_failed` | unchanged: still `review`, with GitHub's reason in the row |
+| `task.requeued` | `queued` (on `lane` from the row; the claim, if any, was released; the next run starts over and reuses an open PR) |
 | `pr.closed` without merge | `queued` |
 | the lease behind a `run.started` expired with no finish (the worker vanished) | `queued` |
 
@@ -238,6 +240,26 @@ lane produced: the `run.started` / `pr.opened` actor's name is compared with the
 cannot approve what `runner:codex-bot` pushed. The refusal names who can ("a signed-in person, or a bot whose token
 holds tasks:write and that did not produce the PR itself"). The pattern for a chat bot is: relay the preview, ask the
 person, and call approve only after they said yes.
+
+### A task on the wrong lane or stuck: requeue
+
+A task can look `running` with nothing happening: it was opened on a cloud lane (`claude-cloud`, `codex-cloud`) that
+the operator has not wired, so `run.dispatched` is the last word relay will ever hear; or a worker started it and died
+without reporting; or the GitHub webhook that would re-queue a relabelled issue never arrived. Relabelling on GitHub
+alone fixes none of that when deliveries are not reaching the site. `requeueTask` (`packages/core/src/tasks/requeue.ts`)
+does it from relay's side, from the task page ("Requeue" in the Decide card, with a lane select and an optional
+reason), `relay_task_requeue({id, lane?, reason?})` over MCP, `POST /api/v1/tasks/<owner>/<repo>%23<n>/requeue` with
+`{"lane"?, "reason"?}`, or `relay task requeue <id> [--lane <lane>] [--reason <text>]`.
+
+What it does, in order: refuses a `done` task (409) and a bot without `tasks:write` (403); when `lane` differs from the
+task's, updates `tasks.lane` and moves the `agent:*` label on the issue (every other `agent:*` label off,
+`agent:<lane>` on), best effort: a GitHub failure or a missing credential is recorded in the event payload
+(`github.error`) and the task is queued anyway, because the scheduler matches on relay's row, not the label; releases a
+live claim (`outcome: released`) so a worker can claim again; writes `task.requeued` with the previous state and lane and
+the reason; bumps the queue version so idle workers' doorbells ring. The task is `queued`; the next worker that serves
+the lane claims it, clones fresh from the base branch, replaces `relay/<lane>-<issue>` and reuses the open PR if there
+is one. Requeuing onto a cloud lane dispatches nothing until that lane is wired, so the worker lanes are the ones to
+pick: `relay_task_requeue({id: "acme/site#42", lane: "claude", reason: "the cloud lane is not wired"})`.
 
 ## 4. The webhook
 

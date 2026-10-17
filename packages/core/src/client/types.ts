@@ -16,6 +16,12 @@ import type { BriefIssue } from "../brief/index.ts";
 
 export type ClientMode = "local" | "site";
 
+/** `relay task requeue`, `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue`: the lane to move to and why. */
+export interface RequeueTaskInput {
+  lane?: string | null;
+  reason?: string | null;
+}
+
 /** `relay_event_log` / `POST /api/v1/events`: an external bot's note in the feed. Kind must start with `external.`. */
 export interface ExternalEventInput {
   kind: string;
@@ -203,6 +209,8 @@ export interface RelayClient {
   approveTask(id: string): Promise<TaskView>;
   /** Send a task's PR back with a note: a PR comment plus task.changes_requested; the task is queued again. */
   requestChanges(id: string, note: string): Promise<TaskView>;
+  /** Put a task back in the queue, optionally on another lane (the agent:* label moves with it); any state but done (tasks/requeue.ts). */
+  requeueTask(id: string, opts?: RequeueTaskInput): Promise<TaskView>;
 
   // invites (approval without a browser)
   createInvite(input: InviteInput): Promise<{ code: string; invite: InviteRow }>;

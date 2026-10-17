@@ -1,5 +1,5 @@
 /**
- * The small GitHub surface relay needs to open tasks: create an issue, add labels, read an issue, and a `request`
+ * The small GitHub surface relay needs to open tasks: create an issue, add and remove labels, read an issue, and a `request`
  * escape hatch for comments and state changes. Three ways in, all using a credential that already lives where the
  * code runs: a GitHub App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`, installation tokens minted per repository in
  * github/app.ts), a token from the environment (`GITHUB_APP_TOKEN` or `GITHUB_TOKEN`), or the `gh` CLI's own login
@@ -54,6 +54,8 @@ export interface GitHubClient {
   readonly source: "app" | "token" | "gh";
   createIssue(repo: string, input: { title: string; body: string; labels?: string[] }): Promise<GitHubIssue>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
+  /** Remove one label from an issue; a label the issue does not carry is not an error (re-laning a task). */
+  removeLabel(repo: string, issue: number, label: string): Promise<void>;
   getIssue(repo: string, issue: number): Promise<GitHubIssue>;
   /** Any REST call under /repos/{owner}/{repo}/… (comments, reopening an issue). Throws GitHubError on non-2xx. */
   request(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
@@ -94,6 +96,18 @@ const mergeBody = (o: MergeOptions): Record<string, unknown> => ({
   ...(o.message ? { commit_message: o.message } : {}),
   ...(o.sha ? { sha: o.sha } : {}),
 });
+
+/** Shared by the token and gh clients: `removeLabel` over a raw `call` (GitHub answers 404 when the issue lacks the label). */
+async function removeLabelWith(call: (method: string, path: string, body?: unknown) => Promise<Record<string, unknown>>, repo: string, issue: number, label: string): Promise<void> {
+  assertRepo(repo);
+  if (!label.trim()) return;
+  try {
+    await call("DELETE", `/repos/${repo}/issues/${issue}/labels/${encodeURIComponent(label)}`);
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 404) return; // not on the issue (any more)
+    throw e;
+  }
+}
 
 /** Shared by the token and gh clients: the three pull-request calls over a raw `call(method, path, body)`. */
 function pullOps(call: (method: string, path: string, body?: unknown) => Promise<Record<string, unknown>>): Pick<GitHubClient, "getPullRequest" | "mergePullRequest" | "deleteBranch"> {
@@ -163,6 +177,7 @@ export function githubFromToken(token: string, fetchImpl: GitHubFetch = (u, i) =
       if (!labels.length) return;
       await call("POST", `/repos/${repo}/issues/${issue}/labels`, { labels });
     },
+    removeLabel: (repo, issue, label) => removeLabelWith(call, repo, issue, label),
     async getIssue(repo, issue) {
       assertRepo(repo);
       return toIssue(await call("GET", `/repos/${repo}/issues/${issue}`));
@@ -231,6 +246,7 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
       if (!labels.length) return;
       await api("POST", `/repos/${repo}/issues/${issue}/labels`, { labels });
     },
+    removeLabel: (repo, issue, label) => removeLabelWith(api, repo, issue, label),
     async getIssue(repo, issue) {
       assertRepo(repo);
       return toIssue(await api("GET", `/repos/${repo}/issues/${issue}`));

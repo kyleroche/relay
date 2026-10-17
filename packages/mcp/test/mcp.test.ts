@@ -68,6 +68,7 @@ describe("relay mcp tools", () => {
       "relay_task_get",
       "relay_task_list",
       "relay_task_request_changes",
+      "relay_task_requeue",
       "relay_webhook_subscribe",
       "relay_webhook_unsubscribe",
       "relay_whoami",
@@ -239,6 +240,7 @@ describe("relay mcp tools", () => {
       source: "token" as const,
       createIssue: async () => ({ number: 1, title: "", body: "", state: "open", html_url: "", labels: [] }),
       addLabels: async () => {},
+      removeLabel: async () => {},
       getIssue: async () => ({ number: 77, title: "t", body: "", state: "open", html_url: "", labels: [] }),
       request: async () => ({}),
       createComment: async (_r: string, n: number, body: string) => (comments.push(body), { id: 1, html_url: `https://github.com/acme/demo/pull/${n}#issuecomment-1` }),
@@ -287,6 +289,60 @@ describe("relay mcp tools", () => {
     expect(merged).toEqual([9]);
     expect(events.map((e) => e.kind)).toEqual(["task.changes_requested", "task.approved"]);
     expect(events[1]?.actor).toBe("bot:oauth:grok-bot");
+    await grok.client.close();
+    await grok.server.close();
+  });
+
+  it("requeues a task stuck on a cloud lane onto a worker lane, moving the label; done and tasks:read callers are refused", async () => {
+    // opened by a bot on claude-cloud and dispatched: it looks running, but nothing will ever happen
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 78, createdBy: "bot:grok", lane: "claude-cloud" });
+    const base = { project: "demo", repo: "acme/demo", issue: 78, lane: "claude-cloud" };
+    await repo.writeEvent(db, { ...base, kind: "run.dispatched", actor: "bot:grok", summary: "Dispatched #78 to the claude-cloud lane", ts: "2026-10-16T11:00:00.000Z" });
+    const removed: string[] = [];
+    const added: string[] = [];
+    const github = {
+      source: "token" as const,
+      createIssue: async () => ({ number: 1, title: "", body: "", state: "open", html_url: "", labels: [] }),
+      addLabels: async (_r: string, _n: number, labels: string[]) => void added.push(...labels),
+      removeLabel: async (_r: string, _n: number, label: string) => void removed.push(label),
+      getIssue: async () => ({ number: 78, title: "t", body: "", state: "open", html_url: "", labels: ["agent:claude-cloud", "priority:high"] }),
+      request: async () => ({}),
+      createComment: async () => ({ id: 1, html_url: "" }),
+      getPullRequest: async () => {
+        throw new Error("unused");
+      },
+      mergePullRequest: async () => {
+        throw new Error("unused");
+      },
+      deleteBranch: async () => {},
+    };
+    const events: repo.EventRow[] = [];
+
+    const reader = await connect({ canWrite: false, scopes: ["tasks:read"] });
+    expect(jsonOf<{ state: string }>(await reader.client.callTool({ name: "relay_task_get", arguments: { task_id: "acme/demo#78" } })).state).toBe("running");
+    const refused = await reader.client.callTool({ name: "relay_task_requeue", arguments: { id: "acme/demo#78", lane: "claude" } });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/tasks:write/);
+    await reader.client.close();
+    await reader.server.close();
+
+    const grok = await connect({ canWrite: false, scopes: ["tasks:write", "tasks:read"], actor: "token:oauth:grok-bot", github, afterEvent: (row) => void events.push(row) });
+    const r = jsonOf<{ task_id: string; state: string; lane: string; github: { relabelled: boolean }; next: string }>(await grok.client.callTool({ name: "relay_task_requeue", arguments: { id: "acme/demo#78", lane: "claude", reason: "cloud lane not wired" } }));
+    expect(r).toMatchObject({ task_id: "acme/demo#78", state: "queued", lane: "claude", github: { relabelled: true } });
+    expect(r.next).toContain("worker");
+    expect(removed).toEqual(["agent:claude-cloud"]);
+    expect(added).toEqual(["agent:claude"]);
+    expect(events.map((e) => e.kind)).toEqual(["task.requeued"]);
+    expect(events[0]?.actor).toBe("bot:oauth:grok-bot");
+    expect(events[0]?.payload).toMatchObject({ previous_state: "running", previous_lane: "claude-cloud", lane: "claude", reason: "cloud lane not wired" });
+    expect((await repo.getTask(db, "acme/demo#78"))?.lane).toBe("claude");
+    // the worker's doorbell now counts it
+    expect((await repo.doorbell(db, { lanes: ["claude"] })).queued).toBeGreaterThanOrEqual(1);
+    // a done task is not requeued
+    await repo.writeEvent(db, { ...base, lane: "claude", kind: "issue.closed", actor: "human:kyle", summary: "closed" });
+    const done = await grok.client.callTool({ name: "relay_task_requeue", arguments: { id: "acme/demo#78" } });
+    expect(done.isError).toBe(true);
+    expect(textOf(done)).toMatch(/done/);
     await grok.client.close();
     await grok.server.close();
   });

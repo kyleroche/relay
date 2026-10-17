@@ -190,6 +190,7 @@ export function previewMatches(task: Pick<TaskRow, "issue">, e: EventRow, prs: R
  *   task.changes_requested -> queued (the next run addresses the note; docs/ARCHITECTURE.md "A task's life")
  *   task.approved -> done when relay merged the PR itself (payload.merged); pr.merged from GitHub confirms it
  *   task.merge_failed -> stays in review (GitHub refused the merge; the payload says why)
+ *   task.requeued -> queued (an operator put it back, perhaps on another lane; tasks/requeue.ts)
  * A task with no events yet is queued (relay opened the issue with its lane label).
  *
  * Claims (docs/WORKERS.md) add one step. A live lease on a queued task makes it `claimed`. A lease that ended
@@ -304,6 +305,11 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
         break;
       case "task.merge_failed":
         // GitHub refused the merge; the task stays where it was (review) and the payload says why
+        break;
+      case "task.requeued":
+        // an operator put the task back in the queue (and perhaps on another lane); the next claim starts over
+        state = "queued";
+        lastEnd = e.ts; // a run that was in flight is over as far as relay is concerned
         break;
       default:
         break;

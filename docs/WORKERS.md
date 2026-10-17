@@ -145,6 +145,19 @@ The worker is done when `release` is reported; the rest is the review step (`pac
 A bot may decide only when its token holds `tasks:write`, and never on a PR its own lane produced; a merge GitHub
 refuses (conflicts, required checks) is `task.merge_failed` with GitHub's reason, and the task stays in review.
 
+### Requeue: back to the queue, perhaps on another lane
+
+A task that is stuck, on the wrong lane, or simply wanted again goes back to the queue with a requeue ("Requeue" on
+the task page, `relay task requeue <id> [--lane <lane>] [--reason <text>]`, `relay_task_requeue`,
+`POST /api/v1/tasks/{id}/requeue`; `packages/core/src/tasks/requeue.ts`). It works from every state but `done`. With a
+lane, relay updates the task's lane and moves the issue's `agent:*` label (best effort; the scheduler matches on relay's
+row, so a label that did not move is recorded, not fatal). A live claim is released with `outcome: released`, so the
+worker that held it stops counting; `task.requeued` is written and folds to `queued`; the queue version moves, so the
+doorbell rings and `queuedCount` counts the task again. The next worker that serves the lane claims it and runs the
+same job from the base branch, replacing the branch with `--force-with-lease` and reusing an open PR. The case it
+exists for is a task opened on a cloud lane nobody wired: `run.dispatched` makes it `running` for ever, and a requeue
+onto `claude`, `codex` or `grok` hands it to a machine.
+
 ### What a job may run
 
 The Claude lane's Bash, and every process it starts (git, pnpm, the repository's own scripts), runs inside Claude

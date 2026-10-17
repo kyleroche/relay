@@ -22,11 +22,12 @@ export const EVENT_KINDS = {
   "run.failed": { group: "run", source: "runner", label: "Run failed", description: "The lane exited with an error, made no changes, or timed out." },
   "run.dispatched": { group: "run", source: "web", label: "Dispatched to cloud", description: "The site handed a cloud-lane task to the vendor's hosted tier with a mention comment." },
   "step.usage": { group: "usage", source: "lane", label: "Model call", description: "One headless CLI call with tokens, cache and cost equivalent. The ledger is a view over these." },
-  // Tasks (packages/core/src/tasks: create.ts, review.ts)
+  // Tasks (packages/core/src/tasks: create.ts, review.ts, requeue.ts)
   "task.created": { group: "task", source: "api", label: "Task opened", description: "relay opened the issue itself (relay_task_create, POST /api/v1/tasks, relay task create); payload has the task id, lane and priority." },
   "task.approved": { group: "pr", source: "web", label: "Approved and merged", description: "A reviewer approved the task: relay squash-merged the PR and deleted its branch; payload has the merge sha. The task is done." },
   "task.changes_requested": { group: "pr", source: "web", label: "Changes requested", description: "A reviewer sent the PR back with a note (also posted on the PR); the task is queued again and the next run's brief carries the note." },
   "task.merge_failed": { group: "pr", source: "web", label: "Merge refused", description: "GitHub refused the merge an approval asked for (conflicts, checks, permissions); payload.error has its message. The task stays in review." },
+  "task.requeued": { group: "task", source: "web", label: "Requeued", description: "An operator put the task back in the queue, perhaps on another lane (payload.lane, previous_lane, previous_state, reason); a live claim was released and the issue's agent:* label moved. The task is queued again." },
   // GitHub webhook: pull requests, reviews, CI
   "pr.opened": { group: "pr", source: "github", label: "PR opened", description: "The runner pushed a branch and opened the result." },
   "pr.review": { group: "pr", source: "github", label: "Review", description: "A review was submitted (approved, changes requested or commented)." },

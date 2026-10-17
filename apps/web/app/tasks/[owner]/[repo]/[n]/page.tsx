@@ -2,9 +2,10 @@ import type { Metadata } from "next";
 import { ArrowUpRight, Globe, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { parseTaskId, repo as core, type TaskView } from "@relay/core";
+import { CLOUD_LANES, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
 type EventRow = core.EventRow;
 import { EventRow as FeedRow } from "@/components/feed/event-row";
+import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { dataMode } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
@@ -42,11 +43,14 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: l ? `${l.task.id}: ${l.title}` : "Task not found", robots: { index: false } };
 }
 
-const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
+const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
+/** States a task can be requeued from on this page: anything in flight or stuck. A queued task is already queued; a done one is finished. */
+const REQUEUE_STATES = new Set(["running", "failed", "review", "claimed"]);
 
 /**
  * One task, top to bottom: the issue (title, id, lane, state, worker), the preview as the primary element when there
- * is one, the decision buttons while the task is in review, the PR, the run's summary and cost, the review history and
+ * is one, the decision buttons while the task is in review (and Requeue whenever the task is in flight or stuck), the
+ * PR, the run's summary and cost, the review history and
  * every feed row about the task. Everything of record is on GitHub; this page reads the feed and acts through the
  * same core functions the API and the MCP tools use.
  */
@@ -59,6 +63,7 @@ export default async function TaskPage({ params }: Props) {
   const now = Date.now();
   const history = events.filter((e) => REVIEW_KINDS.has(e.kind)).slice(-12).reverse();
   const inReview = t.state === "review";
+  const canRequeue = REQUEUE_STATES.has(t.state);
   const mergeFailed = inReview ? [...events].reverse().find((e) => e.kind === "task.merge_failed") : undefined;
   const lastDecisionAt = t.review.at ?? "";
   const showMergeFailure = mergeFailed && mergeFailed.ts >= lastDecisionAt;
@@ -122,13 +127,19 @@ export default async function TaskPage({ params }: Props) {
           )
         )}
 
-        {inReview && (
+        {(inReview || canRequeue) && (
           <section aria-labelledby="decide-h" className="rounded-lg border bg-card p-4">
             <h2 id="decide-h" className="text-xs font-medium text-muted-foreground">
               Decide
             </h2>
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
-              Approve squash-merges {t.pr ? `PR #${t.pr}` : "the pull request"} and deletes its branch. Request changes posts your note on the PR and queues the task again; the next run gets the note in its brief.
+              {inReview
+                ? `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"} and deletes its branch. Request changes posts your note on the PR and queues the task again; the next run gets the note in its brief. Requeue starts the task over, on this lane or another.`
+                : t.lane?.endsWith("-cloud")
+                  ? `A cloud lane holds this task; relay only hears back when its PR opens. If that lane is not wired, requeue it on a worker lane (claude, codex or grok) and a machine running relay work picks it up.`
+                  : t.state === "failed"
+                    ? "The run failed. Requeue puts the task back for the next worker, on this lane or another; the run starts over from the base branch."
+                    : "A worker has this task. Requeue releases its claim and puts the task back for the next worker, on this lane or another, if the run is stuck or on the wrong lane."}
             </p>
             {showMergeFailure && (
               <p role="alert" className="mb-3 flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
@@ -138,7 +149,10 @@ export default async function TaskPage({ params }: Props) {
                 </span>
               </p>
             )}
-            <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />
+            <div className="flex flex-col gap-3">
+              {inReview && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
+              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+            </div>
           </section>
         )}
 
@@ -220,6 +234,7 @@ export default async function TaskPage({ params }: Props) {
                   </p>
                   <p className="mt-1">{e.summary}</p>
                   {e.kind === "task.changes_requested" && typeof e.payload.note === "string" && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
+                  {e.kind === "task.requeued" && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
                 </li>
               ))}
             </ul>

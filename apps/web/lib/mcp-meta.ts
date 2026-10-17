@@ -27,7 +27,7 @@ export function serverCard() {
     name: "relay",
     version: APP_VERSION,
     description:
-      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory, asset, task (relay_task_*: open, read, approve and merge, request changes), external-event (relay_event_log), webhook (relay_webhook_*) and, for a tokens:write bot, access and invite tools (relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke: approve other agents' device codes and mint invites without the Access page; a bot grants only scopes it holds and never tokens:write). The same tools the stdio server (relay-mcp) exposes to the CLIs.",
+      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory, asset, task (relay_task_*: open, read, approve and merge, request changes, requeue), external-event (relay_event_log), webhook (relay_webhook_*) and, for a tokens:write bot, access and invite tools (relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke: approve other agents' device codes and mint invites without the Access page; a bot grants only scopes it holds and never tokens:write). The same tools the stdio server (relay-mcp) exposes to the CLIs.",
     url: `${SITE_URL}/mcp`,
     transport: "streamable-http",
     stateless: true,

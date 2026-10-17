@@ -1,5 +1,5 @@
 /**
- * `relay task …`: open, read and review tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
+ * `relay task …`: open, read, review and requeue tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
  * the issue is opened and the PR merged with the machine's gh login; in site mode the site does it with its own
  * GitHub credential. State is derived from the feed every time it is asked for (docs/INTEGRATIONS.md).
  */
@@ -113,6 +113,28 @@ export function registerTask(program: Command): void {
         if (o.json) console.log(JSON.stringify(t, null, 2));
         else {
           log(`changes requested on ${t.pr_url ?? `PR #${t.pr}`}; the task is ${t.state} and the next run gets your note`);
+          show(t);
+        }
+      } finally {
+        await h.close();
+      }
+    });
+
+  task
+    .command("requeue")
+    .argument("<task-id>", "owner/repo#n")
+    .option("--lane <lane>", `move it to this lane (one of ${TASK_LANES.join(", ")}); the agent:* label on the issue follows`)
+    .option("--reason <text>", "why, for the feed")
+    .option("--json")
+    .description("Put a task back in the queue from any state but done: release its claim, move its lane label, record task.requeued (a worker claims it again)")
+    .action(async (id: string, o: { lane?: string; reason?: string; json?: boolean }) => {
+      if (o.lane && !(TASK_LANES as readonly string[]).includes(o.lane)) throw new Error(`--lane must be one of ${TASK_LANES.join(", ")}`);
+      const h = await openReady();
+      try {
+        const t = await h.client.requeueTask(id, { lane: o.lane ?? null, reason: o.reason ?? null });
+        if (o.json) console.log(JSON.stringify(t, null, 2));
+        else {
+          log(`requeued; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""}`);
           show(t);
         }
       } finally {

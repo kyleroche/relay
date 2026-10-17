@@ -30,6 +30,7 @@ import {
   renderPreference,
   repo,
   requestChanges,
+  requeueTask,
   revokeInvite,
   safeFilename,
   sniffMime,
@@ -37,6 +38,7 @@ import {
   TASK_PRIORITIES,
   TASK_STATES,
   TaskCreateError,
+  TaskRequeueError,
   TaskReviewError,
   TOKEN_SCOPES,
   ulid,
@@ -81,6 +83,7 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state. state=review is what waits for a decision." },
   { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its PR through GitHub, deletes the branch and writes task.approved (the task is done). A bot may approve only with tasks:write and never a PR its own lane produced; GitHub's refusal comes back as an error with task.merge_failed in the feed." },
   { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: relay comments on the PR (relay: changes requested by <actor>: …), writes task.changes_requested and queues the task; the next run gets the note in its brief and pushes to the same PR." },
+  { name: "relay_task_requeue", scope: "tasks:write", description: "Put a task back in the queue from any state but done, optionally on another lane: relay moves the agent:* label on the issue (best effort), releases a live worker claim, writes task.requeued and rings the doorbell; the next worker that serves the lane claims it and starts over. For a task stuck running (a cloud lane nobody wired, a run that never reported) or on the wrong lane." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
   { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
@@ -126,7 +129,7 @@ export interface RelayServerOptions {
   invalidateCache?: boolean;
   site?: SiteHooks;
   assets?: AssetHooks;
-  /** GitHub access for relay_task_create, relay_task_approve and relay_task_request_changes (env token on the web, the gh login locally). Without it the tools answer with an error. */
+  /** GitHub access for relay_task_create, relay_task_approve, relay_task_request_changes and relay_task_requeue (env token on the web, the gh login locally). Without it the review tools answer with an error; requeue records the missing credential and queues anyway. */
   github?: GitHubClient;
   /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
   afterEvent?: (row: repo.EventRow) => void | Promise<void>;
@@ -648,6 +651,39 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         return json({ task_id: r.task.id, state: r.task.state, pr_url: r.task.pr_url, review: r.task.review, next: "the next worker run gets the note under Review feedback in its brief and pushes to the same PR" });
       } catch (e) {
         return reviewFail(e, "relay_task_request_changes");
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_task_requeue",
+    {
+      title: "Requeue a task",
+      description: toolDescription("relay_task_requeue"),
+      inputSchema: {
+        id: z.string().min(3).describe("owner/repo#n"),
+        lane: z.enum(TASK_LANES).optional().describe("move the task to this lane; claude, codex or grok run on the user's own workers and are the normal choice. Omitted keeps the lane it has."),
+        reason: z.string().max(2000).optional().describe("why, for the feed"),
+      },
+    },
+    async ({ id, lane, reason }) => {
+      const g = gate("tasks:write", "relay_task_requeue");
+      if (g) return g;
+      try {
+        const r = await requeueTask(db, opts.github, id.trim(), externalActor(actor), { lane: lane ?? null, reason: reason ?? null, scopes: [...granted] });
+        for (const e of r.events) await emit(e);
+        afterWrite(r.task.project);
+        const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
+        return json({
+          task_id: r.task.id,
+          state: r.task.state,
+          lane: r.task.lane,
+          runner: r.task.runner,
+          github: github ?? null,
+          next: r.task.lane && r.task.lane.endsWith("-cloud") ? "a cloud lane: nothing dispatches it until the operator wires that lane; requeue on claude, codex or grok for a worker to pick it up" : "the next idle worker that serves the lane claims it and starts over from the base branch",
+        });
+      } catch (e) {
+        return fail(`relay: ${e instanceof TaskRequeueError || e instanceof Error ? e.message : String(e)}`);
       }
     },
   );

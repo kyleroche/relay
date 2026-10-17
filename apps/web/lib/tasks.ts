@@ -3,7 +3,7 @@ import type { repo, TaskState, TaskView } from "@relay/core";
 import { SITE_URL } from "./site.ts";
 
 export const STATE_HINT: Record<TaskState, string> = {
-  queued: "Waiting for a worker that serves its lane (or sent back with a note, waiting for the next run).",
+  queued: "Waiting for a worker that serves its lane (or sent back with a note or requeued, waiting for the next run).",
   claimed: "A worker holds the lease and is cloning the repository.",
   running: "The lane is working in a fresh clone on the worker.",
   review: "A pull request is open. Look at the preview, then approve or request changes.",

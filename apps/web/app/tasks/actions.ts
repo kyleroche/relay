@@ -1,6 +1,6 @@
 "use server";
 
-import { approveTask, requestChanges, TaskReviewError } from "@relay/core";
+import { approveTask, requestChanges, requeueTask, TaskRequeueError, TaskReviewError } from "@relay/core";
 import { revalidatePath } from "next/cache";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -37,7 +37,7 @@ async function gate(): Promise<{ refused: TaskActionResult; by?: never } | { ref
   return by ? { by } : { refused: SIGNED_OUT };
 }
 
-const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof Error ? e.message : String(e));
+const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof Error ? e.message : String(e));
 
 function pagePath(taskId: string): string {
   const [repo, n] = taskId.split("#");
@@ -71,6 +71,22 @@ export async function requestChangesAction(taskId: string, note: string): Promis
     revalidatePath(pagePath(taskId));
     revalidatePath("/tasks");
     return { ok: true, state: r.task.state };
+  } catch (e) {
+    return { ok: false, message: describe(e) };
+  }
+}
+
+/** Requeue, optionally on another lane: the agent:* label moves, a live claim is released, task.requeued is written. */
+export async function requeueTaskAction(taskId: string, input: { lane?: string | null; reason?: string | null }): Promise<TaskActionResult> {
+  const g = await gate();
+  if (g.refused) return g.refused;
+  try {
+    const r = await requeueTask(await getDb(), await siteGitHub(), taskId, g.by, { lane: input.lane ?? null, reason: input.reason ?? null });
+    dispatchAfter(r.events);
+    revalidatePath(pagePath(taskId));
+    revalidatePath("/tasks");
+    const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
+    return { ok: true, state: r.task.state, ...(github && !github.relabelled ? { message: `Queued, but the GitHub label did not move: ${github.error ?? "unknown error"}.` } : {}) };
   } catch (e) {
     return { ok: false, message: describe(e) };
   }
