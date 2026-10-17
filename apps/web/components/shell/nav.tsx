@@ -12,6 +12,7 @@ export interface NavItem {
 /** The signed-in surface. */
 export const NAV: readonly NavItem[] = [
   { href: "/", label: "Feed" },
+  { href: "/tasks", label: "Tasks" },
   { href: "/projects", label: "Projects" },
   { href: "/assets", label: "Assets" },
   { href: "/usage", label: "Usage" },

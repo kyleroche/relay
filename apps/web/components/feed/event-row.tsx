@@ -78,6 +78,12 @@ export function EventRow({
           <span className="truncate" title={e.summary}>
             {e.summary}
           </span>
+          {e.repo && e.issue != null && (
+            // every row about an issue is a row about a task: the task page is where its preview and review live
+            <Link href={`/tasks/${e.repo}/${e.issue}`} className="hidden shrink-0 font-mono text-[11px] text-muted-foreground hover:text-primary sm:inline" title={`Task ${e.repo}#${e.issue}`}>
+              #{e.issue}
+            </Link>
+          )}
           {e.lane && e.kind !== "issue.labeled" && (
             <span className="hidden shrink-0 rounded bg-muted px-1 py-px font-mono text-[10px] text-muted-foreground md:inline">{e.lane}</span>
           )}

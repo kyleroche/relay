@@ -57,7 +57,7 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/activate", "/activate/", "/setup", "/setup/github", "/setup/github/callback", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
+    for (const p of ["/tasks", "/tasks/acme/site/42", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/tokens", "/activate", "/activate/", "/setup", "/setup/github", "/setup/github/callback", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
     // unknown paths are nobody's: they fall through to a real 404, never a sign-in redirect
@@ -81,6 +81,9 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/api/v1/access/RLAY-4F7Q/approve", { hasBearer: false, publicRead: false, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/invites", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/whoami", { hasBearer: true, publicRead: false })).toBe("public");
+    // approving a task: a tasks:write bearer, or the signed-in person
+    expect(classifyRoute("/api/v1/tasks/acme/site%2342/approve", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");
+    expect(classifyRoute("/api/v1/tasks/acme/site%2342/request-changes", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
   });
 
   it("honours RELAY_PUBLIC_READ for anonymous GET reads only", () => {
@@ -97,6 +100,8 @@ describe("classifyRoute", () => {
     expect(classifyRoute("//info", anon)).toBe("public");
     expect(classifyRoute("/docs//api", anon)).toBe("public");
     expect(classifyRoute("/projects/", anon)).toBe("session");
+    expect(classifyRoute("/tasks/", anon)).toBe("session");
+    expect(classifyRoute("/tasksX", anon)).toBe("unknown");
     expect(classifyRoute("//assets", anon)).toBe("session");
     expect(classifyRoute("/information", anon)).toBe("unknown");
     expect(classifyRoute("/infoX", anon)).toBe("unknown");
