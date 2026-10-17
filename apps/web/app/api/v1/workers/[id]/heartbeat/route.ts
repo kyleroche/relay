@@ -1,4 +1,4 @@
-import { heartbeatServer } from "@relay/core";
+import { heartbeatServer, sanitizeMeters } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { dispatchAfter } from "@/lib/dispatch";
@@ -10,9 +10,10 @@ export const dynamic = "force-dynamic";
 type Ctx = { params: Promise<{ id: string }> };
 
 /**
- * operationId: heartbeatWorker. Body: { status?: "online" | "offline", interval_ms? }. Touches last_seen, records the
- * poll interval the worker is on, and renews every lease the worker holds (30 minutes from now). `offline` records a
- * clean shutdown as worker.offline.
+ * operationId: heartbeatWorker. Body: { status?: "online" | "offline", interval_ms?, meters? }. Touches last_seen,
+ * records the poll interval the worker is on and the plan meters it read (`meters`, replaced when present, kept when
+ * absent; packages/core/src/meters.ts), and renews every lease the worker holds (30 minutes from now). `offline`
+ * records a clean shutdown as worker.offline.
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
@@ -25,7 +26,8 @@ export const POST = api<Ctx>(
     if (status && status !== "online" && status !== "offline") return problem(400, "Bad Request", "status must be online or offline.", instance, { parameter: "status" });
     try {
       const intervalMs = int(body.interval_ms);
-      const r = await heartbeatServer(await getDb(), decodeURIComponent(id), { ...(status ? { status } : {}), ...(intervalMs && intervalMs > 0 ? { interval_ms: intervalMs } : {}) });
+      const meters = sanitizeMeters(body.meters);
+      const r = await heartbeatServer(await getDb(), decodeURIComponent(id), { ...(status ? { status } : {}), ...(intervalMs && intervalMs > 0 ? { interval_ms: intervalMs } : {}), ...(meters ? { meters } : {}) });
       dispatchAfter(r.events);
       return json({ worker: r.worker, leases: r.leases });
     } catch (e) {
