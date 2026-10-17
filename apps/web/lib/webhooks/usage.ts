@@ -7,6 +7,9 @@
  * untrusted block is still recorded, with `payload.untrusted = true` and its usage columns zeroed so the ledger view
  * (a plain `kind = 'step.usage'` filter) excludes it; the raw numbers stay in the payload. With neither source
  * configured every sender is trusted, which is the right default for a single-owner deployment.
+ *
+ * Opening a task is different (`senderMayOpenTasks`): an `agent:<lane>` label makes a worker spend a subscription on
+ * whatever the issue says, so only an allowlisted login may, and an unset allowlist refuses everyone.
  */
 import { costEquiv } from "@relay/core";
 import type { Lane, NewEvent, Subscription } from "@/lib/types";
@@ -82,12 +85,12 @@ declare global {
 const cache = (globalThis.__relaySenders ??= new Map());
 const HOUR = 3_600_000;
 
-/** True when the login may write usage; see the module comment for the sources. */
-export async function senderTrusted(repo: string | null, login: string): Promise<boolean> {
+/** The configured allowlist as lower-cased logins, or null when neither the environment nor the repo variable sets one. */
+export async function allowedSenders(repo: string | null): Promise<Set<string> | null> {
   const env = process.env.RELAY_ALLOWED_SENDERS;
-  if (env?.trim()) return env.split(",").map((s) => s.trim().toLowerCase()).includes(login.toLowerCase());
+  if (env?.trim()) return new Set(env.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean));
   const token = process.env.GITHUB_APP_TOKEN || process.env.GITHUB_TOKEN;
-  if (!token || !repo) return true;
+  if (!token || !repo) return null;
   const hit = cache.get(repo);
   if (!hit || Date.now() - hit.at > HOUR) {
     let logins: Set<string> | null = null;
@@ -104,8 +107,19 @@ export async function senderTrusted(repo: string | null, login: string): Promise
     }
     cache.set(repo, { at: Date.now(), logins });
   }
-  const logins = cache.get(repo)?.logins;
+  return cache.get(repo)?.logins ?? null;
+}
+
+/** True when the login may write usage; see the module comment for the sources. No allowlist trusts everyone. */
+export async function senderTrusted(repo: string | null, login: string): Promise<boolean> {
+  const logins = await allowedSenders(repo);
   return logins ? logins.has(login.toLowerCase()) : true;
+}
+
+/** True when the login may turn an `agent:<lane>` label into a task a worker will run. No allowlist refuses everyone. */
+export async function senderMayOpenTasks(repo: string | null, login: string): Promise<boolean> {
+  const logins = await allowedSenders(repo);
+  return !!logins && logins.has(login.toLowerCase());
 }
 
 /** The step.usage row (and the pr.review row in review mode) for a parsed comment. */

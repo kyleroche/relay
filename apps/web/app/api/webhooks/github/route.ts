@@ -8,6 +8,7 @@ import { githubApp, githubWebhookSecrets } from "@/lib/github-app";
 import type { NewEvent } from "@/lib/types";
 import { githubEvents } from "@/lib/webhooks/github";
 import { installationEvents, isInstallationEvent } from "@/lib/webhooks/github-app";
+import { senderMayOpenTasks } from "@/lib/webhooks/usage";
 import { verifyGitHub } from "@/lib/webhooks/verify";
 
 export const dynamic = "force-dynamic";
@@ -65,11 +66,18 @@ export async function POST(req: NextRequest) {
 
 /**
  * An `agent:<lane>` label put on an issue by hand (docs/WORKERS.md): the issue becomes a task row so a worker can
- * claim it, exactly as if it had been opened through `relay task create`. Only repos linked as a project count.
+ * claim it, exactly as if it had been opened through `relay task create`. Only repos linked as a project count, and
+ * only when the login that added the label is in `RELAY_ALLOWED_SENDERS` (`senderMayOpenTasks`; an unset allowlist
+ * refuses): anyone with triage on the repo can add a label, and a task spends a subscription on a worker.
  */
 async function recordLabelledTask(e: NewEvent): Promise<void> {
   if (e.kind !== "issue.labeled" || !e.repo || !e.issue || !e.lane || dataMode() !== "db") return;
   try {
+    const login = e.actor.replace(/^(human|bot):/, "");
+    if (!(await senderMayOpenTasks(e.repo, login))) {
+      console.warn(`[relay] ${e.repo}#${e.issue}: label by ${e.actor} ignored; not in RELAY_ALLOWED_SENDERS`);
+      return;
+    }
     const db = await getDb();
     const project = (await repo.listProjects(db)).find((p) => p.repo === e.repo);
     if (!project) return;
