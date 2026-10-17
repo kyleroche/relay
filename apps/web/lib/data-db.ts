@@ -190,13 +190,17 @@ export const dbSource: DataSource = {
     return { window, since, subscriptions, windows: meters(now), daily, avgCtx, avgCtxWindow: totalCalls ? Math.round(totalCtx / totalCalls) : 0 };
   },
 
-  /** Runners are known only through the run.* events they wrote. Online = a run in progress; idle = seen within an hour. */
+  /**
+   * Workers are the machines that ran `relay work` (the `workers` table, docs/WORKERS.md): state from last_seen, the
+   * current task from the live claim, runs today from their run.started rows. Runners that only ever reported through
+   * GitHub Actions (no registration) still appear from their run.* events, so the older path keeps showing up.
+   */
   async getWorkers(): Promise<Worker[]> {
     const db = await getDb();
-    const rows = await repo.listEvents(db, { kind: "run.", limit: 2000 });
     const now = Date.now();
     const dayStart = new Date(now);
     dayStart.setUTCHours(0, 0, 0, 0);
+    const [views, rows] = await Promise.all([repo.workerViews(db, now), repo.listEvents(db, { kind: "run.", limit: 2000 })]);
     const byRunner = new Map<string, EventRow[]>();
     for (const e of rows) {
       if (!e.actor.startsWith("runner:")) continue;
@@ -204,8 +208,21 @@ export const dbSource: DataSource = {
       list.push(e);
       byRunner.set(e.actor, list);
     }
-    const workers: Worker[] = [];
+    const runsToday = (name: string) => (byRunner.get(`runner:${name}`) ?? []).filter((e) => e.kind === "run.started" && new Date(e.ts).getTime() >= dayStart.getTime()).length;
+    const workers: Worker[] = views.map((w) => ({
+      name: w.name,
+      host: w.host || w.name,
+      labels: w.labels,
+      lastSeen: w.last_seen,
+      status: w.state,
+      lanes: w.lanes.map(asLane).filter((l): l is Lane => l !== null),
+      version: w.version,
+      runsToday: runsToday(w.name),
+      current: w.current ? { project: w.current.project, issue: w.current.issue, startedAt: w.current.claimed_at, taskId: w.current.task_id, leaseUntil: w.current.lease_until } : null,
+    }));
+    const known = new Set(workers.map((w) => `runner:${w.name}`));
     for (const [actor, events] of byRunner) {
+      if (known.has(actor)) continue;
       events.sort((a, b) => a.ts.localeCompare(b.ts));
       const last = events.at(-1)!;
       const lastSeenMs = new Date(last.ts).getTime();
@@ -215,16 +232,15 @@ export const dbSource: DataSource = {
       const current = lastStart && !finished ? { project: lastStart.project ?? "", issue: lastStart.issue ?? 0, startedAt: lastStart.ts } : null;
       const lanes = [...new Set(events.map((e) => asLane(e.lane)).filter((l): l is Lane => l !== null))];
       const payloadLabels = (last.payload.labels as unknown) ?? (lastStart?.payload.labels as unknown);
-      const labels = Array.isArray(payloadLabels) ? (payloadLabels as string[]) : ["self-hosted", ...lanes.map((l) => `agent:${l}`)];
-      const status: Worker["status"] = current ? "online" : now - lastSeenMs < H ? "idle" : "offline";
       workers.push({
         name: actor.slice("runner:".length),
         host: typeof last.payload.host === "string" ? last.payload.host : actor.slice("runner:".length),
-        labels,
+        labels: Array.isArray(payloadLabels) ? (payloadLabels as string[]) : [],
         lastSeen: last.ts,
-        status,
+        status: current ? "online" : now - lastSeenMs < H ? "idle" : "offline",
         lanes,
-        runsToday: started.filter((e) => new Date(e.ts).getTime() >= dayStart.getTime()).length,
+        version: "",
+        runsToday: runsToday(actor.slice("runner:".length)),
         current,
       });
     }

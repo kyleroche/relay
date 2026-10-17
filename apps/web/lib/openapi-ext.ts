@@ -11,6 +11,7 @@ export const integrationTags = [
   { name: "events", description: "External bots logging their own external.* events into the feed." },
   { name: "tokens", description: "Bearer tokens for this site: mint (plaintext shown once), list, revoke." },
   { name: "webhooks", description: "Outbound webhooks: signed POSTs for the event kinds a receiver subscribes to (docs/FEED.md)." },
+  { name: "work", description: "The worker protocol behind `relay work` (docs/WORKERS.md): register, heartbeat, claim a leased task, report the run." },
 ];
 
 type Response = (description: string, schemaRef: string) => unknown;
@@ -210,6 +211,82 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         security: [{ bearer: ["webhooks:write"] }],
         parameters: [idParam],
         responses: { "200": response("Delivered.", "#/components/schemas/Delivery"), "502": response("The receiver did not accept it; details in the body.", "#/components/schemas/Delivery"), "404": problemResponse("No such webhook."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/workers": {
+      get: {
+        operationId: "listWorkers",
+        tags: ["work"],
+        summary: "Workers with their derived state and current task",
+        description: "Every machine that registered through `relay work`. `state` is online (heartbeat under 2 minutes), idle (under an hour) or offline; `current` is the live claim, if any.",
+        security: [{ bearer: ["feed:read"] }],
+        responses: { "200": response("Workers, most recently seen first.", "#/components/schemas/WorkerList"), ...commonErrors },
+      },
+      post: {
+        operationId: "registerWorker",
+        tags: ["work"],
+        summary: "Register (or refresh) a worker",
+        description: "Upserts the worker by name; the id is stable across restarts and is what the other work routes take. Writes `worker.registered` on first sight and `worker.online` when a worker comes back after an offline report.",
+        security: [{ bearer: ["work:claim"] }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/WorkerRegister" } } } },
+        responses: { "201": response("Registered.", "#/components/schemas/WorkerRegistered"), "200": response("Refreshed.", "#/components/schemas/WorkerRegistered"), "400": problemResponse("Bad name or lanes."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/workers/{id}/heartbeat": {
+      post: {
+        operationId: "heartbeatWorker",
+        tags: ["work"],
+        summary: "Heartbeat: touch last_seen and renew this worker's leases",
+        description: "Called every 60 seconds by `relay work`. Every live claim the worker holds is extended to 30 minutes from now. `status: offline` records a clean shutdown (`worker.offline`).",
+        security: [{ bearer: ["work:claim"] }],
+        parameters: [idParam],
+        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { status: { type: "string", enum: ["online", "offline"] } } } } } },
+        responses: { "200": response("The worker and its leases.", "#/components/schemas/Heartbeat"), "404": problemResponse("No such worker."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/work/claim": {
+      post: {
+        operationId: "claimWork",
+        tags: ["work"],
+        summary: "Claim the oldest queued task this worker can run",
+        description:
+          "Expired leases are released first. Candidates are queued tasks whose lane is among the worker's lanes (optionally narrowed by `lanes`) and whose project's `lane.labels` preference is satisfied by the worker's labels. The claim is taken atomically (one live claim per task) under a 30-minute lease; the task's derived state becomes `claimed`. `claim` is null when nothing is claimable. The issue text is included when the server holds a GitHub token.",
+        security: [{ bearer: ["work:claim"] }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ClaimRequest" } } } },
+        responses: { "200": response("A claim, or null.", "#/components/schemas/ClaimResponse"), "400": problemResponse("Missing worker_id."), "404": problemResponse("No such worker."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/work/{owner}/{repo}%23{issue}/start": {
+      post: {
+        operationId: "startWork",
+        tags: ["work"],
+        summary: "Report that the run started",
+        description: "The clone is ready and the lane is about to run: writes `run.started` as `runner:<worker name>`; the task is `running`. 409 when the worker holds no live claim on the task.",
+        security: [{ bearer: ["work:claim"] }],
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" } },
+          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["worker_id"], properties: { worker_id: { type: "string" }, branch: { type: "string" }, host: { type: "string" } } } } } },
+        responses: { "200": response("Recorded.", "#/components/schemas/WorkReport"), "400": problemResponse("Bad task id or missing worker_id."), "404": problemResponse("No such worker or task."), "409": problemResponse("No live claim."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/work/{owner}/{repo}%23{issue}/release": {
+      post: {
+        operationId: "releaseWork",
+        tags: ["work"],
+        summary: "End the lease and report the run",
+        description:
+          "`finished` writes `run.finished` (with `conclusion`, default success, the PR number and url); `failed` writes `run.failed` with `error`; `released` only frees the lease, so the task is queued again. `usage` becomes one `step.usage` row attributed to `agent:<lane>`; the worker's PR comment carries the same numbers for humans and is not counted twice. 409 when the worker holds no live claim.",
+        security: [{ bearer: ["work:claim"] }],
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" } },
+          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ReleaseRequest" } } } },
+        responses: { "200": response("Recorded.", "#/components/schemas/WorkReport"), "400": problemResponse("Bad outcome or task id."), "404": problemResponse("No such worker or task."), "409": problemResponse("No live claim."), "501": notImplemented, ...commonErrors },
       },
     },
   };
@@ -416,4 +493,103 @@ export const integrationSchemas: Record<string, unknown> = {
   },
   WebhookDetail: { type: "object", properties: { webhook: { $ref: "#/components/schemas/Webhook" }, deliveries: { type: "array", items: { $ref: "#/components/schemas/DeliveryRow" } } } },
   WebhookRemoved: { type: "object", properties: { removed: { type: "string" } } },
+  Worker: {
+    type: "object",
+    required: ["id", "name", "lanes", "labels", "last_seen", "status"],
+    properties: {
+      id: { type: "string" },
+      name: { type: "string", description: "`runner:<name>` is this worker's actor in the feed." },
+      host: { type: "string" },
+      lanes: { type: "array", items: { type: "string", enum: ["claude", "codex", "grok"] } },
+      labels: { type: "array", items: { type: "string" }, description: "Capabilities matched against a project's `lane.labels` preference." },
+      version: { type: "string" },
+      last_seen: { type: "string", format: "date-time" },
+      status: { type: "string", enum: ["online", "offline"], description: "What the worker last reported." },
+      created_at: { type: "string", format: "date-time" },
+    },
+  },
+  Claim: {
+    type: "object",
+    required: ["id", "task_id", "worker_id", "lease_until", "claimed_at"],
+    properties: {
+      id: { type: "string" },
+      task_id: { type: "string" },
+      worker_id: { type: "string" },
+      lease_until: { type: "string", format: "date-time" },
+      claimed_at: { type: "string", format: "date-time" },
+      released_at: nullable("string", { format: "date-time" }),
+      outcome: nullable("string", { enum: ["finished", "failed", "released", "expired", null] }),
+    },
+  },
+  LiveClaim: { allOf: [{ $ref: "#/components/schemas/Claim" }, { type: "object", properties: { worker: { type: "string" }, project: { type: "string" }, repo: { type: "string" }, issue: { type: "integer" }, lane: nullable("string") } }] },
+  WorkerView: {
+    allOf: [
+      { $ref: "#/components/schemas/Worker" },
+      { type: "object", properties: { state: { type: "string", enum: ["online", "idle", "offline"], description: "Derived from last_seen." }, current: { oneOf: [{ $ref: "#/components/schemas/LiveClaim" }, { type: "null" }] } } },
+    ],
+  },
+  WorkerList: { type: "object", properties: { workers: { type: "array", items: { $ref: "#/components/schemas/WorkerView" } }, count: { type: "integer" } } },
+  WorkerRegister: {
+    type: "object",
+    required: ["name", "lanes"],
+    properties: {
+      name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
+      host: { type: "string" },
+      lanes: { type: "array", items: { type: "string", enum: ["claude", "codex", "grok"] } },
+      labels: { type: "array", items: { type: "string" } },
+      version: { type: "string" },
+    },
+  },
+  WorkerRegistered: { type: "object", properties: { worker: { $ref: "#/components/schemas/Worker" }, created: { type: "boolean" } } },
+  Heartbeat: { type: "object", properties: { worker: { $ref: "#/components/schemas/Worker" }, leases: { type: "array", items: { $ref: "#/components/schemas/Claim" } } } },
+  ClaimRequest: { type: "object", required: ["worker_id"], properties: { worker_id: { type: "string" }, lanes: { type: "array", items: { type: "string" } }, labels: { type: "array", items: { type: "string" } } } },
+  ClaimResponse: {
+    type: "object",
+    properties: {
+      claim: {
+        oneOf: [
+          {
+            type: "object",
+            properties: {
+              claim: { $ref: "#/components/schemas/Claim" },
+              task: { $ref: "#/components/schemas/Task" },
+              issue: { oneOf: [{ type: "object", properties: { number: { type: "integer" }, title: { type: "string" }, body: { type: "string" }, url: { type: "string", format: "uri" } } }, { type: "null" }] },
+              base: nullable("string", { description: "The repository's default branch when known." }),
+            },
+          },
+          { type: "null" },
+        ],
+      },
+    },
+  },
+  RunUsage: {
+    type: "object",
+    properties: {
+      tool: { type: "string", description: "claude, codex, grok or fx" },
+      model: nullable("string"),
+      subscription: nullable("string"),
+      tokens_in: { type: "integer" },
+      tokens_out: { type: "integer" },
+      cache_read: { type: "integer" },
+      cache_write: { type: "integer" },
+      cost_equiv: { type: "number" },
+      duration_ms: { type: "integer" },
+    },
+  },
+  ReleaseRequest: {
+    type: "object",
+    required: ["worker_id", "outcome"],
+    properties: {
+      worker_id: { type: "string" },
+      outcome: { type: "string", enum: ["finished", "failed", "released"] },
+      conclusion: { type: "string", description: "For finished runs; default success." },
+      summary: { type: "string" },
+      error: { type: "string" },
+      pr: nullable("integer"),
+      pr_url: nullable("string", { format: "uri" }),
+      duration_ms: nullable("integer"),
+      usage: { oneOf: [{ $ref: "#/components/schemas/RunUsage" }, { type: "null" }] },
+    },
+  },
+  WorkReport: { type: "object", properties: { claim: { $ref: "#/components/schemas/Claim" }, events: { type: "array", items: { type: "object", properties: { id: { type: "integer" }, kind: { type: "string" } } } } } },
 };

@@ -2,6 +2,7 @@ import { isTaskState, openTask, repo, TaskCreateError, TASK_LANES, TASK_PRIORITI
 import { api, json, problem } from "@/lib/api";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { dispatchCloudAfter } from "@/lib/cloud-dispatch";
 import { dispatchAfter } from "@/lib/dispatch";
 import { int, needsDb, readJson, siteGitHub, str, writerActor } from "@/lib/integrations";
 
@@ -55,6 +56,8 @@ export const POST = api(
         actor,
       });
       dispatchAfter(r.events);
+      // cloud lanes are dispatched by the site itself (lib/cloud-dispatch.ts); worker lanes wait for `relay work` to claim them
+      if (r.created) dispatchCloudAfter(r.task, lane, actor);
       return json({ task_id: r.task_id, issue_url: r.issue_url, created: r.created, task: r.task }, { status: r.created ? 201 : 200, headers: { location: `/api/v1/tasks/${r.task_id.replace("#", "%23")}` } });
     } catch (e) {
       if (e instanceof TaskCreateError) return problem(e.status, e.status === 404 ? "Not Found" : e.status === 503 ? "Service Unavailable" : "Bad Request", e.message, instance);

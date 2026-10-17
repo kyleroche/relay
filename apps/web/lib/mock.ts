@@ -826,7 +826,8 @@ function build(now: number): Dataset {
     {
       name: "studio",
       host: "studio.local",
-      labels: ["self-hosted", "macOS", "arm64", "xcode", "agent:claude", "agent:codex", "agent:grok"],
+      labels: ["xcode", "gpu"],
+      version: "0.1.0",
       lastSeen: new Date(now - 40_000).toISOString(),
       status: "online",
       lanes: ["claude", "codex", "grok"],
@@ -836,7 +837,8 @@ function build(now: number): Dataset {
     {
       name: "loft",
       host: "loft.local",
-      labels: ["self-hosted", "Linux", "x64", "agent:claude", "agent:codex"],
+      labels: [],
+      version: "0.1.0",
       lastSeen: lastRunner(RUNNER_ALT) > new Date(now - 20 * MIN).toISOString() ? new Date(now - 3 * MIN).toISOString() : new Date(now - 14 * MIN).toISOString(),
       status: "idle",
       lanes: ["claude", "codex"],
@@ -846,7 +848,8 @@ function build(now: number): Dataset {
     {
       name: "field",
       host: "field-laptop",
-      labels: ["self-hosted", "macOS", "arm64", "agent:claude"],
+      labels: [],
+      version: "0.0.9",
       lastSeen: new Date(now - 3 * 24 * H - 5 * H).toISOString(),
       status: "offline",
       lanes: ["claude"],
