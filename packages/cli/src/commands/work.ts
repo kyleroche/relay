@@ -17,13 +17,17 @@
  * `relay work container shell|status|stop|start|rm|logs` wrap the container commands; `relay work container update`
  * rebuilds the image from this relay and recreates the container on the same volume (the site token and the logins
  * in it are kept, so no new device flow), which is also what `--install --yes` does over an existing container.
+ * `relay work container login [claude|gh|codex|grok|all]` makes the logins inside from the Mac: Claude Code and gh in
+ * this terminal, fx's codex and grok with the authorize URL opened here and the browser's redirect caught on this Mac
+ * and handed to the login server inside (@relay/core work/login.ts).
  * Inside the container the image
  * sets RELAY_ISOLATION=container and `relay work` adds the labels `isolation:container` and `sandbox:on` or
  * `sandbox:container`, waits for the site and the logins instead of exiting, and names itself `<host>-container`.
  */
 import type { Command } from "commander";
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -31,6 +35,8 @@ import {
   CONTAINER_CREDENTIALS,
   CONTAINER_HOME,
   CONTAINER_IMAGE,
+  CONTAINER_LOGIN_COMMAND,
+  CONTAINER_LOGIN_COMMAND_WHY,
   CONTAINER_MEMORY,
   CONTAINER_NAME,
   CONTAINER_PASSTHROUGH_ENV,
@@ -45,7 +51,14 @@ import {
   containerStateFrom,
   containerWorkerName,
   imageStatus,
+  isLoginProvider,
   lanesFromDoctorOutput,
+  loginDonePage,
+  loginStatesFromDoctorOutput,
+  manualLoginSteps,
+  parseLoginCallback,
+  parseLoginUrl,
+  replayUrl,
   tokenNameFromDoctorOutput,
   detectGitHub,
   httpWorkApi,
@@ -53,6 +66,9 @@ import {
   ISOLATIONS,
   laneRunner,
   localWorkApi,
+  LOGIN_CALLBACK_PORTS,
+  LOGIN_PROVIDERS,
+  LOGIN_TIMEOUT_MS,
   MAX_IDLE_MS,
   NO_SANDBOX_LABEL,
   POLL_MS,
@@ -64,6 +80,8 @@ import {
   servicePlan,
   type ContainerPlan,
   type Isolation,
+  type LoginProvider,
+  type LoginRedirect,
   type WorkApi,
   type WorkerView,
 } from "@relay/core";
@@ -100,7 +118,16 @@ export interface WorkDeps {
   run: (words: string[], opts?: { cwd?: string }) => number;
   onPath: (bin: string) => string | undefined;
   platform: NodeJS.Platform;
+  /**
+   * Start a process with stdin, stdout and stderr piped: `fx login` inside the container, whose output is read for
+   * the authorize URL and whose stdin gets the code (`relay work container login`). Default: child_process.spawn.
+   */
+  spawn?: (words: string[]) => ChildProcess;
+  /** The login ports the container publishes to this Mac's loopback (default LOGIN_CALLBACK_PORTS); tests hold their own. */
+  publishedPorts?: readonly number[];
 }
+
+const defaultSpawn = (words: string[]): ChildProcess => spawn(words[0]!, words.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
 
 const LANES = ["claude", "codex", "grok"];
 const list = (s: string | undefined): string[] => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
@@ -225,7 +252,7 @@ async function waitForReadiness(out: (m: string) => void, forced: string[] | und
     const d = forced ? { lanes: forced, reasons: [] as string[] } : await detectLanes();
     const missing: string[] = [];
     if (!site.site || !site.token) missing.push("no site yet: on the Mac run `relay work --isolation container --install`, or inside: relay setup --site <url>");
-    if (!d.lanes.length) missing.push(`no lanes yet: ${d.reasons.join("; ")}; log in with: relay work container shell`);
+    if (!d.lanes.length) missing.push(`no lanes yet: ${d.reasons.join("; ")}; log in from the Mac with: ${CONTAINER_LOGIN_COMMAND}`);
     if (!missing.length) return d.lanes;
     const msg = `waiting: ${missing.join(" | ")}`;
     if (msg !== said) out(msg);
@@ -383,7 +410,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .description(`The ${CONTAINER_NAME} container (relay work --isolation container): a shell inside, its status, stop/start/rm, logs (docs/WORKERS.md "Isolation")`);
   container
     .command("shell")
-    .description(`a shell inside ${CONTAINER_NAME} as the relay user (container exec -it); log in to claude, gh and fx here`)
+    .description(`a shell inside ${CONTAINER_NAME} as the relay user (container exec -it); the logins by hand happen here (relay work container login does them for you)`)
     .action(() => {
       const c = needContainer();
       process.exitCode = deps.run(c.plan.shell);
@@ -401,8 +428,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       // `relay doctor` inside exits 1 while a login is missing; its output is still the report
       const doctor = deps.sh(c.plan.doctor, { timeoutMs: 120_000 }).out;
       if (doctor) console.log(doctor.replace(/^/gm, "  "));
-      const lanes = lanesFromDoctorOutput(doctor);
-      console.log(lanes === undefined ? "lanes:     unknown (no lanes line from relay doctor inside)" : lanes.length ? `lanes:     ${lanes.join(", ")} (the container worker serves these)` : "lanes:     none yet; log in with: relay work container shell");
+      console.log(lanesLine(doctor));
     });
   container
     .command("stop")
@@ -468,6 +494,210 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .option("--cpus <n>", "the VM's CPUs (default: what the container has now)")
     .option("--yes", "rebuild the image and recreate the container")
     .action((o: { site?: string; invite?: string; memory?: string; cpus?: string; yes?: boolean }) => containerInstall({ jobs: "1", interval: String(POLL_MS / 1000), maxMinutes: "60", sandbox: true, ...o }, "update"));
+  container
+    .command("login [provider]")
+    .description(
+      `make the vendor logins inside ${CONTAINER_NAME} from this Mac: ${LOGIN_PROVIDERS.join(", ")} or all (default). The ones relay doctor inside already reports are skipped. codex and grok: fx's authorize URL opens in this Mac's browser and the redirect is caught here; claude and gh: the CLI runs in this terminal (paste a code, device code)`,
+    )
+    .option("--force", "log in again even when the volume already holds that login")
+    .option("--no-open", "print each authorize URL instead of opening this Mac's browser")
+    .option("--timeout <seconds>", "how long to wait for each browser login", String(LOGIN_TIMEOUT_MS / 1000))
+    .action((provider: string | undefined, o: { force?: boolean; open: boolean; timeout: string }) => containerLogin(provider ?? "all", o));
+
+  /** `lanes:` as `relay work container status` and `login` print it, from `relay doctor` output inside. */
+  function lanesLine(doctor: string): string {
+    const lanes = lanesFromDoctorOutput(doctor);
+    if (lanes === undefined) return "lanes:     unknown (no lanes line from relay doctor inside)";
+    return lanes.length ? `lanes:     ${lanes.join(", ")} (the container worker serves these)` : `lanes:     none yet; log in with: ${CONTAINER_LOGIN_COMMAND}`;
+  }
+
+  interface LoginResult {
+    provider: LoginProvider;
+    outcome: "ok" | "skipped" | "failed";
+    detail?: string;
+    /** Print the by-hand steps for this provider under the failure. */
+    manual?: boolean;
+  }
+
+  /**
+   * `relay work container login [provider|all]`: the logins inside the container, driven from the Mac. Claude Code
+   * and gh run in this terminal (`container exec -it`); for codex and grok fx runs with its browser off, the
+   * authorize URL it prints is opened here, and the browser's redirect is caught by a listener on this Mac at the
+   * port fx registered, then handed to the login server inside (login.ts). Logins the volume already holds are
+   * skipped unless --force. Ends with the lanes line from `relay doctor` inside.
+   */
+  async function containerLogin(which: string, o: { force?: boolean; open: boolean; timeout: string }): Promise<void> {
+    const c = needContainer();
+    if (which !== "all" && !isLoginProvider(which)) throw new Error(`login: '${which}' is not one of ${[...LOGIN_PROVIDERS, "all"].join(", ")}`);
+    const wanted: LoginProvider[] = which === "all" ? [...LOGIN_PROVIDERS] : [which];
+    const timeoutMs = Math.max(1, Number(o.timeout) || LOGIN_TIMEOUT_MS / 1000) * 1000;
+    const state = containerStateFrom(deps.sh([c.bin, "list", "--all", "--format", "json"]).out);
+    if (!state.exists) throw new Error(`no ${CONTAINER_NAME} container; create it with: relay work --isolation container --install --yes`);
+    if (!state.running) throw new Error(`${CONTAINER_NAME} is not running; start it with: relay work container start`);
+    // doctor exits 1 while a login is missing; the report is its output either way
+    const have = loginStatesFromDoctorOutput(deps.sh(c.plan.doctor, { timeoutMs: 120_000 }).out);
+    const results: LoginResult[] = [];
+    for (const p of wanted) {
+      if (have[p] && !o.force) {
+        console.log(`${p.padEnd(7)} already in the volume (relay doctor inside); skipped (--force logs in again)`);
+        results.push({ provider: p, outcome: "skipped" });
+        continue;
+      }
+      const r = p === "claude" || p === "gh" ? ttyLogin(c.plan, p) : await oauthLogin(c.plan, p, { open: o.open, timeoutMs });
+      results.push(r);
+      console.log(`${p.padEnd(7)} ${r.outcome === "ok" ? "signed in" : `FAILED: ${r.detail ?? ""}`}${r.outcome === "ok" && r.detail ? ` (${r.detail})` : ""}`);
+      if (r.outcome === "failed" && r.manual) {
+        console.log("        by hand:");
+        for (const step of manualLoginSteps(p)) console.log(`          ${step}`);
+      }
+    }
+    const after = deps.sh(c.plan.doctor, { timeoutMs: 120_000 }).out;
+    const now = loginStatesFromDoctorOutput(after);
+    console.log(`logins:    ${LOGIN_PROVIDERS.map((p) => `${p} ${now[p] ? "ok" : "missing"}`).join(", ")} (relay doctor inside)`);
+    console.log(lanesLine(after));
+    if (results.some((r) => r.outcome === "failed")) process.exitCode = 1;
+  }
+
+  /** Claude Code's /login (paste a code) and gh's device flow: the CLI runs in this terminal, inside the container. */
+  function ttyLogin(p: ContainerPlan, provider: "claude" | "gh"): LoginResult {
+    if (provider === "claude") {
+      console.log(`claude  ${p.login.claude.join(" ")}`);
+      console.log("        type /login, open the URL it prints on this Mac, paste the code back, then /exit");
+      const code = deps.run(p.login.claude);
+      return code === 0 ? { provider, outcome: "ok" } : { provider, outcome: "failed", detail: `claude exited ${code}`, manual: true };
+    }
+    console.log(`gh      ${p.login.gh.join(" ")}`);
+    console.log("        the device code prints below; enter it at github.com/login/device on this Mac");
+    const code = deps.run(p.login.gh);
+    if (code !== 0) return { provider, outcome: "failed", detail: `gh auth login exited ${code}`, manual: true };
+    const r = deps.sh(p.login.ghSetupGit, { timeoutMs: 60_000 });
+    if (!r.ok) return { provider, outcome: "failed", detail: `gh auth setup-git failed: ${r.out.split("\n")[0] ?? ""}`, manual: true };
+    return { provider, outcome: "ok", detail: "gh auth setup-git done" };
+  }
+
+  /**
+   * fx's two OAuth-redirect logins, from the Mac. fx runs inside with its browser off and stdin piped; its output is
+   * read for the authorize URL, which names the redirect fx expects on a loopback port. A listener on this Mac at
+   * that port catches the browser's redirect (a page says "signed in"), and the code goes to the login server inside:
+   * for grok, pasted to fx's prompt on stdin (fx's own listener on a random port cannot be published); for codex,
+   * replayed with `curl` on the container's loopback to Codex's listener on 1455, and pasted too in case fx asks.
+   * When the port is already bound on this Mac and it is one the container publishes (1455), the published port and
+   * relay-entry's forwarder deliver the redirect inside on their own, so there is no host listener and fx is left to
+   * finish; any other busy port is a refusal, with the by-hand steps. A timeout kills fx and prints the same.
+   */
+  function oauthLogin(p: ContainerPlan, provider: "codex" | "grok", o: { open: boolean; timeoutMs: number }): Promise<LoginResult> {
+    const words = p.login.fx(provider);
+    const published = deps.publishedPorts ?? LOGIN_CALLBACK_PORTS;
+    const pad = "        ";
+    console.log(`${provider.padEnd(7)} ${words.join(" ")}`);
+    return new Promise((resolve) => {
+      const child = (deps.spawn ?? defaultSpawn)(words);
+      let text = "";
+      let pending = "";
+      let redirect: LoginRedirect | undefined;
+      let server: Server | undefined;
+      let settled = false;
+      let handedOver = false;
+      const flush = () => {
+        if (pending.trim()) console.log(`${pad}fx  ${pending}`);
+        pending = "";
+      };
+      const finish = (r: Omit<LoginResult, "provider">) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        // close() alone keeps the browser's keep-alive connection, and the process with it
+        server?.close();
+        server?.closeAllConnections();
+        if (child.exitCode === null && child.signalCode === null) child.kill();
+        // the pipe to fx's stdin is this process's handle; open, it would keep relay running after fx is gone
+        child.stdin?.end();
+        flush();
+        resolve({ provider, ...r });
+      };
+      const timer = setTimeout(() => finish({ outcome: "failed", detail: `timed out after ${Math.round(o.timeoutMs / 1000)}s waiting for the browser login`, manual: true }), o.timeoutMs);
+      const onData = (chunk: Buffer | string) => {
+        const s = chunk.toString();
+        text += s;
+        pending += s;
+        const lines = pending.split("\n");
+        pending = lines.pop()!;
+        for (const l of lines) if (l.trim()) console.log(`${pad}fx  ${l}`);
+        if (!redirect) {
+          const r = parseLoginUrl(text);
+          if (r) {
+            redirect = r;
+            listen(r);
+          }
+        }
+      };
+      child.stdout?.on("data", onData);
+      child.stderr?.on("data", onData);
+      child.on("error", (e) => finish({ outcome: "failed", detail: `could not run ${words[0]}: ${e.message}`, manual: true }));
+      child.on("exit", (code, signal) => {
+        if (settled) return;
+        if (code === 0) return finish({ outcome: "ok", ...(redirect ? {} : { detail: "fx needed no browser" }) });
+        finish({ outcome: "failed", detail: `fx login ${provider} exited ${code ?? signal}${redirect ? "" : " before printing an authorize URL"}`, manual: true });
+      });
+
+      function listen(r: LoginRedirect): void {
+        const srv = createServer((req, res) => handle(r, req, res));
+        srv.once("error", (e: NodeJS.ErrnoException) => {
+          if (e.code === "EADDRINUSE" && published.includes(r.port)) {
+            console.log(`${pad}127.0.0.1:${r.port} is the container's published port: the browser's redirect reaches the login server inside through it; waiting for fx to finish`);
+            return openBrowser(r);
+          }
+          finish({ outcome: "failed", detail: `cannot listen on 127.0.0.1:${r.port} for the browser's redirect (${e.code === "EADDRINUSE" ? "the port is in use on this Mac" : e.message})`, manual: true });
+        });
+        srv.listen(r.port, "127.0.0.1", () => {
+          server = srv;
+          console.log(`${pad}listening on 127.0.0.1:${r.port} for the browser's redirect`);
+          openBrowser(r);
+        });
+      }
+      function openBrowser(r: LoginRedirect): void {
+        if (!o.open) return console.log(`${pad}open this URL on this Mac:\n${pad}${r.url}`);
+        const opener = deps.platform === "darwin" ? "open" : "xdg-open";
+        const res = deps.sh([opener, r.url]);
+        console.log(res.ok ? `${pad}opened ${r.url.split("?")[0]} in this Mac's browser; finish the sign-in there` : `${pad}could not open the browser (${res.out.split("\n")[0] ?? ""}); open this URL yourself:\n${pad}${r.url}`);
+      }
+      function handle(r: LoginRedirect, req: IncomingMessage, res: ServerResponse): void {
+        const url = req.url ?? "/";
+        if (!url.startsWith(r.path)) {
+          res.writeHead(404);
+          res.end();
+          return;
+        }
+        const html = { "content-type": "text/html; charset=utf-8" };
+        const cb = parseLoginCallback(url);
+        if (cb.error) {
+          const detail = `${cb.error}${cb.errorDescription ? `: ${cb.errorDescription}` : ""}`;
+          res.writeHead(200, html);
+          res.end(loginDonePage(provider, false, detail));
+          return finish({ outcome: "failed", detail: `the provider answered ${detail}`, manual: true });
+        }
+        if (!cb.code) {
+          res.writeHead(400, html);
+          res.end(loginDonePage(provider, false, "the redirect carried no code"));
+          return;
+        }
+        if (r.state && cb.state && cb.state !== r.state) {
+          res.writeHead(400, html);
+          res.end(loginDonePage(provider, false, "the state does not match this login"));
+          return finish({ outcome: "failed", detail: "the redirect's state does not match the one fx sent (another login in flight?)", manual: true });
+        }
+        res.writeHead(200, html);
+        res.end(loginDonePage(provider, true));
+        if (handedOver) return;
+        handedOver = true;
+        if (provider === "codex") {
+          const rr = deps.sh(p.login.replay(replayUrl(r, url)), { timeoutMs: 30_000 });
+          console.log(rr.ok ? `${pad}redirect received; replayed to the Codex listener inside (${r.host}:${r.port}) and the code pasted to fx` : `${pad}redirect received; the replay inside failed (${rr.out.split("\n")[0] ?? ""}); pasting the code to fx`);
+        } else console.log(`${pad}redirect received; pasting the code to fx`);
+        child.stdin?.write(`${cb.code}\n`);
+      }
+    });
+  }
 
   /** The container CLI, checked, and the plan for this machine (no site needed for the wrappers). */
   function needContainer(): { bin: string; plan: ContainerPlan } {
@@ -585,7 +815,9 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     const { steps, allKept } = containerLoginSteps(doctorText);
     if (allKept) return console.log(`logins      kept in the volume: ${steps.filter((s) => s.kept).map((s) => s.login).join(", ")} (relay doctor inside)`);
     console.log(intro);
-    for (const s of steps) console.log(`${indent}${s.cmd.padEnd(36)} ${s.kept ? "kept (already in the volume)" : s.why}`);
+    console.log(`${indent}${CONTAINER_LOGIN_COMMAND.padEnd(36)} ${CONTAINER_LOGIN_COMMAND_WHY}`);
+    console.log(`${indent}or by hand, inside, in this order:`);
+    for (const s of steps) console.log(`${indent}  ${s.cmd.padEnd(34)} ${s.kept ? "kept (already in the volume)" : s.why}`);
     if (doctorText === undefined) console.log(`${indent}(the logins already in the volume are kept; relay work container status says which)`);
   }
 
@@ -658,7 +890,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     console.log(service.content.replace(/^/gm, "    "));
     for (const w of service.load) console.log(`would run   ${w.join(" ")}`);
     console.log(`log file    ${service.logPath} (the container's output; inside: ${CONTAINER_NAME}:${CONTAINER_RELAY_HOME}/work.log)`);
-    printLogins("              ", now?.doctor, "then        log in inside, in this order:");
+    printLogins("              ", now?.doctor, "then        log in inside:");
     if (deps.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");
     if (!o.yes) return console.log(`\nre-run with --yes to ${mode === "update" ? "rebuild the image, recreate the container and restart the service" : "build the image, create the container and install the service"}`);
 
@@ -719,7 +951,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       log(`ran ${w.join(" ")}`);
     }
     console.log(`\n${CONTAINER_NAME} is running ${image} as worker ${workerName}.`);
-    printLogins("  ", after.doctor, "Log in inside, in this order:\n");
+    printLogins("  ", after.doctor, "Log in inside:\n");
     console.log(`\nThe logins land in the ${CONTAINER_VOLUME} volume, never on this Mac's home. Check with: relay work container status; the worker's log: relay work container logs -f`);
   }
 }

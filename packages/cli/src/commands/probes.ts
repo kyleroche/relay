@@ -157,7 +157,7 @@ export function containerCheck(r: ContainerReport): Check {
   if (!r.serviceRunning) return { status: "warn", name, detail: `${r.bin} installed, services not running; run: container system start` };
   if (!r.container.exists) return { status: "ok", name, detail: `installed and running; no ${CONTAINER_NAME} container yet (relay work --isolation container --install)` };
   if (!r.container.running) return { status: "warn", name, detail: `${CONTAINER_NAME} exists (${r.container.state ?? "stopped"}), not running; run: relay work container start` };
-  const lanes = r.lanes === undefined ? "lanes unknown (relay doctor inside gave no lanes line)" : r.lanes.length ? `serving ${r.lanes.join(", ")} inside` : "no lanes inside yet (log in: relay work container shell)";
+  const lanes = r.lanes === undefined ? "lanes unknown (relay doctor inside gave no lanes line)" : r.lanes.length ? `serving ${r.lanes.join(", ")} inside` : "no lanes inside yet (log in: relay work container login all)";
   return { status: "ok", name, detail: `${CONTAINER_NAME} running${r.container.image ? ` (${r.container.image})` : ""}; ${lanes}` };
 }
 
