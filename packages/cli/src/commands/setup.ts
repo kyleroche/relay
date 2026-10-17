@@ -85,7 +85,8 @@ export function registerSetup(program: Command): void {
         }
         for (const n of p.notes) console.log(`  note: ${n}`);
       }
-      console.log(`\nhook scripts: ${join(RELAY_ROOT, "packages", "cli", "hooks")}\nMCP entry:    ${join(RELAY_ROOT, "packages", "mcp", "bin", "relay-mcp.mjs")}\nnode:         ${ctx.node}`);
+      const mcpNote = siteCfg.site ? `memory MCP server: forwards to ${siteCfg.site} in site mode; local database otherwise` : "memory MCP server: local database (no site configured; it forwards to the site once relay setup --site <url> has run)";
+      console.log(`\nhook scripts: ${join(RELAY_ROOT, "packages", "cli", "hooks")}\nMCP entry:    ${join(RELAY_ROOT, "packages", "mcp", "bin", "relay-mcp.mjs")}\n              ${mcpNote}\nnode:         ${ctx.node}`);
       const major = Number(process.versions.node.split(".")[0]);
       if (major < 24) console.log(`note: hooks will run with Node ${process.versions.node}; relay pins Node 24. Run this through \`pnpm relay setup\` so the pinned binary is recorded instead.`);
       if (!pending) {
@@ -153,5 +154,5 @@ async function connectSite(o: SetupOpts): Promise<void> {
   } else log(`check: ${probe.detail}`);
   const paths = writeSiteConfig({ site, token: credential });
   log(`credential saved to ${paths.credentialsPath} (mode 0600, source: ${credential.source})`);
-  log(`site mode on: ${site} (${paths.configPath}); memory, feed, token, invite, task and webhook commands and the hooks now use the site. relay link still digests locally and uploads.`);
+  log(`site mode on: ${site} (${paths.configPath}); memory, feed, token, invite, task and webhook commands, the hooks and the stdio MCP server now use the site. relay link still digests locally and uploads.`);
 }

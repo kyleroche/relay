@@ -200,13 +200,23 @@ With a site configured, `openHarness()` hands every command a `RelayClient` over
 `relay webhook` and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay link` still
 hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
 `step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`; scope `projects:write`).
-`relay doctor` reports `mode`, `auth` (how the machine got its token, its name and expiry), `site` and `whoami`.
+`relay doctor` reports `mode`, `auth` (how the machine got its token, its name and expiry), `site`, `whoami` and `mcp`.
 Without a site nothing changes: the CLI opens PGlite or `DATABASE_URL`.
+
+The MCP server `relay setup` installed into the CLIs (`relay-mcp`, stdio) follows the same decision, so there is
+nothing to repoint: with a site configured it opens no database and forwards every message (`initialize`,
+`tools/list`, `tools/call`) to `<site>/mcp` with this machine's token, renewing the token before it lapses and once
+more if the site refuses it (`packages/mcp/src/bridge.ts`). The tool set, the descriptions and every answer are the
+site's, scope refusals and access hints included, so `relay_get_project` finds the projects registered on the site and
+a `relay_decide` from a session reaches the briefs the workers compile there. The server's first stderr line names its
+mode (`relay-mcp: site mode, forwarding to <site> as <token name>` or `relay-mcp: local mode, <db path>`), and the
+`mcp` line of `relay doctor` says which mode the installed entry will use and, in site mode, that one `tools/list`
+against the site answered.
 
 Not available in site mode (they need the database on the machine): `relay capture` (the session-end hook exits
 quietly; use `relay decide`), `relay decide --global`, `relay sql`, `relay init`, `relay onboard`, `relay models`,
-`relay project *`, `relay asset *`, and the stdio MCP server, which always serves the local database. They fail with
-one line saying so. `relay setup --no-site` returns to local mode.
+`relay project *` and `relay asset *`. They fail with one line saying so. `relay setup --no-site` returns to local
+mode, for the CLI, the hooks and the MCP server alike.
 
 ## Working with memory by hand
 

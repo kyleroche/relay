@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import {
   openHarness, loadConfig, ensureHome, openDb, migrate, currentVersion, seedRegistry, onboardModel, retrieveGuidance, assertOnboarded, NotOnboardedError, repo,
-  runFx, runClaude, recordLane, registerProject, digestProject, summarizeProject,
+  runFx, runClaude, recordLane, registerProject, digestProject, summarizeProject, defaultHookContext, hookPaths,
 } from "@relay/core";
 import type { FxProvider, ClaudeModel, FileConfig } from "@relay/core";
 import { registerAssetCommands } from "./commands/assets.ts";
@@ -22,8 +22,8 @@ import { registerTask } from "./commands/task.ts";
 import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
-import { openReady } from "./commands/_common.ts";
-import { containerCheck, containerReport, inContainer, lanesFromChecks, metersCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { openReady, RELAY_ROOT } from "./commands/_common.ts";
+import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
@@ -57,7 +57,7 @@ program
     const h = await openHarness(cfg, { local: true });
     try {
       log(`database: ${h.db.driver}${h.db.driver === "pglite" ? ` at ${cfg.dbFile}` : " via DATABASE_URL"}`);
-      if (cfg.site) log(`site mode: commands talk to ${cfg.site}; this local database serves relay link's digest cache and the stdio MCP server`);
+      if (cfg.site) log(`site mode: commands and the stdio MCP server talk to ${cfg.site}; this local database serves relay link's digest cache`);
       const v = await migrate(h.db, { log });
       log(`schema at v${v}`);
       await seedRegistry(h, log);
@@ -70,7 +70,7 @@ program
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, the container worker tier (macOS), whether the database or site is reachable, how this machine authenticates, and (site mode) which linked repos still lack the GitHub App")
+  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, the container worker tier (macOS), whether the database or site is reachable, how this machine authenticates, which mode the installed MCP server runs in, and (site mode) which linked repos still lack the GitHub App")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);
@@ -86,8 +86,10 @@ program
 
     const cfg = loadConfig();
     const siteMode = !!cfg.site && !!cfg.siteToken;
+    // the config after openReady() renewed the site token, so the mcp line probes with the token the bridge would send
+    let live = cfg;
     if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site}` });
-    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite, task and webhook commands and the hooks use it)` : "local: the database on this machine" });
+    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite, task and webhook commands, the hooks and the MCP server use it)` : "local: the database on this machine" });
     if (siteMode) {
       const t0 = Date.now();
       // Where the credential came from, never the credential: device flow, invite, pasted token, or RELAY_TOKEN.
@@ -96,6 +98,7 @@ program
       checks.push({ status: "ok", name: "auth", detail: `${sourceLabel}${cfg.siteTokenName ? ` as ${cfg.siteTokenName}` : ""}${cfg.siteTokenExpiresAt ? `, expires ${cfg.siteTokenExpiresAt}` : ", no expiry"}${renews}` });
       try {
         const h = await openReady();
+        live = h.cfg;
         try {
           const health = await h.client.health();
           checks.push({ status: health.ok ? "ok" : "fail", name: "site", detail: `${health.detail}, ${Date.now() - t0} ms` });
@@ -124,13 +127,15 @@ program
         await db.query("SELECT 1");
         const v = await currentVersion(db);
         const where = db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${cfg.dbFile}`;
-        checks.push({ status: v > 0 ? "ok" : siteMode ? "ok" : "warn", name: "database", detail: `${where}, schema v${v}${v > 0 || siteMode ? "" : " (run: relay init)"}, ${Date.now() - t0} ms${siteMode ? " (digest cache and stdio MCP only)" : ""}` });
+        checks.push({ status: v > 0 ? "ok" : siteMode ? "ok" : "warn", name: "database", detail: `${where}, schema v${v}${v > 0 || siteMode ? "" : " (run: relay init)"}, ${Date.now() - t0} ms${siteMode ? " (relay link's digest cache only)" : ""}` });
       } finally {
         await db.close();
       }
     } catch (e) {
       checks.push({ status: siteMode ? "warn" : "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
     }
+    // the stdio MCP server the CLIs start follows the same mode; in site mode, prove the site answers it
+    checks.push(await mcpCheck(live, { entry: hookPaths(defaultHookContext(RELAY_ROOT)).mcpBin }));
     checks.push({ status: cfg.gateway.apiKey ? "ok" : "warn", name: "gateway", detail: cfg.gateway.apiKey ? "AI_GATEWAY_API_KEY set (embeddings on)" : "AI_GATEWAY_API_KEY unset; retrieval uses full-text only" });
     checks.push(metersCheck(cfg.home));
 
