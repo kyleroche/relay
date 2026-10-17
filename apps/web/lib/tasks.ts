@@ -1,5 +1,6 @@
 /** Shared bits of the task pages: state copy and tones, the page path, the prompt that drives a review from chat. */
 import type { repo, TaskState, TaskView } from "@relay/core";
+import { taskTitle as coreTaskTitle } from "@relay/core/tasks/station.ts";
 import type { StatusTone } from "@/components/ui/status-badge";
 import { SITE_URL } from "./site.ts";
 
@@ -35,13 +36,5 @@ export const REVIEW_AGENT_PROMPT = `Connect to the relay MCP server at ${SITE_UR
 
 export const taskPagePath = (t: Pick<TaskView, "repo" | "issue">): string => `/tasks/${t.repo}/${t.issue}`;
 
-/** The issue title, from the rows that carry it (issue.opened's summary, task.created's "<id>: <title>"), else "#n". */
-export function taskTitle(task: Pick<TaskView, "id" | "issue">, events: repo.EventRow[]): string {
-  const opened = events.find((e) => e.kind === "issue.opened" && e.summary);
-  if (opened) return opened.summary;
-  const created = events.find((e) => e.kind === "task.created" && e.summary.startsWith(`${task.id}: `));
-  if (created) return created.summary.slice(task.id.length + 2);
-  const pr = events.find((e) => e.kind === "pr.opened" && e.summary);
-  if (pr) return pr.summary.replace(/\s*\(#\d+\)\s*$/, "");
-  return `#${task.issue}`;
-}
+/** The issue title: the task row's own, else the rows that carry it (issue.opened's summary, task.created's "<id>: <title>"), else "#n". The one in `@relay/core` (tasks/station.ts). */
+export const taskTitle = (task: Pick<TaskView, "id" | "issue"> & { title?: string | null }, events: repo.EventRow[]): string => coreTaskTitle(task, events);

@@ -81,7 +81,8 @@ async function recordLabelledTask(e: NewEvent): Promise<void> {
     const db = await getDb();
     const project = (await repo.listProjects(db)).find((p) => p.repo === e.repo);
     if (!project) return;
-    await repo.createTask(db, { project: project.slug, repo: e.repo, issue: e.issue, createdBy: e.actor, lane: e.lane });
+    const title = typeof e.payload?.title === "string" ? e.payload.title : null;
+    await repo.createTask(db, { project: project.slug, repo: e.repo, issue: e.issue, createdBy: e.actor, lane: e.lane, title });
   } catch (err) {
     console.error(`[relay] task row for ${e.repo}#${e.issue}: ${err instanceof Error ? err.message : String(err)}`);
   }
