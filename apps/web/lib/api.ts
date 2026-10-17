@@ -88,6 +88,17 @@ export function rateHeaders(state: RateState): Record<string, string> {
   };
 }
 
+/**
+ * A file path as a repository records it: relative, forward slashes, no `.` or `..` segment, no empty segment, no
+ * NUL. Brackets, parentheses, `@`, `+` and dots inside a name are fine (Next.js routes such as `[[...path]]`).
+ */
+export function isRepoRelativePath(path: string): boolean {
+  if (!path || path.length > 4096 || path.includes("\0") || path.includes("\\")) return false;
+  if (path.startsWith("/")) return false;
+  const parts = path.split("/");
+  return parts.every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
 export function problem(
   status: number,
   title: string,

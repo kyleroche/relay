@@ -1,5 +1,5 @@
 import { repo } from "@relay/core";
-import { api, json, problem } from "@/lib/api";
+import { api, isRepoRelativePath, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { int, needsDb, readJson, str } from "@/lib/integrations";
 import { recordUploadedUsage, type UsageItem } from "@/lib/project-uploads";
@@ -33,7 +33,7 @@ export const PUT = api<Ctx>(
       const path = str(f.path);
       const sha = str(f.sha256);
       const size = int(f.size) ?? 0;
-      if (!path || !sha || !/^[0-9a-f]{64}$/.test(sha) || path.startsWith("/") || path.includes("..")) return problem(400, "Bad Request", `Bad file entry: ${JSON.stringify(f).slice(0, 120)}.`, instance, { parameter: "files" });
+      if (!path || !sha || !/^[0-9a-f]{64}$/.test(sha) || !isRepoRelativePath(path)) return problem(400, "Bad Request", `Bad file entry: ${JSON.stringify(f).slice(0, 120)}.`, instance, { parameter: "files" });
       const summary = str(f.summary);
       files.push({ path, sha256: sha, size, ...(summary ? { summary, summary_sha: str(f.summary_sha) ?? sha, tokens: int(f.tokens) ?? Math.ceil(summary.length / 4) } : {}) });
     }
