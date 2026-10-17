@@ -105,7 +105,7 @@ function Configured({ resolved, installations, installError }: { resolved: Resol
           </Link>
           {resolved.source === "settings" && (
             <form action={forgetGitHubAppAction}>
-              <Button type="submit" variant="outline" size="xs">
+              <Button type="submit" variant="ghost" size="sm" className="hover:text-destructive">
                 Remove the stored app
               </Button>
             </form>

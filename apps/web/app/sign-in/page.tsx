@@ -58,7 +58,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
 
       {error && <Alert tone="bad">{error}</Alert>}
 
-      <Button asChild size="lg" className="w-full">
+      <Button asChild className="w-full">
         <a href={`/auth/github/start?next=${encodeURIComponent(next)}`}>
           <GitHubMark className="size-4" />
           Continue with GitHub

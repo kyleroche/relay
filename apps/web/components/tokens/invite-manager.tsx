@@ -179,7 +179,7 @@ export function InviteList({ invites, canWrite, now }: { invites: InviteView[]; 
         </p>
       </div>
       {!i.spent && (
-        <Button size="sm" variant="ghost" onClick={() => revoke(i.id)} disabled={!canWrite || pending} aria-label={`Revoke invite for ${i.name}`}>
+        <Button size="sm" variant="ghost" className="hover:text-destructive" onClick={() => revoke(i.id)} disabled={!canWrite || pending} aria-label={`Revoke invite for ${i.name}`}>
           <Trash2 className="size-3.5" /> Revoke
         </Button>
       )}

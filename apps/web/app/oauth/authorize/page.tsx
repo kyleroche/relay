@@ -89,10 +89,10 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
         <input type="hidden" name="code_challenge" value={request.code_challenge} />
         <input type="hidden" name="code_challenge_method" value={request.code_challenge_method} />
         {request.resource ? <input type="hidden" name="resource" value={request.resource} /> : null}
-        <Button type="submit" name="decision" value="approve" size="lg" className="flex-1">
+        <Button type="submit" name="decision" value="approve" className="flex-1">
           Approve
         </Button>
-        <Button type="submit" name="decision" value="deny" size="lg" variant="outline" className="flex-1">
+        <Button type="submit" name="decision" value="deny" variant="outline" className="flex-1">
           Deny
         </Button>
       </form>

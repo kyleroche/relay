@@ -72,7 +72,7 @@ export function ClientList({ clients, canWrite, now }: { clients: ClientView[]; 
                     {parts[0]} · registered <RelTime iso={c.created_at} now={now} /> · {parts.slice(1).join(" · ")}
                   </p>
                 </div>
-                <Button size="sm" variant="ghost" onClick={() => remove(c.client_id)} disabled={!canWrite || pending || inUse} title={inUse ? "Revoke its tokens first" : undefined} aria-label={`Remove client ${c.name}`}>
+                <Button size="sm" variant="ghost" className="hover:text-destructive" onClick={() => remove(c.client_id)} disabled={!canWrite || pending || inUse} title={inUse ? "Revoke its tokens first" : undefined} aria-label={`Remove client ${c.name}`}>
                   <Trash2 className="size-3.5" /> Remove
                 </Button>
               </li>

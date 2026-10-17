@@ -95,7 +95,7 @@ export function GrantList({ tokens, canWrite, now }: { tokens: TokenRowView[]; c
         <p className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">{meta(t)}</p>
       </div>
       {!t.revoked && (
-        <Button size="sm" variant="ghost" onClick={() => revoke(t.id)} disabled={!canWrite || pending} aria-label={`Revoke ${t.name}`}>
+        <Button size="sm" variant="ghost" className="hover:text-destructive" onClick={() => revoke(t.id)} disabled={!canWrite || pending} aria-label={`Revoke ${t.name}`}>
           <Trash2 className="size-3.5" /> Revoke
         </Button>
       )}

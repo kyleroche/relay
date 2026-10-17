@@ -31,6 +31,7 @@ The header is one row at `lg` and up (brand · nav · meters · avatar) and two 
 - Chart series (validated adjacent-pair palette): blue `#2a78d6`/`#3987e5`, orange `#eb6834`/`#d95926`, aqua `#1baf7a`/`#199e70`.
 - Type: Geist Sans for prose, Geist Mono for ids, costs, tokens, timestamps, commands. Tabular figures only in columns.
 - Radius 6px. Spacing: feed rows 32px tall; detail pages use 24px gaps.
+- Buttons: the primary decision is `default` (Approve, Create, Send); the opposing decision is `outline` (Deny, Reject, Request changes); a row-level revoke or remove is `ghost` with `hover:text-destructive`; nothing else is red. Irreversible actions (merge, asset approve) take two steps: the first click or key arms the button and changes its label, the second confirms, blur or Escape disarms. One size per context: `sm` in rows and section-heading actions, `default` on detail pages and in sheets; `lg` is unused.
 
 ## Rationale
 
