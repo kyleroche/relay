@@ -11,7 +11,7 @@ import type { TaskView } from "../db/tasks.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
-import type { RelayClient, WhoAmI } from "./types.ts";
+import type { GitHubStatus, RelayClient, WhoAmI } from "./types.ts";
 
 export type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>;
 
@@ -145,6 +145,15 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
     },
     async putSummary(slug, summary, tokens, o = {}) {
       await rest("PUT", `/projects/${encodeURIComponent(slug)}/summary`, { summary, tokens, usage: o.usage ?? [] });
+    },
+    async githubStatus(slug) {
+      try {
+        const r = await rest<GitHubStatus>("GET", `/projects/${encodeURIComponent(slug)}/github`);
+        return r.body;
+      } catch (e) {
+        if (e instanceof RelayHttpError && e.status === 404) return undefined;
+        throw e;
+      }
     },
 
     async recall(q) {

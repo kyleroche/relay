@@ -22,7 +22,12 @@ export interface LocalClientOptions {
   onClose?: () => Promise<void>;
   /** The issuer invites are minted for (only used in the invite's feed events). */
   issuer?: string;
+  /** Where `githubStatus` points for installing the App; a local store has no App, so this is the site's setup page when one is configured. */
+  installUrl?: string;
 }
+
+/** GitHub's own installations page: the only install link a store without an App can offer. */
+export const GITHUB_INSTALLATIONS_URL = "https://github.com/settings/installations";
 
 export const EXTERNAL_KIND = /^external\.[a-z0-9_.-]+$/i;
 
@@ -69,6 +74,16 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
     async putSummary(slug, summary, tokens, o = {}) {
       await repo.setProjectSummary(db, slug, summary, tokens);
       await recordUsage(db, slug, o.usage);
+    },
+    async githubStatus(slug) {
+      const p = await repo.getProject(db, slug);
+      if (!p) return undefined;
+      const stats = p.repo ? await repo.githubDeliveryStats(db, p.repo) : { count: 0, last_delivery_at: null };
+      return {
+        repo: p.repo ?? null,
+        app: { configured: false, slug: null, installed: false, installation_id: null, install_url: opts.installUrl ?? GITHUB_INSTALLATIONS_URL },
+        webhook: { org_or_repo_hook_seen: stats.count > 0, last_delivery_at: stats.last_delivery_at },
+      };
     },
 
     async recall(q) {

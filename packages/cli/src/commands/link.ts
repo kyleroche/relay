@@ -4,6 +4,8 @@
  * project summary, renders relay.md from that summary, and installs the caller workflows and the lane labels.
  * Idempotent: a second run with nothing changed makes zero model calls. --refresh re-digests stale files and rewrites
  * the summary and the workflows; --no-digest skips the model steps; --force overwrites a locally edited owned section.
+ * In site mode the last stage, `events`, asks the site whether its GitHub App is installed on the repo (otherwise the
+ * repo's issues, labels, PRs and previews never arrive) and prints the install link; --no-events skips it.
  */
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
@@ -11,6 +13,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { digestProject, emptyUsage, formatUsage, installOwnedSection, invalidateBriefCache, renderRulesFile, repo, registerProject, summarizeProject } from "@relay/core";
 import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady, RELAY_ROOT } from "./_common.ts";
+import { eventsCheck, eventsLeft, formatStage, localEventsCheck } from "./events-check.ts";
 
 const TEMPLATES = join(RELAY_ROOT, "packages", "cli", "templates");
 const WORKFLOWS = ["relay-caller.yml", "relay-review.yml", "relay-cloud.yml"] as const;
@@ -32,6 +35,7 @@ interface LinkOptions {
   maxFiles: string;
   labels: boolean;
   workflows: boolean;
+  events: boolean;
   cwd?: string;
 }
 
@@ -47,6 +51,7 @@ export function registerLink(program: Command): void {
     .option("--max-files <n>", "max files to digest in this run", "400")
     .option("--no-labels", "skip gh label creation")
     .option("--no-workflows", "skip the caller workflows")
+    .option("--no-events", "skip the check that GitHub events for this repo reach the site (the GitHub App installation)")
     .option("--cwd <path>")
     .action(async (o: LinkOptions) => {
       const cwd = o.cwd ?? process.cwd();
@@ -166,7 +171,28 @@ export function registerLink(program: Command): void {
           if (project?.summary) await site.putSummary(slug, project.summary, project.summary_tokens ?? 0);
           log(`site: ${site.site} has ${slug} with ${up.files} file digests${project?.summary ? " and the summary" : ""}${uploads.length ? `, ${uploads.length} usage rows` : ""}`);
         }
+
+        // 9. events: do GitHub's deliveries for this repo reach the store? Advice only; never fails the link. After the
+        // site upload, so a first link finds its project on the site.
+        let left: string | undefined;
+        if (o.events) {
+          if (h.mode !== "site") log(formatStage(localEventsCheck()));
+          else {
+            const site = h.client.site!;
+            try {
+              const status = await h.client.githubStatus(slug);
+              if (!status) log(formatStage({ status: "warn", name: "events", detail: `${site} does not know project ${slug} yet; re-run relay link` }));
+              else {
+                log(formatStage(eventsCheck(status, site)));
+                left = eventsLeft(status, site);
+              }
+            } catch (e) {
+              log(formatStage({ status: "warn", name: "events", detail: `could not check GitHub events on ${site}: ${(e instanceof Error ? e.message : String(e)).slice(0, 160)}` }));
+            }
+          }
+        }
         log(`cost: ${formatUsage(usage)}`);
+        if (left) log(`left: ${left}`);
         if (failed) process.exitCode = 1;
       } finally {
         await h.close();

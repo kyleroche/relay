@@ -71,7 +71,7 @@ export async function openHarness(cfg: HarnessConfig = loadConfig(), opts: OpenH
   const siteMode = !!cfg.site && !!cfg.siteToken;
   const db = siteMode && !opts.local ? siteModeDb(cfg.site!) : await openDb(cfg.databaseUrl ? { url: cfg.databaseUrl } : { file: cfg.dbFile });
   const ledger = new Ledger(db);
-  const client: RelayClient = siteMode ? httpClient({ site: cfg.site!, token: cfg.siteToken!, actor }) : localClient(db, { actor, embed: briefEmbedder({ cfg, ledger }) });
+  const client: RelayClient = siteMode ? httpClient({ site: cfg.site!, token: cfg.siteToken!, actor }) : localClient(db, { actor, embed: briefEmbedder({ cfg, ledger }), ...(cfg.site ? { installUrl: `${cfg.site}/setup/github` } : {}) });
   return {
     cfg,
     db,

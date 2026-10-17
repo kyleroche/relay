@@ -116,7 +116,11 @@ source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`
    rejection fails the stage (the old summary is kept) and link exits non-zero;
 5. render `relay.md` from the real summary (rewritten whenever its content changed);
 6. caller workflows and GitHub labels (`--no-workflows`, `--no-labels`);
-7. one cost line read back from the ledger: calls, tokens in/out, cost equivalent.
+7. in site mode, the upload of the project, its digests and the summary, then the `events` stage: is the site's
+   GitHub App installed on this repo (`GET /api/v1/projects/{slug}/github`)? `ok` with the installation id, or `warn`
+   with the install link (and a closing `left:` line naming it as the one thing left to do); without a site the line
+   says GitHub events are not ingested locally. Advice only, never a failure; `--no-events` skips it;
+8. one cost line read back from the ledger: calls, tokens in/out, cost equivalent.
 
 `--no-digest` skips steps 3 and 4. A second run with nothing changed makes zero model calls. The utility calls run
 `claude -p` with no tools, no skills, no instruction files or auto-memory, in a scratch directory
@@ -195,7 +199,7 @@ one line saying so. `relay setup --no-site` returns to local mode.
 pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
 pnpm relay setup --site <url> [--invite <code> | --token <t>] | --no-site   # site mode: device flow (approve the code at /activate), invite, or a pasted token
 pnpm relay invite create --for <name> --scopes a,b [--expires 24h] [--uses 1]   # one-time code another machine redeems with --invite
-pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels
+pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400] [--no-events]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels, GitHub App check
 pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
 pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now
 pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]

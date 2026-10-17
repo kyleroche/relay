@@ -129,12 +129,22 @@ stored app on `/setup/github` and run the manifest flow again; then revoke the o
 
 Without an app, `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` (a fine-grained personal token) still works as before.
 
+**What `relay link` checks.** The App is the path a linked repo's events take to the site, so in site mode `relay link`
+ends with an `events` stage that asks the site (`GET /api/v1/projects/{slug}/github`) whether the App is installed on
+the repo. Installed: `ok events GitHub App installed on <repo> (installation <id>)`. Not installed: a `warn` line with
+the App's install link (one install covers every repo you pick) and a final `left:` line naming it as the one thing
+left to do; until then the repo's issues, labels, PRs and previews never reach the site. No App configured at all: the
+line points the operator at `/setup/github`. `relay doctor` repeats the warning for every linked project still missing
+the App (five lines, then `+N more`). The check is advice: it never fails the link, and `--no-events` skips it.
+
 ## 5. GitHub webhook (organization level)
 
 With the GitHub App installed you need no separate webhook: the app delivers the same events to
 `https://<site>/api/webhooks/github`, plus `installation` and `installation_repositories`, which become
-`project.github_connected` rows (and register a project when the repository holds a `relay.md`). Keep an organization
-webhook only for repositories the app is not installed on. Organization → Settings → Webhooks → Add webhook:
+`project.github_connected` rows (and register a project when the repository holds a `relay.md`). The organization
+webhook is the fallback for repositories the app is not installed on; `relay link` does not check for it (the
+`webhook` object of `GET /api/v1/projects/{slug}/github` only reports whether any GitHub delivery for the repo has
+arrived and when the last one did). Organization → Settings → Webhooks → Add webhook:
 
 - Payload URL: `https://<RELAY_PUBLIC_URL>/api/webhooks/github`
 - Content type: `application/json`
@@ -218,7 +228,7 @@ valid; a checkout records its `packages/cli/hooks` and `packages/mcp/bin` paths 
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview
 - [ ] Variables from `.env.example` set, including the four sign-in ones
 - [ ] GitHub OAuth app created with callback `https://<site>/auth/github/callback`; your login in `RELAY_ALLOWED_USERS`; signing in works
-- [ ] GitHub App configured (environment, or `/setup/github`) and installed on the managed repositories; `/setup/github` lists the installation
+- [ ] GitHub App configured (environment, or `/setup/github`) and installed on the managed repositories; `/setup/github` lists the installation and `relay link` in each repo prints `ok events`
 - [ ] `relay setup --site https://<site>` on a laptop prints a code, `/activate` approves it, `relay doctor` shows the token
 - [ ] GitHub org webhook created, recent deliveries return 200
 - [ ] Vercel webhook created for the projects that deploy previews

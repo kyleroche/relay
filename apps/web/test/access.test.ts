@@ -81,6 +81,10 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/api/v1/access/RLAY-4F7Q/approve", { hasBearer: false, publicRead: false, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/invites", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/whoami", { hasBearer: true, publicRead: false })).toBe("public");
+    // the GitHub status of a project: a bearer (feed:read or projects:write, checked by the route) or the session
+    expect(classifyRoute("/api/v1/projects/relay/github", { hasBearer: true, publicRead: false })).toBe("public");
+    expect(classifyRoute("/api/v1/projects/relay/github", anon)).toBe("session");
+    expect(classifyRoute("/api/v1/projects/relay/github", { hasBearer: false, publicRead: true })).toBe("public");
   });
 
   it("honours RELAY_PUBLIC_READ for anonymous GET reads only", () => {

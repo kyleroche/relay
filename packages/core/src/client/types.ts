@@ -119,6 +119,30 @@ export interface SiteHealth {
   detail: string;
 }
 
+/**
+ * Will GitHub events for a project's repository reach the backing store? `GET /api/v1/projects/{slug}/github` and
+ * `RelayClient.githubStatus`. `app.installed` is the GitHub App's installation discovery for the repo (false when no
+ * app is configured); `webhook` counts the GitHub deliveries already seen for the repo (an organization or repository
+ * webhook, or the App's own) and is omitted when the store cannot say.
+ */
+export interface GitHubStatus {
+  repo: string | null;
+  app: {
+    configured: boolean;
+    slug: string | null;
+    installed: boolean;
+    installation_id: number | null;
+    /** Where to install the App; the site's /setup/github when no App is configured yet. */
+    install_url: string;
+    /** Why the installation could not be checked (bad key, GitHub down); absent when the answer is reliable. */
+    error?: string;
+  };
+  webhook?: {
+    org_or_repo_hook_seen: boolean;
+    last_delivery_at: string | null;
+  };
+}
+
 /** `relay invite create`: who it is for, what it grants, how long it lasts, how many times it may be redeemed. */
 export interface InviteInput {
   name: string;
@@ -156,6 +180,8 @@ export interface RelayClient {
   registerProject(p: ProjectUpsert): Promise<void>;
   putDigests(slug: string, files: DigestUpload[], opts?: { prune?: boolean; usage?: UsageUpload[] }): Promise<{ files: number }>;
   putSummary(slug: string, summary: string, tokens: number, opts?: { usage?: UsageUpload[] }): Promise<void>;
+  /** Whether GitHub events for the project's repo reach the store; undefined when no such project. */
+  githubStatus(slug: string): Promise<GitHubStatus | undefined>;
 
   // memory
   recall(q: RecallQuery): Promise<RecallResult>;
