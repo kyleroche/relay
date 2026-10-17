@@ -101,13 +101,22 @@ State the facts plainly:
 - **The lane still runs as the worker's OS user.** The sandbox denies the credential paths above, but any other file
   that user can read, a fooled lane can read; `cleanEnv` strips the API keys and the worker's `RELAY_TOKEN`,
   `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is deleted after
-  the job. The next tier is a dedicated OS user or an Apple `container` for the worker (planned as `relay work
-  --isolation container`; not built yet).
-- **A dedicated OS user or a container for `relay work` is the recommended setup** until that exists. Create a user
-  that holds the vendor logins and the `gh` login and nothing else (no SSH keys, no sudo, no browser profile, no access
-  to your home directory) and run the worker service as that user, or run the worker in a container whose only
-  credentials are those logins. A worker on your daily-use account works and is how `relay setup` gets you started;
-  with the sandbox on it is acceptable, without it it should be temporary.
+  the job. The next tier is the container worker below.
+- **`relay work --isolation container` is the recommended setup on a Mac** (docs/WORKERS.md, "Isolation"). The
+  whole worker runs in one persistent Linux VM made with Apple's `container` CLI: the vendor and `gh` logins are
+  created inside it and live in its volume, nothing from the Mac's home is mounted, and the lane's shell cannot see
+  the host. The Claude lane's Bash still runs in Claude Code's sandbox, nested in the VM, when bubblewrap can start
+  there (the container is created with the runtime's `/proc` masks off for that reason; verified on `container`
+  1.5.0 with Anthropic's sandbox runtime); when it cannot, the lane runs with the allowlist alone and the worker says
+  so with the label `sandbox:container`, never `sandbox:off`. The worker registers as `<host>-container` with
+  `isolation:container`, so the workers page shows which machine is a container. What it does not change: the lane
+  still pushes as the `gh` account inside, so branch protection stays required; the logins inside are real logins,
+  destroyed only by deleting the volume (`relay work container rm --volume`); and the container's network is the
+  Mac's, limited only by the nested sandbox's allowlist for the Claude lane.
+- **A dedicated OS user is the alternative** where `container` is not available. Create a user that holds the vendor
+  logins and the `gh` login and nothing else (no SSH keys, no sudo, no browser profile, no access to your home
+  directory) and run the worker service as that user. A worker on your daily-use account works and is how `relay
+  setup` gets you started; with the sandbox on it is acceptable, without it it should be temporary.
 - **Linux prerequisites.** `bubblewrap` and `socat` must be on PATH (`sudo apt install bubblewrap socat`, or `dnf`);
   `relay doctor` has a `sandbox` line that says so. macOS needs nothing extra.
 - **Branch protection on the default branch is required.** The worker pushes with the operator's `gh` login; only the

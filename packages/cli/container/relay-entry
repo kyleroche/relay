@@ -1,0 +1,11 @@
+#!/bin/sh
+# Entry point of the relay worker image. The container starts as root only to hand the volume at /home/relay to the
+# `relay` user (a fresh volume is an empty ext4 owned by root); then it drops to that user for whatever it was asked
+# to run: `relay work` by default, `bash` for `relay work container shell`, `relay setup --site` at install.
+set -eu
+home=/home/relay
+uid="$(id -u relay)"
+gid="$(id -g relay)"
+if [ "$(stat -c %u "$home")" != "$uid" ]; then chown "$uid:$gid" "$home"; fi
+[ -d "$home/.harness" ] || install -d -o "$uid" -g "$gid" "$home/.harness"
+exec setpriv --reuid="$uid" --regid="$gid" --init-groups env HOME="$home" USER=relay LOGNAME=relay "$@"

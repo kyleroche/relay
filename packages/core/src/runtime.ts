@@ -4,7 +4,8 @@
  *   checkout  packages/core/src, packages/cli/src/main.ts (run through the repo's tsx), packages/cli/hooks/*.mjs,
  *             packages/mcp/bin/relay-mcp.mjs, packages/cli/templates, packages/core/src/db/migrations
  *   package   the published `@kyleroche/relay`: dist/relay.js bundles core, mcp and the CLI; beside it sit
- *             dist/hooks/*.mjs, dist/relay-mcp.js, dist/migrations/*.sql, and templates/ at the package root
+ *             dist/hooks/*.mjs, dist/relay-mcp.js, dist/migrations/*.sql, dist/container/ (the worker image's
+ *             Dockerfile and entry script), and templates/ at the package root
  *
  * Anything that records a path to a relay file (the hook installers, the template copier, the migration loader)
  * asks here instead of counting `..` from its own location, because in the bundle every module shares one
@@ -33,6 +34,8 @@ export interface RuntimePaths {
   /** The caller workflows `relay link` copies into a repo. */
   templatesDir: string;
   migrationsDir: string;
+  /** The worker image's build context: Dockerfile and relay-entry (`relay work --isolation container`). */
+  containerDir: string;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -52,6 +55,7 @@ function packageAt(root: string): RuntimePaths {
     mcpEntry: join(dist, "relay-mcp.js"),
     templatesDir: join(root, "templates"),
     migrationsDir: join(dist, "migrations"),
+    containerDir: join(dist, "container"),
   };
 }
 
@@ -69,6 +73,7 @@ function checkoutAt(root: string): RuntimePaths {
     mcpEntry: join(root, "packages", "mcp", "bin", "relay-mcp.mjs"),
     templatesDir: join(root, "packages", "cli", "templates"),
     migrationsDir: join(root, "packages", "core", "src", "db", "migrations"),
+    containerDir: join(root, "packages", "cli", "container"),
   };
 }
 

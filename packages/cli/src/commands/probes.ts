@@ -4,7 +4,7 @@
  */
 import { execFile } from "node:child_process";
 import { join } from "node:path";
-import { fmtMeterReadings, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites } from "@relay/core";
+import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState } from "@relay/core";
 import { onPath } from "./_common.ts";
 
 export type Status = "ok" | "warn" | "fail";
@@ -88,12 +88,77 @@ export async function probeTools(): Promise<Check[]> {
 }
 
 /**
- * Can Claude Code sandbox the Claude lane's Bash here? macOS has Seatbelt built in; Linux needs bubblewrap and socat
- * on PATH (`relay work` fails Claude jobs rather than run them unsandboxed, docs/WORKERS.md).
+ * Can bubblewrap start here? Having `bwrap` on PATH is not enough: a kernel without unprivileged user namespaces, or
+ * a container runtime whose masks over /proc forbid a nested procfs mount, make it fail at run time. This is the
+ * smallest invocation Claude Code's sandbox needs (a user, pid and mount namespace with /proc mounted inside).
  */
-export function sandboxCheck(platform: NodeJS.Platform = process.platform): Check {
+export async function bwrapProbe(): Promise<{ ok: boolean; detail: string }> {
+  const r = await run("bwrap", ["--unshare-all", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "true"], 10_000);
+  if (r.code === 0) return { ok: true, detail: "bubblewrap starts" };
+  const line = (r.stderr || r.stdout).trim().split("\n")[0] ?? "";
+  return { ok: false, detail: `bubblewrap cannot start${line ? `: ${line}` : ""}` };
+}
+
+/** True inside the relay worker container (the image sets RELAY_ISOLATION; docs/WORKERS.md, "Isolation"). */
+export const inContainer = (): boolean => process.env.RELAY_ISOLATION === "container";
+
+/**
+ * Can Claude Code sandbox the Claude lane's Bash here? macOS has Seatbelt built in; Linux needs bubblewrap and socat
+ * on PATH and a kernel that lets bubblewrap start (`relay work` fails Claude jobs rather than run them unsandboxed,
+ * docs/WORKERS.md; inside the relay container it runs them with the allowlist alone and says `sandbox:container`).
+ */
+export async function sandboxCheck(platform: NodeJS.Platform = process.platform): Promise<Check> {
   const r = sandboxPrerequisites(platform, (bin) => !!onPath(bin));
-  return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
+  if (!r.ok || platform !== "linux") return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
+  const probe = await bwrapProbe();
+  if (probe.ok) return { status: "ok", name: "sandbox", detail: r.detail };
+  const fix = inContainer()
+    ? "the container is the boundary: the Claude lane runs with the allowlist alone, advertised as sandbox:container (recreate the container with `relay work --isolation container --install` to get the runtime flags it needs)"
+    : "Claude jobs fail here (relay work never runs them unsandboxed); the kernel must allow unprivileged user namespaces";
+  return { status: "warn", name: "sandbox", detail: `bubblewrap and socat on PATH but ${probe.detail}; ${fix}` };
+}
+
+/** What `relay doctor` on a Mac reports about the container tier (docs/WORKERS.md, "Isolation"). */
+export interface ContainerReport {
+  bin?: string;
+  /** `container system status` says the services run. */
+  serviceRunning: boolean;
+  container: ContainerState;
+  /** The lanes `relay doctor` inside would serve; undefined when the container is not running or doctor gave no lanes line. */
+  lanes?: string[];
+  /** `relay doctor` inside, verbatim, for `relay work container status`. */
+  doctor?: string;
+}
+
+export async function containerReport(opts: { withDoctor?: boolean } = {}): Promise<ContainerReport> {
+  const bin = onPath("container");
+  const out: ContainerReport = { serviceRunning: false, container: { exists: false, running: false } };
+  if (!bin) return out;
+  out.bin = bin;
+  const status = await run(bin, ["system", "status"]);
+  out.serviceRunning = status.code === 0 && /^status\s+running/m.test(status.stdout);
+  if (!out.serviceRunning) return out;
+  const list = await run(bin, ["list", "--all", "--format", "json"]);
+  if (list.code === 0) out.container = containerStateFrom(list.stdout, CONTAINER_NAME);
+  if (out.container.running && opts.withDoctor !== false) {
+    // `relay doctor` inside exits 1 while a login is missing; its output is still the report
+    const d = await run(bin, ["exec", "--user", CONTAINER_USER, CONTAINER_NAME, "relay", "doctor"], 120_000);
+    out.doctor = (d.stdout + (d.stderr ? `\n${d.stderr}` : "")).trim();
+    const lanes = lanesFromDoctorOutput(d.stdout);
+    if (lanes) out.lanes = lanes;
+  }
+  return out;
+}
+
+/** The one `container` line of `relay doctor` on the host. */
+export function containerCheck(r: ContainerReport): Check {
+  const name = "container";
+  if (!r.bin) return { status: "warn", name, detail: "Apple's container CLI not on PATH; the container worker tier needs it (https://github.com/apple/container/releases)" };
+  if (!r.serviceRunning) return { status: "warn", name, detail: `${r.bin} installed, services not running; run: container system start` };
+  if (!r.container.exists) return { status: "ok", name, detail: `installed and running; no ${CONTAINER_NAME} container yet (relay work --isolation container --install)` };
+  if (!r.container.running) return { status: "warn", name, detail: `${CONTAINER_NAME} exists (${r.container.state ?? "stopped"}), not running; run: relay work container start` };
+  const lanes = r.lanes === undefined ? "lanes unknown (relay doctor inside gave no lanes line)" : r.lanes.length ? `serving ${r.lanes.join(", ")} inside` : "no lanes inside yet (log in: relay work container shell)";
+  return { status: "ok", name, detail: `${CONTAINER_NAME} running${r.container.image ? ` (${r.container.image})` : ""}; ${lanes}` };
 }
 
 /** "4m", "3h", "2d": the age of a reading for the doctor line. */

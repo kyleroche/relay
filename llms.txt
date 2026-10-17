@@ -20,7 +20,7 @@ Zero-browser path: an operator runs `relay invite create --for <you> --scopes â€
 
 ## Guides
 
-- [Workers](docs/WORKERS.md): how a machine becomes a worker with `relay work`: lanes from logins, the claim and lease protocol, what a job does, the service files, cloud lanes
+- [Workers](docs/WORKERS.md): how a machine becomes a worker with `relay work`: lanes from logins, the claim and lease protocol, what a job does, the isolation tiers (Claude's sandbox on the host, the whole worker in an Apple `container` with `--isolation container`, a separate machine), the service files, cloud lanes
 - [Runners](docs/RUNNERS.md): advanced and optional: self-hosted GitHub Actions runners, and the cloud lanes' vendor setup and limits
 - [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob, the GitHub App (environment or one-click manifest flow)
 - [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, sign-in, token lifetimes and revocation, what the consent page shows, what is never allowed
