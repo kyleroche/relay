@@ -3,12 +3,17 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "bin": { "relay-mcp": "bin/relay-mcp.mjs" },
-  "exports": { ".": "./src/index.ts" },
+  "bin": {
+    "relay-mcp": "bin/relay-mcp.mjs"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "start": "tsx src/stdio.ts"
+    "start": "tsx src/stdio.ts",
+    "relay": "../../bin/relay"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

@@ -43,7 +43,8 @@
     "build": "tsup",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "prepack": "pnpm build"
+    "prepack": "pnpm build",
+    "relay": "../../bin/relay"
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.0",

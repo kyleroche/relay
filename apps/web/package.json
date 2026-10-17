@@ -9,7 +9,8 @@
     "start": "next start",
     "typecheck": "tsc --noEmit",
     "check:agentic": "node scripts/check-agentic.mjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "relay": "../../bin/relay"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
