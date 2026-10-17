@@ -164,8 +164,11 @@ export function api<C>(handler: Handler<C>, opts: { scope?: Scope } = {}) {
       if (!res.headers.has("cache-control")) res.headers.set("cache-control", "no-store");
       return res;
     } catch (err) {
-      const detail = err instanceof Error ? err.message : "Unexpected error.";
-      return problem(500, "Internal Server Error", detail, instance, {}, rateHeaders(rate));
+      // The message goes to the log with a correlation id; the caller gets the id, never the message (it can name
+      // hosts, paths or SQL).
+      const id = crypto.randomUUID();
+      console.error(`[relay] api ${instance} failed (${id}):`, err instanceof Error ? (err.stack ?? err.message) : err);
+      return problem(500, "Internal Server Error", `Unexpected error. Reference: ${id}.`, instance, { correlation_id: id }, rateHeaders(rate));
     }
   };
 }

@@ -4,8 +4,9 @@ import { createInvite, decideDeviceRequest, isTokenScope, OAuthError, parseDurat
 import { revalidatePath } from "next/cache";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { CROSS_SITE_MESSAGE } from "@/lib/fetch-site";
 import { oauthOptions } from "@/lib/oauth";
-import { viewerActor } from "@/lib/session";
+import { requestIsCrossSite, viewerActor } from "@/lib/session";
 
 /** Every action on the Access page answers with this; `token` and `code` are the show-once secrets. */
 export interface TokenActionResult {
@@ -20,6 +21,7 @@ export interface TokenActionResult {
 
 const NO_DB: TokenActionResult = { ok: false, message: "This needs a database; the deployment runs on demo data." };
 const SIGNED_OUT: TokenActionResult = { ok: false, message: "Your session has ended. Sign in again." };
+const CROSS_SITE: TokenActionResult = { ok: false, message: CROSS_SITE_MESSAGE };
 
 /** The signed-in viewer as an actor, or undefined when the session is gone. */
 async function actor(): Promise<string | undefined> {
@@ -30,25 +32,33 @@ async function actor(): Promise<string | undefined> {
   }
 }
 
+/** The refusal every action starts with, or undefined to go on: no database, a cross-site request (lib/fetch-site.ts), no session. */
+async function gate(): Promise<{ refused: TokenActionResult; by?: never } | { refused?: never; by: string }> {
+  if (dataMode() !== "db") return { refused: NO_DB };
+  if (await requestIsCrossSite()) return { refused: CROSS_SITE };
+  const by = await actor();
+  return by ? { by } : { refused: SIGNED_OUT };
+}
+
 const describe = (e: unknown): string => (e instanceof OAuthError ? e.description : e instanceof Error ? e.message : String(e));
 
 /** Mint a token for the signed-in viewer. The plaintext goes back to the browser once and is never stored. */
 export async function createTokenAction(name: string, scopes: string[]): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
+  const g = await gate();
+  if (g.refused) return g.refused;
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, message: "Give the token a name, e.g. ci-runner." };
   const chosen = [...new Set(scopes.map((s) => s.trim()).filter(isTokenScope))];
   if (!chosen.length) return { ok: false, message: `Pick at least one scope (${TOKEN_SCOPES.join(", ")}).` };
-  const by = await actor();
-  if (!by) return SIGNED_OUT;
+  const by = g.by;
   const { token, row } = await repo.createToken(await getDb(), { name: trimmed, scopes: chosen, createdBy: by });
   revalidatePath("/tokens");
   return { ok: true, token, name: row.name };
 }
 
 export async function revokeTokenAction(id: string): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
-  if (!(await actor())) return SIGNED_OUT;
+  const g = await gate();
+  if (g.refused) return g.refused;
   const row = await repo.revokeToken(await getDb(), id);
   if (!row) return { ok: false, message: "That token is already revoked." };
   revalidatePath("/tokens");
@@ -57,9 +67,9 @@ export async function revokeTokenAction(id: string): Promise<TokenActionResult> 
 
 /** Approve or deny a device request inline; the same core call /activate makes, so the feed row is the same. */
 export async function decideAccessAction(code: string, decision: "approve" | "deny"): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
-  const by = await actor();
-  if (!by) return SIGNED_OUT;
+  const g = await gate();
+  if (g.refused) return g.refused;
+  const by = g.by;
   try {
     const row = await decideDeviceRequest(await getDb(), code, decision, by, oauthOptions());
     revalidatePath("/tokens");
@@ -80,15 +90,15 @@ export interface InviteInput {
 
 /** Mint an invite; the code is in the result and nowhere else. */
 export async function createInviteAction(input: InviteInput): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
+  const g = await gate();
+  if (g.refused) return g.refused;
   const name = input.name.trim();
   if (!name) return { ok: false, message: "Say who the invite is for, e.g. woodhouse; its token will be named oauth:<name>." };
   const scopes = [...new Set(input.scopes.map((s) => s.trim()).filter(isTokenScope))];
   if (!scopes.length) return { ok: false, message: "Pick at least one scope." };
   const expires = input.expiresIn.trim() ? parseDuration(input.expiresIn) : undefined;
   if (input.expiresIn.trim() && !expires) return { ok: false, message: "Expires in must be a duration like 24h or 7d." };
-  const by = await actor();
-  if (!by) return SIGNED_OUT;
+  const by = g.by;
   try {
     const r = await createInvite(await getDb(), { name, scopes, ...(expires ? { expiresInSeconds: expires } : {}), uses: Number.isInteger(input.uses) && input.uses > 0 ? input.uses : 1, createdBy: by }, oauthOptions());
     revalidatePath("/tokens");
@@ -99,9 +109,9 @@ export async function createInviteAction(input: InviteInput): Promise<TokenActio
 }
 
 export async function revokeInviteAction(id: string): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
-  const by = await actor();
-  if (!by) return SIGNED_OUT;
+  const g = await gate();
+  if (g.refused) return g.refused;
+  const by = g.by;
   const row = await revokeInvite(await getDb(), id, by, oauthOptions());
   if (!row) return { ok: false, message: "That invite is already revoked." };
   revalidatePath("/tokens");
@@ -110,9 +120,9 @@ export async function revokeInviteAction(id: string): Promise<TokenActionResult>
 
 /** Remove an OAuth client nothing live depends on; the core guard refuses otherwise. */
 export async function removeClientAction(clientId: string): Promise<TokenActionResult> {
-  if (dataMode() !== "db") return NO_DB;
-  const by = await actor();
-  if (!by) return SIGNED_OUT;
+  const g = await gate();
+  if (g.refused) return g.refused;
+  const by = g.by;
   try {
     const row = await removeClient(await getDb(), clientId, by, oauthOptions());
     revalidatePath("/tokens");

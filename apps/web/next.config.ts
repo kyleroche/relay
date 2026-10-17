@@ -36,6 +36,19 @@ const nextConfig: NextConfig = {
     "/workers": migrations,
   },
   // proxy.ts holds the sign-in gate (lib/access.ts says what is public) and the Accept negotiation for /info and /docs.
+  async headers() {
+    const everywhere = [
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+    ];
+    return [
+      { source: "/:path*", headers: everywhere },
+      // Nothing frames the app. The asset viewers under /api/assets are framed by the app itself and carry their own
+      // sandbox CSP (stream, bundle, mock), so they are the one place these two headers are not set.
+      { source: "/((?!api/assets/).*)", headers: [{ key: "Content-Security-Policy", value: "frame-ancestors 'none'" }, { key: "X-Frame-Options", value: "DENY" }] },
+    ];
+  },
 };
 
 export default nextConfig;

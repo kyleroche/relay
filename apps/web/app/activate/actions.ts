@@ -4,8 +4,9 @@ import { decideDeviceRequest, OAuthError } from "@relay/core";
 import { redirect } from "next/navigation";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { CROSS_SITE_MESSAGE } from "@/lib/fetch-site";
 import { oauthOptions } from "@/lib/oauth";
-import { viewerActor } from "@/lib/session";
+import { requestIsCrossSite, viewerActor } from "@/lib/session";
 
 /** The /activate form: look a code up (redirect with ?code=) or decide one (redirect with ?code=&done=). */
 export async function activateAction(formData: FormData): Promise<void> {
@@ -16,6 +17,7 @@ export async function activateAction(formData: FormData): Promise<void> {
   if (raw !== "approve" && raw !== "deny") back({});
   const decision: "approve" | "deny" = raw === "approve" ? "approve" : "deny";
   if (dataMode() !== "db") back({ error: "This deployment runs on demo data; approvals need a database." });
+  if (await requestIsCrossSite()) back({ error: CROSS_SITE_MESSAGE });
   let actor: string;
   try {
     actor = await viewerActor();

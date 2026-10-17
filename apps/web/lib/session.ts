@@ -11,6 +11,7 @@
  */
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { isCrossSite } from "./fetch-site.ts";
 import { dataMode } from "./mode.ts";
 import { demoSession, SESSION_COOKIE, sessionActor, verifySession, type Session } from "./session-token.ts";
 
@@ -40,6 +41,15 @@ export async function viewerActor(): Promise<string> {
   if (!session) throw new Error("Sign in to do that.");
   if (session.demo && process.env.RELAY_REVIEWER) return process.env.RELAY_REVIEWER;
   return sessionActor(session);
+}
+
+/** True when the current request says `Sec-Fetch-Site: cross-site` (lib/fetch-site.ts); false outside a request. */
+export async function requestIsCrossSite(): Promise<boolean> {
+  try {
+    return isCrossSite(await headers());
+  } catch {
+    return false;
+  }
 }
 
 /** The path the request is for, from the header proxy.ts sets; "/" when called outside a request. */

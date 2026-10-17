@@ -2,6 +2,7 @@ import { denyAuthorization, issueAuthorizationCode, OAuthError, validateAuthoriz
 import { NextResponse, type NextRequest } from "next/server";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { isCrossSite } from "@/lib/fetch-site";
 import { oauthOptions } from "@/lib/oauth";
 import { getSession, sessionActor } from "@/lib/session";
 
@@ -9,11 +10,13 @@ export const dynamic = "force-dynamic";
 
 /**
  * The consent page's form posts here. The session cookie is SameSite=Lax, so a cross-site POST carries no session and
- * is refused; the request is re-validated against the registered client before anything is issued, so the hidden
+ * is refused, and a request the browser marks `Sec-Fetch-Site: cross-site` is refused before the session is even
+ * read (lib/fetch-site.ts); the request is re-validated against the registered client before anything is issued, so the hidden
  * fields cannot smuggle another redirect target. Approve: mint a code, redirect to the client. Deny: redirect with
  * access_denied.
  */
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  if (isCrossSite(req.headers)) return NextResponse.json({ error: "access_denied", error_description: "Cross-site requests cannot decide an authorization." }, { status: 403 });
   const session = await getSession();
   if (!session || session.demo) return NextResponse.json({ error: "access_denied", error_description: "Sign in to decide." }, { status: 401 });
   if (dataMode() !== "db") return NextResponse.json({ error: "server_error", error_description: "The authorization server needs a database." }, { status: 503 });
