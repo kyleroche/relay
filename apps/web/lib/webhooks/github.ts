@@ -33,14 +33,41 @@ function laneFromLabels(labels: unknown): Lane | null {
   return null;
 }
 
-/** "Closes #12" / "Fixes #12" in a PR body, else the relay branch convention relay/<issue>-<lane>. */
+/**
+ * A runner branch: `relay/<lane>-<issue>` as run-lane.sh names it (the older `relay/<issue>-<lane>` spelling is
+ * still read). Null for any other branch.
+ */
+function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number } | null {
+  const m = /^relay\/(?:(claude|codex|grok)-(\d+)|(\d+)-(claude|codex|grok))(?:$|[-/])/.exec(branch ?? "");
+  if (!m) return null;
+  const lane = (m[1] ?? m[4]) as Lane;
+  const issue = Number(m[2] ?? m[3]);
+  return Number.isInteger(issue) ? { lane, issue } : null;
+}
+
+/**
+ * A pull request the vendor's cloud tier opened for a cloud lane (docs/RUNNERS.md "Cloud lanes"). Claude Code
+ * cloud sessions, Routines and claude-code-action push `claude/` branches; Codex cloud pushes `codex/` branches.
+ * When the branch is not telling, the bot login is: `claude[bot]` is the Claude GitHub App (claude-code-action),
+ * `chatgpt-codex-connector[bot]` is the Codex connector. Cloud sessions that push as the user's own GitHub login
+ * are recognised by the branch alone.
+ */
+function cloudLaneOf(pr: Json, payload: Json): { lane: Lane; cloud: "claude-cloud" | "codex-cloud" } | null {
+  const branch = get<string>(pr, "head.ref") ?? "";
+  if (/^claude\//.test(branch)) return { lane: "claude", cloud: "claude-cloud" };
+  if (/^codex\//.test(branch)) return { lane: "codex", cloud: "codex-cloud" };
+  const login = (get<string>(pr, "user.login") ?? get<string>(payload, "sender.login") ?? "").toLowerCase();
+  if (login === "claude[bot]") return { lane: "claude", cloud: "claude-cloud" };
+  if (login === "chatgpt-codex-connector[bot]" || login === "chatgpt-codex-connector") return { lane: "codex", cloud: "codex-cloud" };
+  return null;
+}
+
+/** "Closes #12" / "Fixes #12" in a PR body, else the relay branch convention relay/<lane>-<issue>. */
 function linkedIssue(pr: Json): number | null {
   const body = get<string>(pr, "body") ?? "";
   const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(body);
   if (m?.[1]) return Number(m[1]);
-  const branch = get<string>(pr, "head.ref") ?? "";
-  const b = /^relay\/(\d+)-/.exec(branch);
-  return b?.[1] ? Number(b[1]) : null;
+  return relayBranch(get<string>(pr, "head.ref"))?.issue ?? null;
 }
 
 /** Every row a delivery produces. Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`. */
@@ -112,10 +139,13 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       const url = get<string>(pr, "html_url") ?? null;
       const issue = linkedIssue(pr);
       const branch = get<string>(pr, "head.ref") ?? null;
-      const lane = laneOf(`agent:${(branch ?? "").split("-").pop() ?? ""}`) ?? laneFromLabels(get(pr, "labels"));
-      const common = { ...base, pr: number, issue, url, lane };
+      const cloud = cloudLaneOf(pr, payload);
+      const lane = relayBranch(branch)?.lane ?? cloud?.lane ?? laneFromLabels(get(pr, "labels"));
+      // A cloud-lane PR is the lane's work even when the vendor pushed it under the user's own GitHub login.
+      const common = { ...base, pr: number, issue, url, lane, ...(cloud ? { actor: `agent:${cloud.lane}` } : {}) };
+      const cloudPayload = cloud ? { cloud: cloud.cloud, author: get<string>(pr, "user.login") ?? null } : {};
       if (action === "opened" || action === "reopened" || action === "ready_for_review") {
-        return { ...common, kind: "pr.opened", summary: issue ? `${title} (#${issue})` : title, payload: { branch, additions: get(pr, "additions"), deletions: get(pr, "deletions") } };
+        return { ...common, kind: "pr.opened", summary: issue ? `${title} (#${issue})` : title, payload: { branch, additions: get(pr, "additions"), deletions: get(pr, "deletions"), ...cloudPayload } };
       }
       if (action === "closed") {
         const merged = Boolean(get(pr, "merged"));
@@ -153,7 +183,6 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       const branch = get<string>(run, "head_branch") ?? "";
       const prs = get<Json[]>(run, "pull_requests") ?? [];
       const pr = get<number>(prs[0], "number") ?? null;
-      const issueMatch = /^relay\/(\d+)-/.exec(branch);
       const started = get<string>(run, "run_started_at");
       const updated = get<string>(run, "updated_at");
       const duration = started && updated ? new Date(updated).getTime() - new Date(started).getTime() : null;
@@ -162,7 +191,7 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         actor: "bot:github-actions",
         kind: "workflow.run",
         pr,
-        issue: issueMatch?.[1] ? Number(issueMatch[1]) : null,
+        issue: relayBranch(branch)?.issue ?? null,
         duration_ms: duration,
         summary: `${name} ${conclusion === "success" ? "passed" : conclusion} on ${branch}`,
         url: get<string>(run, "html_url") ?? null,
@@ -176,12 +205,11 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       if (state !== "success" && state !== "failure" && state !== "error") return null;
       const env = get<string>(payload, "deployment.environment") ?? "preview";
       const ref = get<string>(payload, "deployment.ref") ?? "";
-      const issueMatch = /^relay\/(\d+)-/.exec(ref);
       return {
         ...base,
         actor: actorOf(payload).replace(/^human:/, "bot:"),
         kind: state === "success" ? "preview.ready" : "preview.failed",
-        issue: issueMatch?.[1] ? Number(issueMatch[1]) : null,
+        issue: relayBranch(ref)?.issue ?? null,
         summary: state === "success" ? `${env} deployed for ${ref}` : `${env} deployment ${state} for ${ref}`,
         url: get<string>(status, "environment_url") ?? get<string>(status, "target_url") ?? null,
         payload: { environment: env, state },

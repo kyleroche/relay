@@ -14,7 +14,7 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `run.started` | GitHub webhook `workflow_job` (in_progress) on a `relay run` job | `runner:<runner name>` | repo, issue, lane, url (job url) | lane and runner |
 | `run.finished` | GitHub webhook `workflow_job` (completed) | `runner:<runner name>` | repo, issue, lane, duration_ms, payload.conclusion | success, failure, cancelled, or "no changes" |
 | `step.usage` | GitHub webhook `issue_comment` on a PR, parsed from the runner's usage comment (below) | `agent:<lane>` | repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, url | model and tokens |
-| `pr.opened` | GitHub webhook `pull_request` (opened) from a `relay/` branch | `agent:<lane>` (lane from branch name) | repo, issue (from branch), pr, lane, url | PR title |
+| `pr.opened` | GitHub webhook `pull_request` (opened) from a `relay/` branch, or from a cloud lane's `claude/` or `codex/` branch (below) | `agent:<lane>` (lane from branch name) | repo, issue (from branch or `Closes #n`), pr, lane, url, payload.cloud for cloud lanes | PR title |
 | `pr.reviewed` | GitHub webhook `issue_comment` carrying a review from a lane, or `pull_request_review` | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged) | `human:<login>` | repo, issue, pr, url | PR title |
 | `preview.ready` | Vercel webhook `deployment.succeeded` for a `relay/` branch | `bot:vercel` | repo, pr, url (preview URL) | project and branch |
@@ -26,6 +26,7 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `onboard.refreshed` | `relay onboard <model>` | `human:<login>` | model, payload.sources | model and chunk count |
 | `runner.offline` | GitHub webhook `workflow_job` (queued) with no matching runner for longer than a threshold, or a failed keep-alive | `bot:relay` | lane, payload.runner | which label has nobody serving it |
 | `task.created` | `relay_task_create`, `POST /api/v1/tasks`, `relay task create` (alongside an `issue.opened` row for the same issue) | `bot:<token name>` or `human:<login>` | project, repo, issue, lane, url, payload.task_id/priority/idempotency_key | `<task id>: <title>` |
+| `external.run.dispatched` | `relay-cloud.yml` after it posted the `@codex` / `@claude` comment for an `agent:*-cloud` label (through `POST /api/v1/events`, so it carries the `external.` prefix like every token-written kind) | `bot:<token name>` (the `RELAY_TOKEN` the repo holds) | project, url (the comment), payload.lane (`claude-cloud` or `codex-cloud`), payload.repo, payload.issue, payload.comment_url, payload.mention, payload.brief_tokens, payload.source = `relay-cloud` | `Dispatched #<n> to the <lane> lane (@<vendor>)` |
 | `external.*` | `relay_event_log`, `POST /api/v1/events`: an external bot's own note | always `bot:<token name>` (derived from the token, never from the client) | project, url, cost_equiv, payload.source | whatever the bot said, ≤500 chars |
 
 `subscription` is derived from the lane: `claude -> max`, `codex -> codex`, `grok -> grok`, overflow lanes `->
@@ -34,6 +35,33 @@ runner never has to know prices.
 
 Every webhook write sets `dedupe_key` to the GitHub delivery id (or the Vercel webhook id), and `step.usage` rows add
 the comment id, so redeliveries never double-count.
+
+## Cloud lanes in the feed
+
+A cloud lane (`docs/RUNNERS.md`, "Cloud lanes") leaves three kinds of trace, none of them a usage line:
+
+1. `issue.labeled` is **not** written for `agent:claude-cloud` / `agent:codex-cloud`: the normalizer only treats
+   `agent:claude|codex|grok` as lane labels. The dispatch row below is the record that the label was acted on.
+2. `external.run.dispatched` from `relay-cloud.yml` once the mention comment is posted (table above). Its `url` is
+   the comment, so the feed links to the exact place the vendor's agent was addressed.
+3. `pr.opened` (then `pr.merged` / `pr.closed`) when the vendor's PR arrives through the GitHub webhook. The
+   normalizer (`cloudLaneOf` in `apps/web/lib/webhooks/github.ts`) attributes a pull request to a cloud lane when:
+   - the head branch starts with `claude/` → `lane = claude`, `payload.cloud = "claude-cloud"`. Claude Code cloud
+     sessions, Routines and claude-code-action all push `claude/`-prefixed branches; sessions and routines push
+     under the user's own GitHub login, the action under `claude[bot]`;
+   - the head branch starts with `codex/` → `lane = codex`, `payload.cloud = "codex-cloud"`. Codex cloud names its
+     branches `codex/<description>`;
+   - otherwise the PR author (or the delivery's sender) is `claude[bot]` or `chatgpt-codex-connector[bot]`.
+
+   For these rows the `actor` is `agent:<lane>` even when GitHub reports the user's own login as the author, and
+   `payload.author` keeps that login. The `lane` column stays the vendor lane (`claude`, `codex`) so the usage
+   meters and the reviewer map keep working; `payload.cloud` is what tells a cloud PR from a runner PR. `issue` comes
+   from `Closes #n` in the body (the dispatch comment asks the agent to write it); a cloud PR without it has
+   `issue = null`. Runner branches keep their own rule: `relay/<lane>-<issue>` sets both `lane` and `issue`.
+
+Because the vendor's sandbox never posts the usage block, the `ledger` view has no `step.usage` row for a cloud lane.
+Spend for those runs is on the vendor's usage page; the dispatch row carries `payload.brief_tokens` for the part relay
+contributed.
 
 ## The usage comment
 
