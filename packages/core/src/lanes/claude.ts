@@ -116,6 +116,10 @@ export function fakeClaude(req: LaneRequest, opts: ClaudeOptions): LaneResult {
     const para = (n: number) => Array.from({ length: n }, (_, i) => `Sentence ${i + 1} of this canned section describes the project in enough detail to count as real text.`).join(" ");
     json = { summary: `## Purpose\n\n${para(4)}\n\n## Stack and layout\n\n${para(5)}\n\n## Commands\n\n${para(3)}\n\n## Conventions\n\n${para(4)}\n\n## Gotchas\n\n${para(3)}\n` };
     text = JSON.stringify(json);
+  } else if ("verdict" in props) {
+    // the injection gate (tasks/gate.ts): the canned grader clears everything; tests that need a hold inject a grader
+    json = { verdict: "clear", score: 0, reasons: [] };
+    text = JSON.stringify(json);
   } else text = "pong";
   const model = MODEL_IDS[opts.model];
   const tokensIn = approxTokens(req.prompt + (req.system ?? ""));

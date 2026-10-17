@@ -138,7 +138,7 @@ const toFlowRow = (r: Record<string, unknown>): FlowRow => ({
 });
 
 /**
- * The tasks the flow map draws, in one query over the cache: everything in motion (queued, claimed, running, review),
+ * The tasks the flow map draws, in one query over the cache: everything in motion (queued, held, claimed, running, review),
  * done tasks for `FLOW_DONE_MS` after they reached Merged (so a client sees them arrive and fade) and failed ones for
  * `FLOW_FAILED_MS` (the siding shows what stalled today without turning into an archive). A row whose cache is empty
  * is filled in and the query run again, so the first snapshot after the migration is complete. Lease expiry is the
@@ -154,7 +154,7 @@ export async function flowTasks(db: Db, opts: { now?: number; limit?: number } =
         .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost, p.repo AS project_repo
        FROM tasks t LEFT JOIN projects p ON p.slug = t.project
        WHERE t.state IS NULL
-          OR t.state IN ('queued', 'claimed', 'running', 'review')
+          OR t.state IN ('queued', 'held', 'claimed', 'running', 'review')
           OR (t.state = 'done' AND t.since > $1::timestamptz)
           OR (t.state = 'failed' AND t.since > $2::timestamptz)
        ORDER BY t.created_at DESC, t.id DESC LIMIT $3`,

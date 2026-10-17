@@ -25,8 +25,8 @@ export interface TaskRow {
   title: string | null;
 }
 
-export type TaskState = "queued" | "claimed" | "running" | "review" | "done" | "failed";
-export const TASK_STATES: readonly TaskState[] = ["queued", "claimed", "running", "review", "done", "failed"];
+export type TaskState = "queued" | "held" | "claimed" | "running" | "review" | "done" | "failed";
+export const TASK_STATES: readonly TaskState[] = ["queued", "held", "claimed", "running", "review", "done", "failed"];
 export const isTaskState = (s: string): s is TaskState => (TASK_STATES as readonly string[]).includes(s);
 
 export type PreviewState = "ready" | "failed" | "building" | "none";
@@ -204,6 +204,8 @@ export function previewMatches(task: Pick<TaskRow, "issue">, e: EventRow, prs: R
  *   task.approved -> done when relay merged the PR itself (payload.merged); pr.merged from GitHub confirms it
  *   task.merge_failed -> stays in review (GitHub refused the merge; the payload says why)
  *   task.requeued -> queued (an operator put it back, perhaps on another lane; tasks/requeue.ts)
+ *   task.held -> held (the injection gate flagged the issue text; not claimable until released; tasks/gate.ts)
+ *   task.released -> queued (a person or a tokens:write bot released the hold)
  * A task with no events yet is queued (relay opened the issue with its lane label).
  *
  * Claims (docs/WORKERS.md) add one step. A live lease on a queued task makes it `claimed`. A lease that ended
@@ -242,7 +244,8 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
       }
       continue;
     }
-    if (e.lane) lane = e.lane;
+    const gateRow = e.kind === "step.usage" && e.lane === "gate"; // the injection gate's own call: cost, not a lane or a run
+    if (e.lane && !gateRow) lane = e.lane;
     if (e.pr != null) pr = e.pr;
     const b = payloadStr(e, "branch");
     if (b && (e.kind === "run.started" || e.kind === "pr.opened")) branch = b;
@@ -278,13 +281,13 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
       }
       case "step.usage":
         usage = {
-          runs: (usage?.runs ?? 0) + 1,
+          runs: (usage?.runs ?? 0) + (gateRow ? 0 : 1),
           tokens_in: (usage?.tokens_in ?? 0) + e.tokens_in,
           tokens_out: (usage?.tokens_out ?? 0) + e.tokens_out,
           cache_read: (usage?.cache_read ?? 0) + e.cache_read,
           cost_equiv: Math.round(((usage?.cost_equiv ?? 0) + e.cost_equiv) * 1e6) / 1e6,
-          model: e.model ?? usage?.model ?? null,
-          duration_ms: e.duration_ms ?? usage?.duration_ms ?? null,
+          model: gateRow ? usage?.model ?? null : e.model ?? usage?.model ?? null,
+          duration_ms: gateRow ? usage?.duration_ms ?? null : e.duration_ms ?? usage?.duration_ms ?? null,
         };
         break;
       case "pr.opened":
@@ -323,6 +326,14 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
         // an operator put the task back in the queue (and perhaps on another lane); the next claim starts over
         state = "queued";
         lastEnd = e.ts; // a run that was in flight is over as far as relay is concerned
+        break;
+      case "task.held":
+        // the injection gate flagged the text (tasks/gate.ts): the worker gave its claim back and nobody may claim again until a release
+        state = "held";
+        lastEnd = e.ts;
+        break;
+      case "task.released":
+        state = "queued";
         break;
       default:
         break;

@@ -4,6 +4,7 @@
  * so the operator sees whether a PR is waiting on Vercel, on a first look, or on a decision somebody has started.
  *
  *   queued  -> Queue        claimed -> Claimed        running -> Running
+ *   held    -> Queue        (the injection gate holds it at the first stop; the flow task carries `held: true`)
  *   review  -> PR       while no preview is ready (none, building, or failed)
  *           -> Preview  once the preview is ready and nobody has weighed in
  *           -> Review   once a person or bot engaged: a pr.review on GitHub, or relay's merge was refused
@@ -63,7 +64,7 @@ function latest(events: StationEvent[], pick: (e: StationEvent) => boolean): str
   return best;
 }
 
-const QUEUE_KINDS = new Set(["issue.labeled", "issue.opened", "task.created", "pr.closed", "task.changes_requested", "task.requeued"]);
+const QUEUE_KINDS = new Set(["issue.labeled", "issue.opened", "task.created", "pr.closed", "task.changes_requested", "task.requeued", "task.held", "task.released"]);
 const PUSH_KINDS = new Set(["pr.opened"]);
 
 /**
@@ -74,6 +75,7 @@ const PUSH_KINDS = new Set(["pr.opened"]);
 export function stationOf(task: StationInput, events: StationEvent[] = []): Station {
   switch (task.state) {
     case "queued":
+    case "held":
       return "Queue";
     case "claimed":
       return "Claimed";
@@ -133,7 +135,7 @@ export function deriveStation(task: StationInput, events: StationEvent[] = [], o
 }
 
 /** States drawn on the map. Done tasks ride along briefly (so the client sees them reach Merged and fade); the adapters decide how briefly. */
-export const IN_MOTION: ReadonlySet<TaskState> = new Set<TaskState>(["queued", "claimed", "running", "review"]);
+export const IN_MOTION: ReadonlySet<TaskState> = new Set<TaskState>(["queued", "held", "claimed", "running", "review"]);
 
 /** How long a done task stays on the map after it merged, and a failed one on the siding (`flowTasks` in db/task-state.ts). */
 export const FLOW_DONE_MS = 90_000;
