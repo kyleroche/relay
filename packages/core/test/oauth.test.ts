@@ -43,7 +43,8 @@ import { credentialsFromToken, deviceFlow, redeemInvite, refreshAccessToken, tok
 import type { HttpFetch } from "../src/client/http.ts";
 
 let db: Db;
-let clock = Date.parse("2026-10-16T10:00:00.000Z");
+// anchored to the real clock: findToken compares expiry against the database's now(), so a fixed date would expire the tokens
+let clock = Math.floor(Date.now() / 1000) * 1000 - 3 * 3_600_000;
 const events: repo.EventRow[] = [];
 const o: OAuthServerOptions = { issuer: "https://relay.test", now: () => clock, onEvent: (row) => void events.push(row) };
 const tick = (seconds: number) => (clock += seconds * 1000);
