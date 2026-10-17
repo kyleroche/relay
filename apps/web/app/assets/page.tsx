@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AssetCard } from "@/components/assets/asset-card";
 import { AssetFilters } from "@/components/assets/asset-filters";
+import { PageIntro } from "@/components/page-intro";
 import { getAssets, getProjects } from "@/lib/data";
 import { ASSET_KINDS, ASSET_STATUSES, type Asset, type AssetKind, type AssetStatus } from "@/lib/types";
 
@@ -43,11 +44,7 @@ export default async function AssetsPage({ searchParams }: { searchParams: Promi
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">Assets</h1>
-            <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Things agents make that are not code: mockups, renders, clips, documents. Each one is stored privately, versioned, and
-              waits here for a yes or a no. A rejection note becomes a decision in the project&apos;s memory and reopens the task, so
-              the next attempt starts from it. The visual counterpart of a pull request.
-            </p>
+            <PageIntro doc="/docs/assets">Mockups, renders, clips and documents agents made, versioned, waiting for a yes or a no.</PageIntro>
           </div>
           <dl className="flex gap-6 text-sm">
             <div>

@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
-import { ArrowUpRight, Globe } from "lucide-react";
+import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
-import { repo, TASK_STATES, type TaskState, type TaskView } from "@relay/core";
-import { CopyButton } from "@/components/copy-button";
+import { repo, type TaskState, type TaskView } from "@relay/core";
+import { DemoNotice } from "@/components/demo-notice";
+import { PageIntro } from "@/components/page-intro";
+import { ReviewPrompt } from "@/components/tasks/review-prompt";
+import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
-import { fmtAgo, fmtCost } from "@/lib/format";
+import { fmtAgo } from "@/lib/format";
 import { requireSession } from "@/lib/session";
 import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
@@ -18,41 +21,44 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
+/** One task: state, title, where it is (repo#n, lane), what came out (PR, preview), and how long ago it moved. */
 function Row({ t, now }: { t: TaskView; now: number }) {
   return (
-    <li className="flex flex-col gap-1 rounded-md border bg-card p-3 sm:flex-row sm:items-center sm:gap-4">
+    <li className="flex items-start gap-3 px-3 py-2.5 sm:items-center">
+      <TaskStateBadge state={t.state} className="mt-0.5 w-[5.5rem] justify-start sm:mt-0" />
       <div className="min-w-0 flex-1">
-        <Link href={taskPagePath(t)} className="font-medium hover:text-primary">
-          <span className="font-mono text-xs text-muted-foreground">{t.id}</span>
-          <span className="ml-2">{t.run_summary ?? t.summary ?? "—"}</span>
+        <Link href={taskPagePath(t)} className="block truncate text-sm font-medium hover:text-primary">
+          {t.run_summary ?? t.summary ?? t.id}
         </Link>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          <span className="font-mono">{t.id}</span>
           <span className="font-mono">{t.lane ?? "no lane"}</span>
-          {t.runner && <span className="font-mono">{t.runner.replace(/^runner:/, "")}</span>}
           {t.pr && (
-            <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 hover:text-primary">
+            <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono hover:text-primary">
               PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />
             </a>
           )}
-          {t.preview_url && (
-            <a href={t.preview_url} target="_blank" rel="noopener noreferrer" className={cn("inline-flex items-center gap-1 hover:text-primary", t.preview_state === "ready" ? "text-ok" : "")}>
-              <Globe className="size-3" aria-hidden="true" /> preview{t.preview_state !== "ready" ? ` (${t.preview_state})` : ""}
+          {t.preview_url ? (
+            <a href={t.preview_url} target="_blank" rel="noopener noreferrer" className="inline-flex">
+              <PreviewBadge state={t.preview_state} />
             </a>
+          ) : (
+            <PreviewBadge state={t.preview_state} />
           )}
-          {t.usage && <span className="font-mono tabular-nums">{fmtCost(t.usage.cost_equiv)}</span>}
-          {t.updated_at && <span>{fmtAgo(t.updated_at, now)}</span>}
         </p>
       </div>
-      <span className={cn("shrink-0 font-mono text-xs", STATE_TONE[t.state])} title={STATE_HINT[t.state]}>
-        {t.state}
-      </span>
+      {t.updated_at && (
+        <time dateTime={t.updated_at} className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
+          {fmtAgo(t.updated_at, now)}
+        </time>
+      )}
     </li>
   );
 }
 
 /**
- * /tasks: every task with its derived state, the ones waiting for a decision first. A task is a GitHub issue; this
- * page is the read model over the feed (DESIGN.md), and the task page is where a decision is made.
+ * /tasks: every task with its derived state in one list, the ones waiting for a decision first. A task is a GitHub
+ * issue; this page is the read model over the feed (DESIGN.md), and the task page is where a decision is made.
  */
 export default async function TasksPage() {
   await requireSession("/tasks");
@@ -62,26 +68,18 @@ export default async function TasksPage() {
   const byState = new Map<TaskState, TaskView[]>();
   for (const t of tasks) byState.set(t.state, [...(byState.get(t.state) ?? []), t]);
   const order: TaskState[] = ["review", "running", "claimed", "queued", "failed", "done"];
+  const groups = order.map((state) => ({ state, list: byState.get(state) ?? [] })).filter((g) => g.list.length > 0);
   return (
     <>
       <section className="py-6 sm:py-8">
-        <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
-        <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Every task is a GitHub issue with a lane label; its state is folded from the feed each time you look. The ones in <span className="text-warn">review</span> have a pull request and,
-          when Vercel has built it, a preview: open the task to see it and decide.
-        </p>
-        {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; tasks need a database (RELAY_DATA=db or DATABASE_URL).</p>}
-      </section>
-
-      <section aria-labelledby="review-agent-h" className="relative mb-8 rounded-lg border bg-card p-4">
-        <CopyButton text={REVIEW_AGENT_PROMPT} className="absolute right-2 top-2" />
-        <div className="pr-10">
-          <h2 id="review-agent-h" className="text-sm font-medium">
-            Review from chat
-          </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">Hand this to the bot that should tell you when a preview is up and approve when you say so. The buttons on each task page do the same thing by hand.</p>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
+            <PageIntro doc="/docs/workers">Every task is a GitHub issue; its state is read from the feed, and the ones in review wait for your decision.</PageIntro>
+          </div>
+          {db && <ReviewPrompt prompt={REVIEW_AGENT_PROMPT} />}
         </div>
-        <p className="mt-3 max-w-3xl text-xs leading-5 text-muted-foreground">{REVIEW_AGENT_PROMPT}</p>
+        {!db && <DemoNotice className="mt-3" />}
       </section>
 
       {db && tasks.length === 0 && (
@@ -89,37 +87,23 @@ export default async function TasksPage() {
           No tasks yet. Open one with <code className="rounded bg-muted px-1 font-mono text-xs">relay task create --title … --lane claude</code>, the <code className="rounded bg-muted px-1 font-mono text-xs">relay_task_create</code> tool, or an <code className="rounded bg-muted px-1 font-mono text-xs">agent:*</code> label on a GitHub issue.
         </p>
       )}
-      <div className="flex flex-col gap-8">
-        {order.map((state) => {
-          const list = byState.get(state);
-          if (!list?.length) return null;
-          return (
-            <section key={state} aria-labelledby={`state-${state}`}>
-              <h2 id={`state-${state}`} className="mb-2 flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
+      {groups.length > 0 && (
+        <ul className="divide-y rounded-lg border" aria-label="Tasks by state">
+          {groups.map(({ state, list }) => (
+            <li key={state}>
+              <h2 className="flex items-baseline gap-2 bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground" title={STATE_HINT[state]}>
                 <span className={cn("font-mono", STATE_TONE[state])}>{state}</span>
                 <span className="font-mono tabular-nums text-foreground">{list.length}</span>
-                <span className="font-normal">{STATE_HINT[state]}</span>
               </h2>
-              <ul className="flex flex-col gap-2">
+              <ul className="divide-y border-t">
                 {list.map((t) => (
                   <Row key={t.id} t={t} now={now} />
                 ))}
               </ul>
-            </section>
-          );
-        })}
-      </div>
-      <section className="mt-10 max-w-2xl">
-        <h2 className="text-lg font-semibold tracking-tight">How state is derived</h2>
-        <ul className="mt-2 flex flex-col gap-1 text-sm text-muted-foreground">
-          {TASK_STATES.map((k) => (
-            <li key={k} className="flex gap-2">
-              <span className={cn("w-16 shrink-0 font-mono text-xs", STATE_TONE[k])}>{k}</span>
-              <span>{STATE_HINT[k]}</span>
             </li>
           ))}
         </ul>
-      </section>
+      )}
     </>
   );
 }

@@ -12,7 +12,8 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
  * "Requeue": put the task back in the queue, optionally on another lane. A sheet that opens from a button, like the
  * other forms (DESIGN.md, item 7): the lane (worker lanes first, the cloud lanes under their own heading because
  * nothing dispatches them until the operator wires them) and an optional reason. The same core call as
- * `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`.
+ * `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`. Renders into the parent's
+ * flex-wrap row beside the review buttons; its outcome takes a full-width line under them.
  */
 export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, canWrite }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean }) {
   const router = useRouter();
@@ -37,7 +38,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
 
   const relaning = target !== lane;
   return (
-    <div className="flex flex-col gap-2">
+    <>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
           <Button variant="outline" disabled={!canWrite || pending}>
@@ -115,10 +116,10 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
         </SheetContent>
       </Sheet>
       {result && !open && (
-        <p role={result.ok ? "status" : "alert"} className={result.ok ? "text-xs text-ok" : "text-xs text-destructive"}>
+        <p role={result.ok ? "status" : "alert"} className={result.ok ? "basis-full text-xs text-ok" : "basis-full text-xs text-destructive"}>
           {result.ok ? `Requeued; the task is ${result.state}.${result.message ? ` ${result.message}` : ""}` : result.message}
         </p>
       )}
-    </div>
+    </>
   );
 }

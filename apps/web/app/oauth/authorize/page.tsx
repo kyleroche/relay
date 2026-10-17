@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { OAuthError, scopeDescriptions, validateAuthorizeRequest, type AuthorizeRequest } from "@relay/core";
+import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -32,7 +33,14 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
     if (s) qs.set(k, s);
   }
   const session = await requireSession(`/oauth/authorize?${qs.toString()}`);
-  if (dataMode() !== "db") return <Notice title="No authorization server here" body="This deployment runs on demo data. The authorization server needs a database (RELAY_DATA=db or DATABASE_URL)." />;
+  if (dataMode() !== "db") {
+    return (
+      <section className="mx-auto flex max-w-md flex-col gap-4 py-16 sm:py-24">
+        <h1 className="text-2xl font-semibold tracking-tight">Authorize</h1>
+        <DemoNotice />
+      </section>
+    );
+  }
 
   let request: AuthorizeRequest;
   try {

@@ -15,6 +15,8 @@ export interface TaskActionResult {
   message?: string;
   /** The task's state after the action. */
   state?: string;
+  /** GitHub refused the merge: task.merge_failed is in the feed and the task page shows it, so the button does not repeat it. */
+  mergeRefused?: boolean;
 }
 
 const NO_DB: TaskActionResult = { ok: false, message: "This needs a database; the deployment runs on demo data." };
@@ -55,8 +57,8 @@ export async function approveTaskAction(taskId: string): Promise<TaskActionResul
     revalidatePath("/tasks");
     return { ok: true, state: r.task.state };
   } catch (e) {
-    revalidatePath(pagePath(taskId)); // a merge refusal wrote task.merge_failed; show it
-    return { ok: false, message: describe(e) };
+    revalidatePath(pagePath(taskId)); // a merge refusal wrote task.merge_failed; the page shows it once
+    return { ok: false, message: describe(e), mergeRefused: e instanceof TaskReviewError && e.status === 502 };
   }
 }
 

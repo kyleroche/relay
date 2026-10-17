@@ -60,9 +60,10 @@ export const ACCOUNTS: Array<{ tool: string; login: string; plan: string }> = [
   { tool: "GitHub", login: "gh auth login", plan: "any" },
 ];
 
-export const LICENSE = "Apache-2.0. Read AGENTS.md first if you want to contribute; it is written for people and agents alike.";
+export const CONTRIBUTE = "Read AGENTS.md first if you want to contribute; it is written for people and agents alike.";
+export const LICENSE = `Apache-2.0. ${CONTRIBUTE}`;
 
-/** How an agent gets access by itself. The landing's "For agents" block and its Markdown mirror both render this. */
+/** How an agent gets access by itself. The landing's Markdown mirror renders this; the HTML page points at /docs/api and /llms.txt instead. */
 export const ACCESS_INTRO = "No person hands you a token. Register and ask, a person approves once, then retry:";
 export const ACCESS_STEPS: string[] = [
   `POST ${SITE_URL}/oauth/device with client_name=<your name> and scope=<space-separated scopes> (tasks:read tasks:write events:write webhooks:write for a task bot). The reply has device_code, user_code (RLAY-XXXX) and verification_uri.`,
@@ -72,7 +73,7 @@ export const ACCESS_STEPS: string[] = [
 /** What a person pastes into an agent (bot or a coding agent on a machine with logins) so it connects by itself. The Access page shows this instead of a token form. */
 export const CONNECT_AGENT_PROMPT = `Connect to relay at ${SITE_URL} without asking me for a token. If you are running on a machine with my coding-agent logins, run \`npx @kyleroche/relay setup --site ${SITE_URL}\` and show me the code it prints. Otherwise POST ${SITE_URL}/oauth/device with client_name=<your name> and scope="tasks:read tasks:write events:write webhooks:write", tell me the user_code, then poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, the device_code and client_id every 5 seconds until you receive access_token and refresh_token, and store both. I will approve the code at ${SITE_URL}/activate. Then call relay_whoami on ${SITE_URL}/mcp with the bearer token and tell me what it returns. If you are inside one of my repositories, also run \`npx @kyleroche/relay link\` there so the project is on relay.`;
 
-/** For a coding agent that is already inside a repository on a machine with the user's logins: how to put that repo on relay. */
+/** For a coding agent that is already inside a repository on a machine with the user's logins: how to put that repo on relay. Rendered in /docs/api ("Link a repository") and the landing's Markdown mirror. */
 export const LINK_REPO_INTRO = "Inside a repository on a machine with the user's coding-agent logins? Link it yourself; the person approves once at most:";
 export const LINK_REPO_STEPS: string[] = [
   `If this machine has not joined the relay yet: npx @kyleroche/relay setup --site ${SITE_URL}. It prints a code; show it to the person, who approves it at ${SITE_URL}/activate (or they give you an invite code for --invite). Needs Node 24.`,

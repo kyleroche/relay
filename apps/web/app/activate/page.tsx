@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { listApprovedAwaitingPoll, listPendingAccess, lookupDeviceRequest, normalizeUserCode, scopeDescriptions, type AccessRequestView, type DeviceCodeRow } from "@relay/core";
+import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { dataMode } from "@/lib/data";
@@ -57,7 +58,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
         </p>
       </div>
 
-      {!db && <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; device approvals need a database.</p>}
+      {!db && <DemoNotice />}
 
       {done && (
         <p role="status" className={`rounded-md border p-3 text-sm ${done === "approved" ? "border-primary/40 bg-primary/5" : "border-warn/40 bg-warn/5"}`}>

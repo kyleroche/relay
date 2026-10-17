@@ -46,7 +46,7 @@ export default async function ProjectPage({ params }: Props) {
         </p>
         <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
-            <h1 className="text-3xl font-semibold tracking-tight">{p.slug}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">{p.slug}</h1>
             <a
               href={`https://github.com/${p.repo}`}
               className="mt-1 inline-flex items-center gap-1 font-mono text-sm text-muted-foreground hover:text-primary"
@@ -83,19 +83,27 @@ export default async function ProjectPage({ params }: Props) {
                 </span>
               </dd>
             </div>
+            <div>
+              <dt className="text-[11px] text-muted-foreground">Lanes</dt>
+              <dd className="mt-0.5 flex flex-wrap gap-1">
+                {p.lanes.length === 0 && <span className="text-muted-foreground">—</span>}
+                {p.lanes.map((l) => (
+                  <Link key={l} href={`/?project=${p.slug}&lane=${l}`} className="rounded border bg-muted px-1.5 py-px font-mono text-xs hover:border-primary/50" title={`Feed: ${p.slug} on the ${l} lane`}>
+                    {l}
+                  </Link>
+                ))}
+              </dd>
+            </div>
           </dl>
         </div>
       </section>
 
-      <div className="grid gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex flex-col gap-10">
           <section aria-labelledby="decisions">
             <h2 id="decisions" className="text-lg font-semibold tracking-tight">
               Current decisions <span className="ml-1 font-mono text-sm font-normal text-muted-foreground">{p.decisions.length}</span>
             </h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Durable, cross-tool memory. A decision stays current until a later one supersedes it; every lane sees these in its brief.
-            </p>
             {p.decisions.length === 0 ? (
               <p className="mt-4 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                 No decisions captured yet. They are extracted when a PR merges and from session-end hooks.
@@ -131,10 +139,12 @@ export default async function ProjectPage({ params }: Props) {
           </section>
 
           <section aria-labelledby="timeline">
-            <h2 id="timeline" className="text-lg font-semibold tracking-tight">Timeline</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              The last {p.events.length} events in this project. <Link href={`/?project=${p.slug}`} className="text-primary underline underline-offset-4">Open in the feed</Link> for filters and live updates.
-            </p>
+            <h2 id="timeline" className="flex items-baseline gap-3 text-lg font-semibold tracking-tight">
+              Timeline
+              <Link href={`/?project=${p.slug}`} className="text-xs font-normal text-primary underline underline-offset-4">
+                Open in the feed
+              </Link>
+            </h2>
             <div className="mt-4 flex flex-col gap-4">
               {groups.map((g) => (
                 <div key={g.key}>
@@ -153,7 +163,6 @@ export default async function ProjectPage({ params }: Props) {
         <aside className="flex flex-col gap-8">
           <section aria-labelledby="models">
             <h2 id="models" className="text-lg font-semibold tracking-tight">Models in use</h2>
-            <p className="mt-1 text-sm text-muted-foreground">A lane may use a model only after its official docs and skills are onboarded.</p>
             <ul className="mt-4 flex flex-col gap-3">
               {p.models.map((m) => (
                 <li key={m.id} className="rounded-md border bg-card p-3">
@@ -166,19 +175,6 @@ export default async function ProjectPage({ params }: Props) {
                     {m.onboarded_at && <> · onboarded {fmtAgo(m.onboarded_at, now)}</>}
                   </p>
                   <p className="mt-1 text-[11px] text-muted-foreground">lanes: {m.lanes.join(", ")}</p>
-                </li>
-              ))}
-            </ul>
-          </section>
-          <section aria-labelledby="lanes">
-            <h2 id="lanes" className="text-lg font-semibold tracking-tight">Lanes</h2>
-            <p className="mt-1 text-sm text-muted-foreground">Labels on an issue that route it to a runner with that login.</p>
-            <ul className="mt-3 flex flex-wrap gap-1.5">
-              {p.lanes.map((l) => (
-                <li key={l}>
-                  <Link href={`/?project=${p.slug}&lane=${l}`} className="rounded border bg-muted px-2 py-0.5 font-mono text-xs hover:border-primary/50">
-                    agent:{l}
-                  </Link>
                 </li>
               ))}
             </ul>
