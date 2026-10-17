@@ -79,7 +79,7 @@ export async function runFx(req: LaneRequest, opts: FxOptions): Promise<LaneResu
         const child = execFile(
           bin,
           args,
-          { cwd: req.cwd, env: { ...process.env, FX_MODEL: opts.model, FX_NO_OPEN_BROWSER: "1", FX_AUTO_UPGRADE: "0" }, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000 },
+          { cwd: req.cwd, env: { ...(req.env ?? process.env), FX_MODEL: opts.model, FX_NO_OPEN_BROWSER: "1", FX_AUTO_UPGRADE: "0" }, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000 },
           (err, stdout, stderr) => resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
         );
         child.stdin?.end();

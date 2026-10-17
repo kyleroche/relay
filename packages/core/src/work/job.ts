@@ -27,8 +27,34 @@ import type { ClaimResult, ClaimedIssue, RunUsage } from "./server.ts";
 export const USAGE_MARKER = "<!-- relay:usage -->";
 export const DEFAULT_JOB_TIMEOUT_MS = 60 * 60_000;
 export const DEFAULT_MAX_TURNS = 40;
-/** Tools a code run may use: edit files and run the project's own package scripts and git. */
-export const CODE_TOOLS = ["Read", "Edit", "Write", "Glob", "Grep", "Bash(pnpm *)", "Bash(npm *)", "Bash(git *)"];
+/**
+ * Tools a code run may use without asking: edit files, run the project's own checks, and use git locally. Named
+ * subcommands only; `git push`, `git -c`/`config`/`remote` (which could rewrite where a push goes or run a hook),
+ * package runners (`pnpm dlx`, `npx`, `exec`) and network fetchers are refused outright (`CODE_DISALLOWED_TOOLS`).
+ * The worker itself commits, pushes and opens the PR. This is Claude Code's permission allowlist, not a sandbox: the
+ * lane still runs as the worker's OS user (docs/SECURITY.md).
+ */
+export const CODE_TOOLS = [
+  "Read",
+  "Edit",
+  "Write",
+  "Glob",
+  "Grep",
+  "Bash(git status*)",
+  "Bash(git diff*)",
+  "Bash(git log*)",
+  "Bash(git add*)",
+  "Bash(git commit*)",
+  "Bash(git checkout*)",
+  "Bash(git restore*)",
+  "Bash(pnpm install*)",
+  "Bash(pnpm test*)",
+  "Bash(pnpm typecheck*)",
+  "Bash(pnpm build*)",
+  "Bash(pnpm -r *)",
+  "Bash(npm test*)",
+];
+export const CODE_DISALLOWED_TOOLS = ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(pnpm dlx*)", "Bash(pnpm exec*)", "Bash(npm exec*)", "Bash(npx*)", "Bash(curl*)", "Bash(wget*)"];
 
 export interface PrRef {
   number: number;
@@ -92,13 +118,17 @@ async function must(bin: string, args: string[], opts: Parameters<typeof run>[2]
   return r.stdout;
 }
 
+/** Variables no child of a job may inherit: API keys and CI tokens (the lane runs on the subscription; gh acts as the operator) and the worker's own relay credential and home. */
+export const JOB_ENV_STRIPPED = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RELAY_TOKEN", "RELAY_SITE", "RELAY_HOME"] as const;
+
 /**
  * The environment a job runs with. No API key or CI token may shadow the machine's logins (the lane runs on the
- * subscription; gh acts as the operator), and git never prompts.
+ * subscription; gh acts as the operator), the lane cannot read the worker's site token or reach its `~/.harness`
+ * through the environment, and git never prompts.
  */
 export function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = { ...base };
-  for (const k of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"]) delete env[k];
+  for (const k of JOB_ENV_STRIPPED) delete env[k];
   env["GIT_TERMINAL_PROMPT"] = "0";
   env["FX_NO_OPEN_BROWSER"] = "1";
   env["FX_AUTO_UPGRADE"] = "0";
@@ -157,7 +187,7 @@ export const defaultLaneRunner: LaneRunner = async (req, lane) => {
   const env = process.env;
   if (lane === "claude") {
     const model = (env.RELAY_MODEL_CLAUDE as ClaudeModel | undefined) ?? "opus";
-    return { tool: "claude", ...(await runClaude(req, { model, allowedTools: CODE_TOOLS, maxTurns: DEFAULT_MAX_TURNS })) };
+    return { tool: "claude", ...(await runClaude(req, { model, allowedTools: CODE_TOOLS, disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS })) };
   }
   const fake = env.RELAY_FAKE_LANES === "1";
   if (lane === "codex") {
@@ -291,7 +321,7 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
     const prompt = composeJobPrompt({ repo: task.repo, issue, lane, ...(existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}), brief });
 
     log(`${task.id}: running the ${lane} lane`);
-    const result = await laneRun({ lane: "code", prompt, cwd: dir, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, project: task.project, task: task.id }, lane);
+    const result = await laneRun({ lane: "code", prompt, cwd: dir, env: cleanEnv(), timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, project: task.project, task: task.id }, lane);
     usage = toUsage(result);
     summary = result.text;
     if (!result.ok) return await report("failed", { error: (result.error ?? `${result.tool} did not finish`).slice(0, 300) });

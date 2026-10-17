@@ -68,7 +68,7 @@ export async function runCodex(req: LaneRequest, opts: CodexOptions = {}): Promi
     const args = ["exec", "--json", "--sandbox", req.readOnly ? "read-only" : "workspace-write", "-c", "agents.enabled=false"];
     if (opts.model) args.push("-m", opts.model);
     args.push(req.prompt);
-    const env = { ...process.env };
+    const env = { ...(req.env ?? process.env) };
     delete env["OPENAI_API_KEY"]; // the lane runs on the subscription, never on a stray key
     const t0 = Date.now();
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {

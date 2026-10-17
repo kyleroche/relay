@@ -28,6 +28,8 @@ export interface ClaudeOptions {
    */
   tools?: string[];
   allowedTools?: string[];
+  /** `--disallowedTools`: patterns refused even when a broader allow rule would match (the worker passes CODE_DISALLOWED_TOOLS). */
+  disallowedTools?: string[];
   maxBudgetUsd?: number;
   /** `--max-turns`: a hard stop for agentic code runs (the worker passes 40). Omit for utility calls. */
   maxTurns?: number;
@@ -97,6 +99,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     if (opts.tools) args.push("--tools", opts.tools.join(","));
     if (opts.allowedTools?.length) args.push("--allowedTools", opts.allowedTools.join(","));
     else if (req.readOnly && opts.tools === undefined) args.push("--allowedTools", "Read,Grep,Glob");
+    if (opts.disallowedTools?.length) args.push("--disallowedTools", opts.disallowedTools.join(","));
     // no MCP servers and no user/project settings: those are where plugins and skills inflate the prompt
     args.push("--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}', "--setting-sources", "");
     // Utility calls also drop skills and slash commands and, with the env and scratch cwd set below, load no project
@@ -113,7 +116,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     if (opts.maxTurns) args.push("--max-turns", String(opts.maxTurns));
     args.push("--", req.prompt);
     const t0 = Date.now();
-    const env = { ...process.env };
+    const env = { ...(req.env ?? process.env) };
     delete env["CLAUDECODE"];
     delete env["CLAUDE_CODE_ENTRYPOINT"];
     // the lane must run on the subscription, never on a stray API key

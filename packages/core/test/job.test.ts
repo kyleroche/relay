@@ -14,7 +14,7 @@ import * as repo from "../src/db/repo.ts";
 import { compileBrief } from "../src/brief/index.ts";
 import type { HttpFetch } from "../src/client/http.ts";
 import { httpWorkApi, localWorkApi, type WorkApi } from "../src/work/api.ts";
-import { composeJobPrompt, runJob, USAGE_MARKER, workDirFor, type GitHost, type LaneRunner, type PrRef } from "../src/work/job.ts";
+import { cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, runJob, USAGE_MARKER, workDirFor, type GitHost, type LaneRunner, type PrRef } from "../src/work/job.ts";
 import { claimServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError } from "../src/work/server.ts";
 import { runWorker } from "../src/work/worker.ts";
 
@@ -108,6 +108,50 @@ describe("composeJobPrompt", () => {
     expect(p).toContain("## Rules (relay.md)\n\n- rule");
     expect(p).toContain("## Memory\n\nPreferences:");
     expect(p).toContain("the worker commits and opens the PR");
+  });
+});
+
+describe("the job's environment and tool policy", () => {
+  it("cleanEnv drops API keys, CI tokens and the worker's own relay credential and home, and keeps the rest", () => {
+    const env = cleanEnv({ PATH: "/usr/bin", HOME: "/Users/w", ANTHROPIC_API_KEY: "sk", OPENAI_API_KEY: "sk", XAI_API_KEY: "sk", GH_TOKEN: "gh", GITHUB_TOKEN: "gh", RELAY_TOKEN: "rly_x", RELAY_SITE: "https://relay.test", RELAY_HOME: "/Users/w/.harness", CLAUDECODE: "1" });
+    for (const k of ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "RELAY_TOKEN", "RELAY_SITE", "RELAY_HOME", "CLAUDECODE"]) expect(env[k]).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin");
+    expect(env.HOME).toBe("/Users/w");
+    expect(env.GIT_TERMINAL_PROMPT).toBe("0");
+  });
+
+  it("the Claude allowlist names subcommands and the refusal list covers push, config, package runners and fetchers", () => {
+    expect(CODE_TOOLS).not.toContain("Bash(git *)");
+    expect(CODE_TOOLS).not.toContain("Bash(pnpm *)");
+    expect(CODE_TOOLS).not.toContain("Bash(npm *)");
+    expect(CODE_TOOLS.filter((t) => t.startsWith("Bash(")).every((t) => /^Bash\((git|pnpm|npm) [a-z-]+\*?\)$|^Bash\(pnpm -r \*\)$/.test(t))).toBe(true);
+    for (const t of ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(pnpm dlx*)", "Bash(pnpm exec*)", "Bash(npm exec*)", "Bash(npx*)", "Bash(curl*)", "Bash(wget*)"]) expect(CODE_DISALLOWED_TOOLS).toContain(t);
+  });
+
+  it("runJob hands the lane the cleaned environment, not the worker's", async () => {
+    process.env.RELAY_TOKEN = "rly_worker_secret";
+    process.env.RELAY_SITE = "https://relay.test";
+    try {
+      const api = localWorkApi(db, { dispatch: false });
+      const { worker } = await api.register({ name: "mini", host: "mini.local", lanes: ["claude"], version: "0.1.0" });
+      await newTask("claude");
+      const claim = await api.claim({ worker_id: worker.id });
+      let seen: NodeJS.ProcessEnv | undefined;
+      const spy: LaneRunner = async (req, lane) => {
+        seen = req.env;
+        return editingLane(req, lane);
+      };
+      const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", home, gitHost: fakeHost(), lane: spy });
+      expect(r.outcome).toBe("finished");
+      expect(seen).toBeDefined();
+      expect(seen!.RELAY_TOKEN).toBeUndefined();
+      expect(seen!.RELAY_SITE).toBeUndefined();
+      expect(seen!.RELAY_HOME).toBeUndefined();
+      expect(seen!.GIT_TERMINAL_PROMPT).toBe("0");
+    } finally {
+      delete process.env.RELAY_TOKEN;
+      delete process.env.RELAY_SITE;
+    }
   });
 });
 

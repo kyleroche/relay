@@ -13,6 +13,8 @@ export interface LaneRequest {
   addDirs?: string[];
   readOnly?: boolean;
   timeoutMs?: number;
+  /** The environment the CLI process starts from (a worker passes `cleanEnv()`); the adapter still drops its vendor's API key. Default: process.env. */
+  env?: NodeJS.ProcessEnv;
   /** Ledger attribution. */
   project?: string;
   task?: string;

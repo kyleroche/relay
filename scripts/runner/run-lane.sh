@@ -56,8 +56,10 @@ fi
   fi
 } > "$BRIEF"
 PROMPT="$(cat "$BRIEF")"
+# The brief is built; from here on the lane must not see the relay credential or home either.
+unset RELAY_TOKEN RELAY_SITE RELAY_HOME
 
-# Review is read-only on every CLI; code mode may edit files and run pnpm/npm/git.
+# Review is read-only on every CLI; code mode may edit files and run the named pnpm/npm/git subcommands.
 RO=0; PERM=acceptEdits; SANDBOX=workspace-write
 [[ "$MODE" == review ]] && { RO=1; PERM=plan; SANDBOX=read-only; }
 START=$(date +%s)   # seconds: macOS date has no %N; a CLI's own duration_ms is preferred when it reports one
@@ -66,7 +68,14 @@ case "$LANE" in
     TOOL=claude
     # no MCP servers and no user/project settings: that is where plugins and skills inflate the prompt
     args=(-p --output-format json --permission-mode "$PERM" --strict-mcp-config --mcp-config '{"mcpServers":{}}' --setting-sources "")
-    if (( RO )); then args+=(--allowedTools "Read,Glob,Grep"); else args+=(--allowedTools "Read,Edit,Write,Glob,Grep,Bash(pnpm *),Bash(npm *),Bash(git *)"); fi
+    # Named subcommands only, and an explicit refusal list (push, config/remote rewrites, package runners, fetchers): the
+    # runner itself commits, pushes and opens the PR. A permission allowlist, not a sandbox (docs/SECURITY.md).
+    if (( RO )); then
+      args+=(--allowedTools "Read,Glob,Grep")
+    else
+      args+=(--allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add*),Bash(git commit*),Bash(git checkout*),Bash(git restore*),Bash(pnpm install*),Bash(pnpm test*),Bash(pnpm typecheck*),Bash(pnpm build*),Bash(pnpm -r *),Bash(npm test*)")
+      args+=(--disallowedTools "Bash(git push*),Bash(git -c*),Bash(git config*),Bash(git remote*),Bash(pnpm dlx*),Bash(pnpm exec*),Bash(npm exec*),Bash(npx*),Bash(curl*),Bash(wget*)")
+    fi
     # --max-turns is not listed by every Claude Code release; pass it only when this build advertises it
     claude --help 2>/dev/null | grep -q -- '--max-turns' && args+=(--max-turns 40)
     [[ -n "$MODEL" ]] && args+=(--model "$MODEL")

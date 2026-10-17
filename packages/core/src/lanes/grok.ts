@@ -40,7 +40,7 @@ export async function runGrok(req: LaneRequest, opts: GrokOptions = {}): Promise
   return withSubscriptionLock("grok", async () => {
     const args = ["-p", req.prompt, "--output-format", "json", "--no-subagents", "--no-plan", "--permission-mode", req.readOnly ? "plan" : "acceptEdits"];
     if (opts.model) args.push("-m", opts.model);
-    const env = { ...process.env };
+    const env = { ...(req.env ?? process.env) };
     delete env["XAI_API_KEY"];
     const t0 = Date.now();
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
