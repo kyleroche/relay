@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { SITE_URL } from "@/lib/site";
 
 /**
- * RFC 9727 API catalog: a linkset pointing at the OpenAPI description and the MCP server card. Authentication is a
- * plain bearer token issued by `relay token create`, described in the OpenAPI security scheme; there is no
- * authorization server, so nothing here points at one.
+ * RFC 9727 API catalog: a linkset pointing at the OpenAPI description, the MCP server card, and the authorization
+ * server's metadata (RFC 8414) and the protected-resource document (RFC 9728) that names it, so an agent that finds
+ * this file can get a token without a person copying one.
  */
 export function GET() {
   const body = {
@@ -19,6 +19,14 @@ export function GET() {
         anchor: `${SITE_URL}/mcp`,
         "service-desc": [{ href: `${SITE_URL}/.well-known/mcp/server-card.json`, type: "application/json" }],
         "service-doc": [{ href: `${SITE_URL}/docs/api#mcp-server`, type: "text/html" }],
+      },
+      {
+        anchor: `${SITE_URL}/`,
+        "service-meta": [
+          { href: `${SITE_URL}/.well-known/oauth-authorization-server`, type: "application/json", title: "OAuth 2.1 authorization server metadata (RFC 8414)" },
+          { href: `${SITE_URL}/.well-known/oauth-protected-resource`, type: "application/json", title: "Protected resource metadata (RFC 9728)" },
+        ],
+        "service-doc": [{ href: `${SITE_URL}/docs/integrations`, type: "text/html" }],
       },
     ],
   };

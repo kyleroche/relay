@@ -11,6 +11,7 @@ export const integrationTags = [
   { name: "events", description: "External bots logging their own external.* events into the feed." },
   { name: "tokens", description: "Bearer tokens for this site: mint (plaintext shown once), list, revoke." },
   { name: "webhooks", description: "Outbound webhooks: signed POSTs for the event kinds a receiver subscribes to (docs/FEED.md)." },
+  { name: "access", description: "Who the caller is, pending device-flow approvals, and invite codes: the pieces of the authorization server that live under /api/v1 (docs/INTEGRATIONS.md)." },
 ];
 
 type Response = (description: string, schemaRef: string) => unknown;
@@ -200,6 +201,66 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         security: [{ bearer: ["webhooks:write"] }],
         parameters: [idParam],
         responses: { "200": response("Removed.", "#/components/schemas/WebhookRemoved"), "404": problemResponse("No such webhook."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/whoami": {
+      get: {
+        operationId: "whoami",
+        tags: ["access"],
+        summary: "Who am I",
+        description: "The caller's token name, scopes, expiry and how it authenticated (db, env, shared, session). Any valid credential may ask; anonymous callers get 401 with the challenge that names the authorization server.",
+        security: [{ bearer: [] }, { oauth2: [] }],
+        responses: { "200": response("The caller.", "#/components/schemas/WhoAmI"), ...commonErrors },
+      },
+    },
+    "/access": {
+      get: {
+        operationId: "listAccessRequests",
+        tags: ["access"],
+        summary: "Device-flow requests waiting for a decision",
+        security: [{ bearer: ["tokens:write"] }],
+        responses: { "200": response("Pending requests, newest first.", "#/components/schemas/AccessRequestList"), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/access/{user_code}/approve": {
+      post: {
+        operationId: "approveAccessRequest",
+        tags: ["access"],
+        summary: "Approve or deny a device request by its code",
+        description: "What a reply over chat can do: approve (default) or deny the request a CLI or bot started with `relay setup --site`. The device receives its token on its next poll. Writes access.granted or access.denied.",
+        security: [{ bearer: ["tokens:write"] }],
+        parameters: [{ name: "user_code", in: "path", required: true, schema: { type: "string", pattern: "^RLAY-[A-Z0-9]{4,8}$" }, description: "The code shown to the person, e.g. RLAY-4F7Q; case and dashes do not matter." }],
+        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { decision: { type: "string", enum: ["approve", "deny"], default: "approve" } } } } } },
+        responses: { "200": response("Decided.", "#/components/schemas/AccessDecision"), "404": problemResponse("No pending request with that code."), "410": problemResponse("The request expired."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/invites": {
+      get: {
+        operationId: "listInvites",
+        tags: ["access"],
+        summary: "List invites (never the code)",
+        security: [{ bearer: ["tokens:write"] }],
+        parameters: [{ name: "all", in: "query", schema: { type: "string", enum: ["1"] }, description: "Include spent, expired and revoked invites." }],
+        responses: { "200": response("Invites.", "#/components/schemas/InviteList"), "501": notImplemented, ...commonErrors },
+      },
+      post: {
+        operationId: "createInvite",
+        tags: ["access"],
+        summary: "Mint a one-time invite code",
+        description: "What `relay invite create` calls. The code is returned once. Redeeming it (`relay setup --site <url> --invite <code>`, or grant `urn:relay:invite` at /oauth/token) yields a token named oauth:<name> with exactly these scopes and no approval step.",
+        security: [{ bearer: ["tokens:write"] }],
+        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/InviteCreate" } } } },
+        responses: { "201": response("The invite and its code, shown once.", "#/components/schemas/InviteCreated"), "400": problemResponse("Bad name, scopes, duration or uses."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/invites/{id}": {
+      delete: {
+        operationId: "revokeInvite",
+        tags: ["access"],
+        summary: "Revoke an invite by id or name",
+        security: [{ bearer: ["tokens:write"] }],
+        parameters: [idParam],
+        responses: { "200": response("Revoked.", "#/components/schemas/InviteRevoked"), "404": problemResponse("No live invite matches."), "501": notImplemented, ...commonErrors },
       },
     },
     "/webhooks/{id}/test": {
@@ -416,4 +477,57 @@ export const integrationSchemas: Record<string, unknown> = {
   },
   WebhookDetail: { type: "object", properties: { webhook: { $ref: "#/components/schemas/Webhook" }, deliveries: { type: "array", items: { $ref: "#/components/schemas/DeliveryRow" } } } },
   WebhookRemoved: { type: "object", properties: { removed: { type: "string" } } },
+  WhoAmI: {
+    type: "object",
+    required: ["actor", "name", "scopes", "expires_at", "source"],
+    properties: {
+      actor: { type: "string", description: "token:<name> or human:<login>; writes are attributed to bot:<name> or human:<login>." },
+      name: { type: "string", description: "The token's name, e.g. oauth:grok-bot or ci-runner." },
+      scopes: { type: "array", items: { type: "string", enum: [...TOKEN_SCOPES] } },
+      expires_at: nullable("string", { format: "date-time", description: "Null for operator-minted tokens." }),
+      source: { type: "string", enum: ["db", "env", "shared", "session"] },
+    },
+  },
+  AccessRequest: {
+    type: "object",
+    properties: {
+      user_code: { type: "string", example: "RLAY-4F7Q" },
+      client_name: { type: "string" },
+      client_id: { type: "string" },
+      scopes: { type: "array", items: { type: "string", enum: [...TOKEN_SCOPES] } },
+      created_at: { type: "string", format: "date-time" },
+      expires_at: { type: "string", format: "date-time" },
+      approve: { type: "string", description: "Path to POST a decision to." },
+    },
+  },
+  AccessRequestList: { type: "object", properties: { requests: { type: "array", items: { $ref: "#/components/schemas/AccessRequest" } }, count: { type: "integer" } } },
+  AccessDecision: { type: "object", properties: { user_code: { type: "string" }, status: { type: "string", enum: ["approved", "denied"] }, client_name: { type: "string" }, scopes: { type: "array", items: { type: "string" } }, decided_by: nullable("string") } },
+  Invite: {
+    type: "object",
+    properties: {
+      id: { type: "string" },
+      name: { type: "string", description: "Who it is for; the redeemed token is oauth:<name>." },
+      scopes: { type: "array", items: { type: "string", enum: [...TOKEN_SCOPES] } },
+      uses_left: { type: "integer" },
+      max_uses: { type: "integer" },
+      expires_at: { type: "string", format: "date-time" },
+      created_by: { type: "string" },
+      created_at: { type: "string", format: "date-time" },
+      revoked_at: nullable("string", { format: "date-time" }),
+      last_redeemed_at: nullable("string", { format: "date-time" }),
+    },
+  },
+  InviteList: { type: "object", properties: { invites: { type: "array", items: { $ref: "#/components/schemas/Invite" } }, count: { type: "integer" } } },
+  InviteCreate: {
+    type: "object",
+    required: ["name", "scopes"],
+    properties: {
+      name: { type: "string", maxLength: 80 },
+      scopes: { type: "array", items: { type: "string", enum: [...TOKEN_SCOPES] } },
+      expires_in: { oneOf: [{ type: "string", pattern: "^\\d+[smhdw]?$" }, { type: "integer" }], description: "24h, 7d, or seconds; default 24h.", default: "24h" },
+      uses: { type: "integer", minimum: 1, maximum: 1000, default: 1 },
+    },
+  },
+  InviteCreated: { type: "object", required: ["invite", "code"], properties: { invite: { $ref: "#/components/schemas/Invite" }, code: { type: "string", description: "Shown once." } } },
+  InviteRevoked: { type: "object", properties: { revoked: { $ref: "#/components/schemas/Invite" } } },
 };

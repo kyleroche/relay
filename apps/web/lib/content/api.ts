@@ -21,6 +21,18 @@ Read endpoints work without credentials when the deploy enables public read (\`R
 Authorization: Bearer <token>
 \`\`\`
 
+Nobody copies tokens. This site runs an OAuth 2.1 authorization server ([metadata](/.well-known/oauth-authorization-server), RFC 8414; the API and MCP server name it in [\`/.well-known/oauth-protected-resource\`](/.well-known/oauth-protected-resource), RFC 9728, and in every \`WWW-Authenticate\` challenge). Three ways in, each ending in one approval by a signed-in person:
+
+| You are | Do this | Approval |
+|---|---|---|
+| an MCP client or app with a browser | \`POST /oauth/register\` (RFC 7591, public client), then the authorization code flow with PKCE S256 at \`/oauth/authorize\` and \`/oauth/token\` | the consent page shows the client name and each scope; approve or deny |
+| a CLI or a headless bot | \`POST /oauth/device\` (RFC 8628) returns a code like \`RLAY-4F7Q\`; poll \`/oauth/token\` with \`grant_type=urn:ietf:params:oauth:grant-type:device_code\` | the person opens [\`/activate\`](/activate), or a bot calls \`POST /api/v1/access/RLAY-4F7Q/approve\` from a chat reply; \`relay setup --site <url>\` does all of this for a machine |
+| anything the operator trusts in advance | \`relay invite create --for <name> --scopes <a,b>\` prints a one-time code; redeem it with \`grant_type=urn:relay:invite\` or \`relay setup --site <url> --invite <code>\` | none: the invite is the approval |
+
+Access tokens last **24 hours** and are rows in the same \`tokens\` table as operator-minted ones, named \`oauth:<client name>\`, so every scope check and \`relay token ls|revoke\` applies to them. Refresh tokens last **90 days** and rotate on every use; reusing an old one revokes the whole lineage. Revoke either kind at \`POST /oauth/revoke\` (\`token=…\`), on [/tokens](/tokens), or with \`relay token revoke\`. Every request and decision is an \`access.*\` row in the feed, so a webhook on \`access.requested\` lets a chat bot relay the approval. The [connect guide](/docs/integrations) walks through each case.
+
+\`GET /api/v1/whoami\` (and the \`relay_whoami\` MCP tool) tells any credential what it is: name, scopes, expiry, source.
+
 Scopes are named and granted per token:
 
 | Scope | Grants |
@@ -38,15 +50,38 @@ Scopes are named and granted per token:
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
 | \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode) |
 
-Tokens are minted on the [tokens page](/tokens) while signed in (the first one for a new site), or with the CLI, locally against the database or in site mode against \`POST /api/v1/tokens\`:
+The operator can also mint tokens by hand, on the [tokens page](/tokens) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
 
 \`\`\`bash
 pnpm relay token create --name ci-runner --scopes feed:read,assets:write   # prints the token once
-pnpm relay token ls
-pnpm relay token revoke ci-runner
+pnpm relay token ls                                                        # OAuth tokens show as oauth:<client>
+pnpm relay token revoke oauth:grok-bot
+pnpm relay invite create --for woodhouse --scopes tasks:read,tasks:write,events:write --expires 24h --uses 1
 \`\`\`
 
-Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope. There is no OAuth authorization server and no self-serve sign-up: the bearer scheme and its scopes are described in [\`/openapi.json\`](/openapi.json) (\`securitySchemes.bearer\`) and in the [MCP server card](/.well-known/mcp/server-card.json), and a token comes from the operator ([contact](/contact)). A request without a usable token gets \`401\` with a \`WWW-Authenticate: Bearer realm="relay", scope="<scope>"\` challenge.
+Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope; neither has an expiry. The bearer and \`oauth2\` schemes and their scopes are described in [\`/openapi.json\`](/openapi.json) (\`securitySchemes\`) and in the [MCP server card](/.well-known/mcp/server-card.json). A request without a usable token gets \`401\` with \`WWW-Authenticate: Bearer realm="relay", scope="<scope>", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"\`.
+
+### OAuth endpoints
+
+| Endpoint | Does |
+|---|---|
+| \`GET /.well-known/oauth-authorization-server\` | RFC 8414 metadata: endpoints, \`scopes_supported\`, grant types, \`code_challenge_methods_supported: ["S256"]\` |
+| \`GET /.well-known/oauth-protected-resource\` | RFC 9728: this site as the resource, \`authorization_servers: ["${SITE_URL}"]\` |
+| \`POST /oauth/register\` | RFC 7591: \`{"client_name", "redirect_uris", "grant_types", "token_endpoint_auth_method": "none"}\` → \`client_id\` (public) or \`client_secret\` once (\`client_secret_post\`) |
+| \`GET /oauth/authorize\` | the consent page (needs the relay session): \`response_type=code\`, \`client_id\`, \`redirect_uri\`, \`scope\`, \`state\`, \`code_challenge\`, \`code_challenge_method=S256\`, optional \`resource\` |
+| \`POST /oauth/token\` | \`authorization_code\` (+ \`code_verifier\`), \`refresh_token\` (rotated), \`urn:ietf:params:oauth:grant-type:device_code\`, \`urn:relay:invite\` (\`invite=<code>\`, optional \`client_name\`) |
+| \`POST /oauth/device\` | \`client_id\` or \`client_name\`, \`scope\` → \`device_code\`, \`user_code\`, \`verification_uri\` (\`/activate\`), \`verification_uri_complete\`, \`interval\`, \`expires_in\` (15 min) |
+| \`POST /oauth/revoke\` | RFC 7009: \`token=<access or refresh token>\` |
+
+Form-encoded or JSON bodies are accepted; errors are RFC 6749 \`{"error", "error_description"}\`.
+
+\`\`\`bash
+# headless bot: ask, show the code, poll
+curl -s -X POST ${SITE_URL}/oauth/device -d client_name=my-bot -d "scope=tasks:read tasks:write events:write"
+# → {"device_code":"rdc_…","user_code":"RLAY-4F7Q","verification_uri":"${SITE_URL}/activate",…,"interval":5}
+curl -s -X POST ${SITE_URL}/oauth/token -d grant_type=urn:ietf:params:oauth:grant-type:device_code -d device_code=rdc_…
+# → {"error":"authorization_pending"} until approved, then {"access_token":"rly_…","refresh_token":"rrt_…","expires_in":86400,…}
+\`\`\`
 
 ## Rate limits
 
@@ -153,6 +188,9 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 | \`PUT /api/v1/projects/{slug}\`, \`/digests\`, \`/summary\` | \`projects:write\` | what \`relay link\` uploads in site mode |
 | \`GET\`, \`POST /api/v1/webhooks\`; \`GET\`, \`DELETE /api/v1/webhooks/{id}\`; \`POST /api/v1/webhooks/{id}/test\` | \`webhooks:write\` | outbound webhooks; the signing secret is returned once on create; [payload and signature](/docs/feed#outbound-webhooks) |
 | \`GET\`, \`POST /api/v1/tokens\`; \`DELETE /api/v1/tokens/{id}\` | \`tokens:write\` | list, mint (plaintext once), revoke |
+| \`GET /api/v1/whoami\` (\`whoami\`) | any credential | the caller's token name, scopes, expiry and source |
+| \`GET /api/v1/access\`; \`POST /api/v1/access/{user_code}/approve\` | \`tokens:write\` | pending device requests; approve (or \`{"decision":"deny"}\`) one by its code |
+| \`GET\`, \`POST /api/v1/invites\`; \`DELETE /api/v1/invites/{id}\` | \`tokens:write\` | invite codes: list (never the code), mint (code once), revoke |
 
 \`\`\`bash
 curl -s -X POST ${SITE_URL}/api/v1/tasks -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
@@ -180,10 +218,12 @@ curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN
 | \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
 | \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, running, review, done, failed) with runner, PR and last summary |
 | \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
+| \`relay_whoami\` | public | this connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
+| \`relay_webhook_subscribe\`, \`relay_webhook_unsubscribe\` | \`webhooks:write\` | register an outbound webhook (the signing secret is returned once) and remove one |
 
 Anyone can connect: \`initialize\` and \`tools/list\` need no token, and \`relay_get_info\` and \`relay_get_methodology\` always answer anonymously. With public read enabled (\`RELAY_PUBLIC_READ=1\`, the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token too. Every other call without the right scope returns an MCP tool error (\`isError: true\`) naming the missing scope, not an HTTP error; only a bearer token the server does not recognise gets HTTP \`401\`. Every response carries the same \`RateLimit\` headers as the API.
 
-Claude Code:
+Claude Code (the client discovers the authorization server from the 401 challenge and runs the consent flow; no token to paste):
 
 \`\`\`bash
 claude mcp add --transport http relay ${SITE_URL}/mcp
@@ -199,7 +239,6 @@ pnpm relay feed -n 20      # the same feed, in the terminal
 pnpm relay usage --days 7
 \`\`\`
 
-A machine without the database can use this site instead: mint a token on [/tokens](/tokens), then
-\`pnpm relay setup --site ${SITE_URL} --token <token>\`. From then on the memory, feed, token, task and webhook commands and the session hooks call \`/api/v1\` and \`/mcp\` here; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)).
+A machine without the database can use this site instead: \`pnpm relay setup --site ${SITE_URL}\` prints a code, you approve it at [/activate](/activate) (or with \`--invite <code>\` from \`relay invite create\`, no approval), and the CLI stores a token that renews itself. From then on the memory, feed, token, invite, task and webhook commands and the session hooks call \`/api/v1\` and \`/mcp\` here; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)). \`relay doctor\` shows the token's name, source and expiry.
 `;
 }

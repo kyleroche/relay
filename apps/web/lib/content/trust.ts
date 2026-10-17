@@ -69,7 +69,7 @@ relay is free and open source under Apache-2.0. There is no sales team, no demo 
 
 ## For agents
 
-The read API and the MCP server are described in the [API and MCP guide](${SITE_URL}/docs/api), [\`/openapi.json\`](${SITE_URL}/openapi.json) and the [MCP server card](${SITE_URL}/.well-known/mcp/server-card.json). Bearer tokens are issued only by the operator with \`relay token create\`; there is no self-serve sign-up and no OAuth authorization server. Ask the operator through the channels above.
+The read API and the MCP server are described in the [API and MCP guide](${SITE_URL}/docs/api), [\`/openapi.json\`](${SITE_URL}/openapi.json) and the [MCP server card](${SITE_URL}/.well-known/mcp/server-card.json). Tokens come from this site's own OAuth 2.1 authorization server ([metadata](${SITE_URL}/.well-known/oauth-authorization-server)): an MCP client registers itself and asks the operator for consent, a CLI or bot shows a short code the operator approves at [\`/activate\`](${SITE_URL}/activate), or the operator hands out a one-time invite code. Nobody copies a token, and every grant is one approval by a person who signed in here. The [connect guide](${SITE_URL}/docs/integrations) has the steps.
 `;
 }
 

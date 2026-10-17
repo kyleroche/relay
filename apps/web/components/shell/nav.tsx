@@ -17,6 +17,7 @@ export const NAV: readonly NavItem[] = [
   { href: "/usage", label: "Usage" },
   { href: "/workers", label: "Workers" },
   { href: "/tokens", label: "Tokens" },
+  { href: "/setup/github", label: "Setup" },
   { href: "/info", label: "Info" },
   { href: "/docs", label: "Docs" },
 ];

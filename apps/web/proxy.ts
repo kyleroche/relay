@@ -3,6 +3,7 @@ import { classifyRoute, isApiPath } from "@/lib/access";
 import { dataMode, publicReadEnabled } from "@/lib/mode";
 import { hasMarkdownMirror, homeDecision, MARKDOWN_PATH_HEADER, negotiateFormat, type Format } from "@/lib/negotiate";
 import { SESSION_COOKIE, verifySession } from "@/lib/session-token";
+import { SITE_URL } from "@/lib/site";
 
 /**
  * Three jobs, in this order:
@@ -106,7 +107,7 @@ export default async function proxy(req: NextRequest): Promise<NextResponse> {
         headers: {
           "content-type": "application/problem+json; charset=utf-8",
           "cache-control": "no-store",
-          "WWW-Authenticate": `Bearer realm="relay"`,
+          "WWW-Authenticate": `Bearer realm="relay", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"`,
           // the readiness contract wants rate-limit headers on every API response, including refusals
           "RateLimit-Policy": '"default";q=60;w=60',
           RateLimit: '"default";r=60;t=60',

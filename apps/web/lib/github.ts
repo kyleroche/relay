@@ -1,28 +1,19 @@
 /**
- * Write-backs to GitHub for the asset review loop (docs/ASSETS.md, "GitHub"). Uses the REST API with
- * GITHUB_APP_TOKEN or GITHUB_TOKEN; without either every call is a silent no-op, so a deployment that only reads
- * webhooks keeps working. Failures are logged, never thrown: a comment is a courtesy, the review already happened.
+ * Write-backs to GitHub for the asset review loop (docs/ASSETS.md, "GitHub"). Uses the site's GitHub client (the
+ * GitHub App when configured, else GITHUB_APP_TOKEN or GITHUB_TOKEN); without any every call is a silent no-op, so a
+ * deployment that only reads webhooks keeps working. Failures are logged, never thrown: a comment is a courtesy, the
+ * review already happened.
  */
+import { siteGitHub } from "@/lib/integrations";
 import { SITE_URL } from "@/lib/site";
 import type { Asset } from "@/lib/types";
 
-const API = "https://api.github.com";
-
-export function githubToken(): string | undefined {
-  return process.env.GITHUB_APP_TOKEN || process.env.GITHUB_TOKEN || undefined;
-}
-
 async function gh(method: string, path: string, body: unknown): Promise<boolean> {
-  const token = githubToken();
-  if (!token) return false;
   try {
-    const res = await fetch(`${API}${path}`, {
-      method,
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "content-type": "application/json", "user-agent": "relay-web", "x-github-api-version": "2022-11-28" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) console.error(`[relay] github ${method} ${path}: ${res.status}`);
-    return res.ok;
+    const client = await siteGitHub();
+    if (!client) return false;
+    await client.request(method, path, body);
+    return true;
   } catch (e) {
     console.error(`[relay] github ${method} ${path}: ${e instanceof Error ? e.message : String(e)}`);
     return false;

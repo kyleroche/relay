@@ -7,6 +7,13 @@ import { bearerOf, resolveGrant, SCOPES, type Grant, type Scope } from "@/lib/au
 import { dataMode, publicReadEnabled, SITE_URL } from "@/lib/data";
 import { SESSION_COOKIE, sessionActor, verifySession } from "@/lib/session-token";
 
+export const RESOURCE_METADATA_URL = `${SITE_URL}/.well-known/oauth-protected-resource`;
+
+/** `WWW-Authenticate` for every refusal: the realm, the scope wanted, and where the authorization server is (RFC 9728). */
+export function bearerChallenge(scope?: string): string {
+  return `Bearer realm="relay"${scope ? `, scope="${scope}"` : ""}, resource_metadata="${RESOURCE_METADATA_URL}"`;
+}
+
 export { SCOPES, type Scope };
 export const RATE_LIMIT = { policyName: "default", limit: 60, windowSeconds: 60 } as const;
 export const PROBLEM_TYPE = `${SITE_URL}/docs/api#errors`;
@@ -84,7 +91,7 @@ export async function sessionGrant(req: Request): Promise<Grant | undefined> {
   const cookie = req.headers.get("cookie") ?? "";
   const m = new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([^;]+)`).exec(cookie);
   const session = await verifySession(m?.[1], process.env.RELAY_SESSION_SECRET);
-  return session ? { scopes: [...SCOPES], actor: sessionActor(session), source: "session" } : undefined;
+  return session ? { scopes: [...SCOPES], actor: sessionActor(session), source: "session", name: session.login, expiresAt: new Date(session.exp * 1000).toISOString() } : undefined;
 }
 
 /** Who is calling: the token's grant, the session's, the anonymous public-read grant, or nothing. */
@@ -93,21 +100,20 @@ export async function callerGrant(req: Request): Promise<Grant | undefined> {
   if (token) return resolveGrant(token);
   const session = await sessionGrant(req);
   if (session) return session;
-  return publicReadEnabled() ? { scopes: PUBLIC_SCOPES, actor: "anon:web", source: "env" } : undefined;
+  return publicReadEnabled() ? { scopes: PUBLIC_SCOPES, actor: "anon:web", source: "env", name: "anonymous", expiresAt: null } : undefined;
 }
 
 /** Null when allowed; otherwise the 401/403 problem to return. Read scopes pass when public read is on. */
 export async function requireScope(req: Request, scope: Scope, instance: string, rate?: RateState): Promise<NextResponse | null> {
   if (PUBLIC_SCOPES.includes(scope) && publicReadEnabled()) return null;
   const token = bearer(req);
-  const challenge = `Bearer realm="relay", scope="${scope}"`;
-  const headers = { "WWW-Authenticate": challenge, ...(rate ? rateHeaders(rate) : {}) };
+  const headers = { "WWW-Authenticate": bearerChallenge(scope), ...(rate ? rateHeaders(rate) : {}) };
   if (!token) {
     if (await sessionGrant(req)) return null;
-    return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope, or a signed-in session.`, instance, {}, headers);
+    return problem(401, "Unauthorized", `This operation needs a bearer token with the ${scope} scope, or a signed-in session. Get one through the authorization server (${RESOURCE_METADATA_URL}).`, instance, {}, headers);
   }
   const grant = await resolveGrant(token);
-  if (!grant) return problem(401, "Unauthorized", "Unknown token.", instance, {}, headers);
+  if (!grant) return problem(401, "Unauthorized", "Unknown, expired or revoked token.", instance, {}, headers);
   if (!grant.scopes.includes(scope)) return problem(403, "Forbidden", `Token lacks the ${scope} scope.`, instance, { scopes: grant.scopes }, headers);
   return null;
 }

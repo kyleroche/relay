@@ -1,9 +1,9 @@
 import { createMcpHandler, type Grant } from "@relay/mcp";
 import { NextResponse, type NextRequest } from "next/server";
-import { clientKey, problem, rateHeaders, takeToken } from "@/lib/api";
+import { bearerChallenge, clientKey, problem, rateHeaders, RESOURCE_METADATA_URL, takeToken } from "@/lib/api";
 import { getStore, publicUploadUrl, publicViewUrl, VIEW_TTL } from "@/lib/assets";
 import { resolveGrant } from "@/lib/auth";
-import { dataMode, getFeed, getProject, publicReadEnabled } from "@/lib/data";
+import { dataMode, getFeed, getProject, publicReadEnabled, SITE_URL } from "@/lib/data";
 import { getDb, getMemoryDb } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch";
 import { siteGitHub } from "@/lib/integrations";
@@ -26,10 +26,12 @@ async function handler(req: Request): Promise<Response> {
     token: process.env.RELAY_MEMORY_TOKEN,
     authorize: async (bearer): Promise<Grant | undefined> => {
       const g = await resolveGrant(bearer);
-      return g ? { scopes: g.scopes, actor: g.actor } : undefined;
+      return g ? { scopes: g.scopes, actor: g.actor, name: g.name, expiresAt: g.expiresAt, source: g.source } : undefined;
     },
     publicRead: publicReadEnabled(),
-    ...(dataMode() === "db" ? { github: siteGitHub(), afterEvent: dispatchOne } : {}),
+    resourceMetadata: RESOURCE_METADATA_URL,
+    authorizationServer: `${SITE_URL}/.well-known/oauth-authorization-server`,
+    ...(dataMode() === "db" ? { github: await siteGitHub(), afterEvent: dispatchOne } : {}),
     site: {
       info: infoDocument,
       methodology: methodologyText,
@@ -55,7 +57,7 @@ export async function POST(req: NextRequest) {
   const res = await handler(req);
   const headers = new Headers(res.headers);
   for (const [k, v] of Object.entries(rateHeaders(rate))) headers.set(k, v);
-  if (res.status === 401) headers.set("WWW-Authenticate", 'Bearer realm="relay"');
+  if (res.status === 401) headers.set("WWW-Authenticate", bearerChallenge());
   return new NextResponse(res.body, { status: res.status, headers });
 }
 

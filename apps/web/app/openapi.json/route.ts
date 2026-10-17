@@ -70,7 +70,7 @@ export function GET() {
       { name: "assets", description: "The asset library: media agents produce, versioned, with an approve-or-reject review loop (docs/ASSETS.md)." },
       ...integrationTags,
     ],
-    security: [{}, { bearer: ["feed:read"] }],
+    security: [{}, { bearer: ["feed:read"] }, { oauth2: ["feed:read"] }],
     paths: {
       "/info": {
         get: {
@@ -229,9 +229,27 @@ export function GET() {
         bearer: {
           type: "http",
           scheme: "bearer",
-          description: `Bearer token issued by the operator with \`relay token create --name <name> --scopes <scopes>\` (the SHA-256 is stored, the token is shown once). There is no authorization server and no sign-up: ask the operator for a token (${SITE_URL}/contact). Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read.`,
-          "x-token-issuance": "relay token create --name <name> --scopes <scopes>",
+          description: `Bearer token. Three ways to get one, all ending in a row of the same tokens table: (1) OAuth 2.1 from this site's authorization server (${SITE_URL}/.well-known/oauth-authorization-server): authorization code with PKCE S256 for clients with a browser, the RFC 8628 device flow for CLIs and bots (relay setup --site <url> prints a code the operator approves at ${SITE_URL}/activate), or the urn:relay:invite grant with a one-time code from relay invite create; access tokens last 24 hours, refresh tokens 90 days with rotation. (2) relay token create --name <name> --scopes <scopes> on the operator's machine. (3) the /tokens page while signed in. Only the SHA-256 is stored and the token is shown once. Scopes: ${SCOPES.join(", ")}. Read operations need no token when the deployment enables public read. Every 401 carries WWW-Authenticate with resource_metadata pointing at ${SITE_URL}/.well-known/oauth-protected-resource (RFC 9728).`,
+          "x-token-issuance": "relay token create --name <name> --scopes <scopes>, relay invite create --for <name> --scopes <scopes>, or OAuth at /oauth/*",
           "x-scopes": scopeDescriptions,
+          "x-authorization-server": `${SITE_URL}/.well-known/oauth-authorization-server`,
+          "x-resource-metadata": `${SITE_URL}/.well-known/oauth-protected-resource`,
+        },
+        oauth2: {
+          type: "oauth2",
+          description: `OAuth 2.1 at this site. Register a client with POST ${SITE_URL}/oauth/register (RFC 7591, public clients), then the authorization code flow with PKCE (S256 required), or the device flow (POST ${SITE_URL}/oauth/device, approve at ${SITE_URL}/activate). Access tokens are the same bearer tokens as above (24 h); refresh tokens rotate on use (90 d). Revoke at POST ${SITE_URL}/oauth/revoke.`,
+          flows: {
+            authorizationCode: {
+              authorizationUrl: `${SITE_URL}/oauth/authorize`,
+              tokenUrl: `${SITE_URL}/oauth/token`,
+              refreshUrl: `${SITE_URL}/oauth/token`,
+              scopes: scopeDescriptions,
+            },
+          },
+          "x-device-authorization-url": `${SITE_URL}/oauth/device`,
+          "x-registration-url": `${SITE_URL}/oauth/register`,
+          "x-revocation-url": `${SITE_URL}/oauth/revoke`,
+          "x-grant-types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code", "urn:relay:invite"],
         },
       },
       schemas: {

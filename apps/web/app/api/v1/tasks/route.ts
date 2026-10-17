@@ -45,7 +45,7 @@ export const POST = api(
     if (!title) return problem(400, "Bad Request", "title is required.", instance, { parameter: "title" });
     const actor = await writerActor(req);
     try {
-      const r = await openTask(await getDb(), siteGitHub(), {
+      const r = await openTask(await getDb(), await siteGitHub(), {
         project,
         title,
         body: typeof body.body === "string" ? body.body : "",
