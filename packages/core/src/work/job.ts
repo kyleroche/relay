@@ -376,6 +376,9 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
         summary = SANDBOX_UNAVAILABLE_SUMMARY;
         return await report("failed", { error: SANDBOX_UNAVAILABLE_SUMMARY });
       }
+      const said = result.text.trim();
+      if (said) log(`${task.id}: the ${lane} lane failed; its last words: ${said.slice(0, 1500)}`);
+      summary = said.slice(0, 1000);
       return await report("failed", { error: (result.error ?? `${result.tool} did not finish`).slice(0, 300) });
     }
 
@@ -383,7 +386,13 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
     const staged = await run("git", ["diff", "--cached", "--quiet"], { cwd: dir });
     if (staged.code !== 0) await git(["-c", `user.name=${gitName}`, "-c", `user.email=${gitEmail}`, "commit", "-q", "-m", `${lane}: ${issue.title || `#${task.issue}`}`, "-m", `relay ${lane} lane for #${task.issue}`]);
     const ahead = Number((await git(["rev-list", "--count", `origin/${base}..HEAD`])).trim());
-    if (!ahead) return await report("failed", { error: `the ${lane} lane made no changes` });
+    if (!ahead) {
+      // the model answered instead of editing: keep what it said, it is the only clue to why (a question, a refusal, a wrong assumption)
+      const said = result.text.trim();
+      log(`${task.id}: the ${lane} lane made no changes; it said: ${said.slice(0, 1500) || "(nothing)"}`);
+      summary = said.slice(0, 1000);
+      return await report("failed", { error: `the ${lane} lane made no changes${said ? `: ${said.slice(0, 240)}` : ""}` });
+    }
 
     await host.push(dir, branch);
     pr = (await host.findPr(task.repo, branch)) ?? (await host.createPr(task.repo, { base, head: branch, title: `${lane}: ${issue.title || `#${task.issue}`}`, body: `Closes #${task.issue}` }));
