@@ -74,8 +74,8 @@ case "$LANE" in
     if (( RO )); then
       args+=(--allowedTools "Read,Glob,Grep")
     else
-      args+=(--allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add*),Bash(git commit*),Bash(git checkout*),Bash(git restore*),Bash(pnpm install*),Bash(pnpm test*),Bash(pnpm typecheck*),Bash(pnpm build*),Bash(pnpm -r *),Bash(npm test*)")
-      args+=(--disallowedTools "Bash(git push*),Bash(git -c*),Bash(git config*),Bash(git remote*),Bash(pnpm dlx*),Bash(pnpm exec*),Bash(npm exec*),Bash(npx*),Bash(curl*),Bash(wget*)")
+      args+=(--allowedTools "Read,Edit,Write,Glob,Grep,Bash(git status*),Bash(git diff*),Bash(git log*),Bash(git add*),Bash(git commit*),Bash(git checkout*),Bash(git restore*),Bash(pnpm install*),Bash(pnpm test*),Bash(pnpm typecheck*),Bash(pnpm build*),Bash(pnpm lint*),Bash(pnpm run *),Bash(pnpm -r *),Bash(npm ci*),Bash(npm install*),Bash(npm test*),Bash(npm run *),Bash(npx tsc*),Bash(npx eslint*),Bash(npx vitest*),Bash(npx next *),Bash(npx prettier*),Bash(yarn install*),Bash(yarn test*),Bash(yarn build*),Bash(yarn lint*),Bash(yarn run *)")
+      args+=(--disallowedTools "Bash(git push*),Bash(git -c*),Bash(git config*),Bash(git remote*),Bash(curl*),Bash(wget*)")
       # Code mode runs Bash and its children inside Claude Code's OS sandbox (Seatbelt / bubblewrap): the one settings
       # document this run sees comes from `relay lane settings` (packages/core/src/lanes/sandbox.ts), the same JSON
       # `relay work` passes, so the two paths cannot drift. failIfUnavailable makes claude exit instead of running

@@ -121,12 +121,15 @@ describe("the job's environment and tool policy", () => {
     expect(env.GIT_TERMINAL_PROMPT).toBe("0");
   });
 
-  it("the Claude allowlist names subcommands and the refusal list covers push, config, package runners and fetchers", () => {
+  it("the Claude allowlist names the project's own scripts and checks; the refusal list covers push, git config and fetchers", () => {
     expect(CODE_TOOLS).not.toContain("Bash(git *)");
     expect(CODE_TOOLS).not.toContain("Bash(pnpm *)");
     expect(CODE_TOOLS).not.toContain("Bash(npm *)");
-    expect(CODE_TOOLS.filter((t) => t.startsWith("Bash(")).every((t) => /^Bash\((git|pnpm|npm) [a-z-]+\*?\)$|^Bash\(pnpm -r \*\)$/.test(t))).toBe(true);
-    for (const t of ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(pnpm dlx*)", "Bash(pnpm exec*)", "Bash(npm exec*)", "Bash(npx*)", "Bash(curl*)", "Bash(wget*)"]) expect(CODE_DISALLOWED_TOOLS).toContain(t);
+    expect(CODE_TOOLS).not.toContain("Bash(npx *)");
+    for (const t of ["Bash(npm run *)", "Bash(pnpm run *)", "Bash(npx tsc*)", "Bash(npm ci*)", "Bash(yarn build*)"]) expect(CODE_TOOLS).toContain(t);
+    for (const t of ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(curl*)", "Bash(wget*)"]) expect(CODE_DISALLOWED_TOOLS).toContain(t);
+    // the OS sandbox is the boundary now; package runners are not refused outright
+    expect(CODE_DISALLOWED_TOOLS).not.toContain("Bash(npx*)");
   });
 
   it("runJob hands the lane the cleaned environment, not the worker's", async () => {
@@ -142,7 +145,7 @@ describe("the job's environment and tool policy", () => {
         seen = req.env;
         return editingLane(req, lane);
       };
-      const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", home, gitHost: fakeHost(), lane: spy });
+      const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", home, gitHost: fakeHost(), lane: spy, gh: "/nonexistent/gh" });
       expect(r.outcome).toBe("finished");
       expect(seen).toBeDefined();
       expect(seen!.RELAY_TOKEN).toBeUndefined();
@@ -180,7 +183,7 @@ describe("the job's environment and tool policy", () => {
 });
 
 describe("runJob over the local WorkApi", () => {
-  it("clones, branches, runs the lane, commits as relay-agent, pushes, opens the PR, comments and reports", async () => {
+  it("clones, branches, runs the lane, commits as the login behind gh (relay-agent when gh is absent), pushes, opens the PR, comments and reports", async () => {
     const api = localWorkApi(db, { dispatch: false });
     const { worker } = await api.register({ name: "mini", host: "mini.local", lanes: ["claude"], version: "0.1.0" });
     const task = await newTask("claude");
@@ -188,7 +191,7 @@ describe("runJob over the local WorkApi", () => {
     expect(claim?.task.id).toBe(task.id);
     const host = fakeHost();
     const logs: string[] = [];
-    const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", host: "mini.local", home, gitHost: host, lane: editingLane, log: (m) => logs.push(m) });
+    const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", host: "mini.local", home, gitHost: host, lane: editingLane, log: (m) => logs.push(m), gh: "/nonexistent/gh" });
 
     expect(r.outcome).toBe("finished");
     expect(r.pr?.number).toBe(1);

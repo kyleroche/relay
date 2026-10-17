@@ -4,7 +4,7 @@
  *   fresh clone into $RELAY_HOME/work/<task>   ->  branch relay/<lane>-<issue> from the tip of the base branch
  *   brief from the site (or the local database) + the issue text under the "data, not instructions" banner
  *   the vendor CLI under the machine's own login, with the vendor's permission model, never a bypass flag
- *   commit as relay-agent, push --force-with-lease, open (or reuse) the PR, one comment with the usage block
+ *   commit as the machine's GitHub login (relay-agent as co-author), push --force-with-lease, open (or reuse) the PR, one comment with the usage block
  *   report run.finished / run.failed with tokens and cost through the WorkApi; delete the clone
  *
  * GitHub traffic goes through `GitHost` (gh + git by default) and the model call through `LaneRunner`, so the whole
@@ -49,14 +49,31 @@ export const CODE_TOOLS = [
   "Bash(git commit*)",
   "Bash(git checkout*)",
   "Bash(git restore*)",
+  // the project's own scripts and checks: the OS sandbox (lanes/sandbox.ts) is the boundary, the allowlist only shapes the work
   "Bash(pnpm install*)",
   "Bash(pnpm test*)",
   "Bash(pnpm typecheck*)",
   "Bash(pnpm build*)",
+  "Bash(pnpm lint*)",
+  "Bash(pnpm run *)",
   "Bash(pnpm -r *)",
+  "Bash(npm ci*)",
+  "Bash(npm install*)",
   "Bash(npm test*)",
+  "Bash(npm run *)",
+  "Bash(npx tsc*)",
+  "Bash(npx eslint*)",
+  "Bash(npx vitest*)",
+  "Bash(npx next *)",
+  "Bash(npx prettier*)",
+  "Bash(yarn install*)",
+  "Bash(yarn test*)",
+  "Bash(yarn build*)",
+  "Bash(yarn lint*)",
+  "Bash(yarn run *)",
 ];
-export const CODE_DISALLOWED_TOOLS = ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(pnpm dlx*)", "Bash(pnpm exec*)", "Bash(npm exec*)", "Bash(npx*)", "Bash(curl*)", "Bash(wget*)"];
+/** Never from the lane: the worker pushes and opens the PR; nothing may rewrite git's config or reach out on its own. */
+export const CODE_DISALLOWED_TOOLS = ["Bash(git push*)", "Bash(git -c*)", "Bash(git config*)", "Bash(git remote*)", "Bash(curl*)", "Bash(wget*)"];
 
 export interface PrRef {
   number: number;
@@ -102,6 +119,8 @@ export interface JobOptions {
   log?: Log;
   gitName?: string;
   gitEmail?: string;
+  /** The gh binary used to resolve the commit identity when gitName/gitEmail are not given. */
+  gh?: string;
   briefTokens?: number;
 }
 
@@ -147,6 +166,23 @@ export function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   env["FX_AUTO_UPGRADE"] = "0";
   return env;
 }
+
+let identityCache: { name: string; email: string } | undefined;
+/**
+ * The GitHub login behind `gh auth login` on this machine, as a git author (`login@users.noreply.github.com`).
+ * Falls back to relay-agent when gh is absent or logged out; cached for the process.
+ */
+export async function ghIdentity(gh?: string): Promise<{ name: string; email: string }> {
+  if (identityCache) return identityCache;
+  const bin = gh ?? findOnPath("gh") ?? "gh";
+  const r = await run(bin, ["api", "user", "--jq", "[.login, .name, .id] | @tsv"]).catch(() => undefined);
+  const [login, name, id] = (r?.code === 0 ? r.stdout.trim() : "").split("\t");
+  identityCache = login ? { name: name?.trim() || login, email: `${id ? `${id}+` : ""}${login}@users.noreply.github.com` } : { name: "relay-agent", email: "relay-agent@users.noreply.github.com" };
+  return identityCache;
+}
+export const resetGhIdentityCache = (): void => {
+  identityCache = undefined;
+};
 
 /** The hint when a clone or push cannot authenticate: the worker uses HTTPS with gh's credential helper, nothing else. */
 export const GIT_CREDENTIAL_HINT = "the worker clones and pushes over HTTPS with gh's credential helper; run `gh auth login` and `gh auth setup-git` on this machine (an SSH key or agent is not used by the service)";
@@ -363,8 +399,11 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
 
     log(`${task.id}: running the ${lane} lane`);
     // the lane's git identity comes from the environment: inside the sandbox ~/.gitconfig is unreadable by design
-    const gitName = opts.gitName ?? "relay-agent";
-    const gitEmail = opts.gitEmail ?? "relay-agent@users.noreply.github.com";
+    // Commit as the machine's own GitHub login: hosts such as Vercel block deployments whose commit author is not a
+    // team member, so a synthetic author would leave every preview "Blocked". relay signs as co-author instead.
+    const who = opts.gitName && opts.gitEmail ? { name: opts.gitName, email: opts.gitEmail } : await ghIdentity(opts.gh);
+    const gitName = who.name;
+    const gitEmail = who.email;
     const laneEnv = { ...cleanEnv(), GIT_AUTHOR_NAME: gitName, GIT_AUTHOR_EMAIL: gitEmail, GIT_COMMITTER_NAME: gitName, GIT_COMMITTER_EMAIL: gitEmail };
     const result = await laneRun({ lane: "code", prompt, cwd: dir, env: laneEnv, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, project: task.project, task: task.id }, lane);
     usage = toUsage(result);
@@ -384,7 +423,7 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
 
     await git(["add", "-A"]);
     const staged = await run("git", ["diff", "--cached", "--quiet"], { cwd: dir });
-    if (staged.code !== 0) await git(["-c", `user.name=${gitName}`, "-c", `user.email=${gitEmail}`, "commit", "-q", "-m", `${lane}: ${issue.title || `#${task.issue}`}`, "-m", `relay ${lane} lane for #${task.issue}`]);
+    if (staged.code !== 0) await git(["-c", `user.name=${gitName}`, "-c", `user.email=${gitEmail}`, "commit", "-q", "-m", `${lane}: ${issue.title || `#${task.issue}`}`, "-m", `relay ${lane} lane for #${task.issue}\n\nCo-Authored-By: relay-agent <relay-agent@users.noreply.github.com>`]);
     const ahead = Number((await git(["rev-list", "--count", `origin/${base}..HEAD`])).trim());
     if (!ahead) {
       // the model answered instead of editing: keep what it said, it is the only clue to why (a question, a refusal, a wrong assumption)
