@@ -32,8 +32,15 @@ export function sessionActor(s: Pick<Session, "login">): string {
   return `human:${s.login}`;
 }
 
+/** The least a signing secret may be; `openssl rand -hex 32` gives 64. */
+export const MIN_SESSION_SECRET_LENGTH = 32;
+export const SESSION_SECRET_HINT = `RELAY_SESSION_SECRET must be at least ${MIN_SESSION_SECRET_LENGTH} characters; generate one with \`openssl rand -hex 32\`.`;
+
+/** True when the secret is long enough to sign and verify sessions with. */
+export const sessionSecretOk = (secret: string | undefined | null): secret is string => !!secret && secret.length >= MIN_SESSION_SECRET_LENGTH;
+
 function key(secret: string): Uint8Array {
-  if (!secret || secret.length < 16) throw new Error("RELAY_SESSION_SECRET must be set to at least 16 characters.");
+  if (!sessionSecretOk(secret)) throw new Error(SESSION_SECRET_HINT);
   return new TextEncoder().encode(secret);
 }
 
@@ -50,7 +57,7 @@ export async function mintSession(user: SessionUser, secret: string, now = Date.
 
 /** The session a cookie value carries, or null when missing, tampered, expired, or signed with another secret. */
 export async function verifySession(token: string | undefined | null, secret: string | undefined, now = Date.now()): Promise<Session | null> {
-  if (!token || !secret || secret.length < 16) return null;
+  if (!token || !sessionSecretOk(secret)) return null;
   try {
     const { payload } = await jwtVerify(token, key(secret), { algorithms: [ALG], issuer: ISSUER, currentDate: new Date(now) });
     if (typeof payload.login !== "string" || !payload.login || typeof payload.iat !== "number" || typeof payload.exp !== "number") return null;

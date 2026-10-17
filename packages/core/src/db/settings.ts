@@ -11,8 +11,11 @@ import type { Db } from "./client.ts";
 
 const VERSION = "v1";
 
+/** The least a sealing secret may be; `openssl rand -hex 32` gives 64. The same bound as the web app's session cookie. */
+export const MIN_SETTINGS_SECRET_LENGTH = 32;
+
 function keyFor(secret: string): Buffer {
-  if (!secret || secret.length < 16) throw new Error("RELAY_SESSION_SECRET must be set to at least 16 characters to seal settings.");
+  if (!secret || secret.length < MIN_SETTINGS_SECRET_LENGTH) throw new Error(`RELAY_SESSION_SECRET must be at least ${MIN_SETTINGS_SECRET_LENGTH} characters to seal settings; generate one with \`openssl rand -hex 32\`.`);
   return createHash("sha256").update(`relay-settings:${secret}`).digest();
 }
 

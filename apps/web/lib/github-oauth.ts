@@ -10,6 +10,7 @@
 import { timingSafeEqual } from "node:crypto";
 import type { NextRequest } from "next/server";
 import { type Env } from "./mode.ts";
+import { sessionSecretOk } from "./session-token.ts";
 import { SITE_URL } from "./site.ts";
 
 export const STATE_COOKIE = "relay_oauth_state";
@@ -28,7 +29,7 @@ export function oauthConfig(env: Env = process.env): { config: OAuthConfig; miss
   const missing: string[] = [];
   if (!env.GITHUB_OAUTH_CLIENT_ID) missing.push("GITHUB_OAUTH_CLIENT_ID");
   if (!env.GITHUB_OAUTH_CLIENT_SECRET) missing.push("GITHUB_OAUTH_CLIENT_SECRET");
-  if (!env.RELAY_SESSION_SECRET || env.RELAY_SESSION_SECRET.length < 16) missing.push("RELAY_SESSION_SECRET");
+  if (!sessionSecretOk(env.RELAY_SESSION_SECRET)) missing.push("RELAY_SESSION_SECRET");
   if (missing.length) return { config: null, missing };
   return {
     config: {

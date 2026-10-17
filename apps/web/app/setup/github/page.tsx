@@ -182,7 +182,7 @@ function Manifest({ canManifest, db, org, login, secret, legacyToken }: { canMan
         {!db && <p className="mt-3 rounded-md border border-dashed p-3 text-xs text-muted-foreground">This deployment runs on demo data; the manifest flow stores the app in the database and needs RELAY_DATA=db or DATABASE_URL.</p>}
         {db && !canManifest && (
           <p className="mt-3 rounded-md border border-warn/40 bg-warn/5 p-3 text-xs">
-            Set <code className="font-mono">RELAY_SESSION_SECRET</code> (16+ characters) first: the app&apos;s private key is sealed with it.
+            Set <code className="font-mono">RELAY_SESSION_SECRET</code> (32+ characters, <code className="font-mono">openssl rand -hex 32</code>) first: the app&apos;s private key is sealed with it.
           </p>
         )}
       </section>

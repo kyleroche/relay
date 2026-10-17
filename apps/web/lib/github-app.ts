@@ -13,6 +13,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { appConfigFromEnv, GitHubApp, repo, type GitHubAppConfig } from "@relay/core";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
+import { SESSION_SECRET_HINT, sessionSecretOk } from "@/lib/session-token";
 import { SITE_URL } from "@/lib/site";
 
 export const SETTINGS_PREFIX = "github_app.";
@@ -167,7 +168,7 @@ export async function convertManifest(code: string, apiUrl = process.env.GITHUB_
 /** Store what the conversion returned: ids plain, secrets sealed. Needs RELAY_SESSION_SECRET. */
 export async function storeGitHubApp(app: ManifestConversion): Promise<void> {
   const secret = process.env.RELAY_SESSION_SECRET;
-  if (!secret || secret.length < 16) throw new Error("RELAY_SESSION_SECRET must be set to store the GitHub App's key.");
+  if (!sessionSecretOk(secret)) throw new Error(`${SESSION_SECRET_HINT} It seals the GitHub App's key.`);
   const db = await getDb();
   await repo.putSetting(db, KEYS.id, String(app.id));
   await repo.putSetting(db, KEYS.slug, app.slug);

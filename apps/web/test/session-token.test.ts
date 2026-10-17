@@ -1,6 +1,6 @@
 import { decodeJwt } from "jose";
 import { describe, expect, it } from "vitest";
-import { demoSession, isAllowedUser, mintSession, parseAllowedUsers, SESSION_TTL_SECONDS, sessionActor, verifySession } from "../lib/session-token.ts";
+import { demoSession, isAllowedUser, mintSession, parseAllowedUsers, SESSION_TTL_SECONDS, sessionActor, sessionSecretOk, verifySession } from "../lib/session-token.ts";
 
 const SECRET = "test-session-secret-at-least-16-chars";
 const USER = { login: "Octocat", name: "The Octocat", avatar_url: "https://avatars.githubusercontent.com/u/583231" };
@@ -24,7 +24,7 @@ describe("session tokens", () => {
     expect(session).toEqual({ login: "Octocat", name: "The Octocat", avatar_url: USER.avatar_url, iat: now / 1000, exp: now / 1000 + SESSION_TTL_SECONDS });
     expect(session && sessionActor(session)).toBe("human:Octocat");
 
-    await expect(verifySession(token, "another-secret-of-enough-length", now)).resolves.toBeNull();
+    await expect(verifySession(token, "another-secret-of-enough-length-for-hs256", now)).resolves.toBeNull();
     await expect(verifySession(token, SECRET, now + (SESSION_TTL_SECONDS + 120) * 1000)).resolves.toBeNull();
     await expect(verifySession(`${token}x`, SECRET, now)).resolves.toBeNull();
     const [h, , s] = token.split(".");
@@ -43,6 +43,14 @@ describe("session tokens", () => {
 
   it("refuses a short secret when minting", async () => {
     await expect(mintSession(USER, "short")).rejects.toThrow(/RELAY_SESSION_SECRET/);
+    // 32 characters is the floor, and the error says how to make one
+    await expect(mintSession(USER, "x".repeat(31))).rejects.toThrow(/at least 32 characters.*openssl rand -hex 32/);
+    expect(sessionSecretOk("x".repeat(31))).toBe(false);
+    expect(sessionSecretOk("x".repeat(32))).toBe(true);
+    const now = Date.UTC(2026, 0, 1);
+    const minted = await mintSession(USER, "x".repeat(32), now);
+    await expect(verifySession(minted, "x".repeat(32), now)).resolves.not.toBeNull();
+    await expect(verifySession(minted, "x".repeat(31), now)).resolves.toBeNull();
   });
 
   it("nulls optional fields", async () => {
