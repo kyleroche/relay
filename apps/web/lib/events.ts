@@ -42,6 +42,10 @@ export const EVENT_KINDS = {
   "access.granted": { group: "access", source: "oauth", label: "Access granted", description: "A token was issued: consent, device approval or an invite redeemed." },
   "access.denied": { group: "access", source: "oauth", label: "Access denied", description: "A person declined a device request." },
   "access.revoked": { group: "access", source: "oauth", label: "Access revoked", description: "A token or refresh token was revoked, or a reused refresh token cut its lineage." },
+  "access.invite_created": { group: "access", source: "oauth", label: "Invite created", description: "An operator minted an invite code; payload names who it is for, its scopes and uses." },
+  "access.invite_revoked": { group: "access", source: "oauth", label: "Invite revoked", description: "An unredeemed invite was stopped." },
+  "access.client_removed": { group: "access", source: "web", label: "Client removed", description: "An OAuth client with nothing live was removed from the Access page." },
+  "access.purged": { group: "access", source: "cron", label: "Access retention", description: "The daily sweep removed expired codes, refresh tokens or orphan clients; payload has the counts." },
   "memory.consolidated": { group: "memory", source: "nightly", label: "Memory consolidated", description: "Nightly digest: superseded decisions closed, rules file regenerated." },
   "onboard.refreshed": { group: "memory", source: "cli", label: "Vendor docs refreshed", description: "Official guidance and skills for a model were re-ingested." },
   // Assets (docs/ASSETS.md)

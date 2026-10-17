@@ -1,7 +1,8 @@
 import { revokeInvite } from "@relay/core";
-import { api, json, problem } from "@/lib/api";
+import { api, callerGrant, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { needsDb } from "@/lib/integrations";
+import { oauthOptions } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -14,7 +15,7 @@ export const DELETE = api<Ctx>(
     const instance = req.nextUrl.pathname;
     const refused = needsDb(instance);
     if (refused) return refused;
-    const row = await revokeInvite(await getDb(), decodeURIComponent(id));
+    const row = await revokeInvite(await getDb(), decodeURIComponent(id), (await callerGrant(req))?.actor ?? "token:unknown", oauthOptions());
     if (!row) return problem(404, "Not Found", `No live invite matches '${id}'.`, instance);
     return json({ revoked: row });
   },

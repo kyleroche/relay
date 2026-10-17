@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/assets-expire",
       "schedule": "0 4 * * *"
+    },
+    {
+      "path": "/api/cron/access-expire",
+      "schedule": "30 4 * * *"
     }
   ]
 }

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { listPendingAccess, lookupDeviceRequest, normalizeUserCode, scopeDescriptions, type DeviceCodeRow } from "@relay/core";
+import { listApprovedAwaitingPoll, listPendingAccess, lookupDeviceRequest, normalizeUserCode, scopeDescriptions, type AccessRequestView, type DeviceCodeRow } from "@relay/core";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { dataMode } from "@/lib/data";
@@ -34,17 +34,24 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
   const error = one(sp.error);
   const request = db && typed ? await lookupDeviceRequest(await getDb(), typed, oauthOptions()) : undefined;
   const pending: DeviceCodeRow[] = db ? await listPendingAccess(await getDb(), oauthOptions()) : [];
+  const awaiting: AccessRequestView[] = db ? await listApprovedAwaitingPoll(await getDb(), oauthOptions()) : [];
   const normalized = normalizeUserCode(typed);
+  const utc = (iso: string): string => `${iso.slice(11, 16)} UTC`;
 
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Activate</p>
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">Activate</p>
+          <Link href="/tokens" className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
+            Back to Access
+          </Link>
+        </div>
         <h1 className="mt-1 text-2xl font-semibold tracking-tight">Approve a device</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           A CLI or bot that ran <code className="rounded bg-muted px-1 font-mono">relay setup --site</code> shows a code like <code className="rounded bg-muted px-1 font-mono">RLAY-4F7Q</code>. Enter it here, check what it asks for, and approve. The token it receives lasts 24 hours and renews for 90 days; revoke it on{" "}
           <Link href="/tokens" className="underline underline-offset-4">
-            Tokens
+            Access
           </Link>
           .
         </p>
@@ -128,6 +135,31 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
               </li>
             ))}
           </ul>
+        </section>
+      )}
+
+      {awaiting.length > 0 && (
+        <section aria-labelledby="awaiting-h">
+          <h2 id="awaiting-h" className="mb-2 text-xs font-medium text-muted-foreground">
+            Approved, waiting for the device to poll <span className="font-mono tabular-nums">{awaiting.length}</span>
+          </h2>
+          <ul className="divide-y rounded-lg border text-sm">
+            {awaiting.map((a) => (
+              <li key={a.user_code} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                <span className="min-w-0 break-all">
+                  <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-mono">{a.client_name}</span>
+                </span>
+                <span className="shrink-0 text-xs text-muted-foreground">token on its next poll; code expires {utc(a.expires_at)}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The token is minted when the device next calls <code className="font-mono">/oauth/token</code>; it will then appear under Grants on{" "}
+            <Link href="/tokens" className="underline underline-offset-4">
+              Access
+            </Link>
+            .
+          </p>
         </section>
       )}
 

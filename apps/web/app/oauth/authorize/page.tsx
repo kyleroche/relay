@@ -59,7 +59,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
         <p className="mt-2 text-sm text-muted-foreground">
           Signed in as <span className="font-medium text-foreground">{session.login}</span>. Approving mints a token named <code className="rounded bg-muted px-1 font-mono">oauth:{request.client.name}</code> that lasts 24 hours and renews itself for 90 days; every write it makes is attributed to it in the feed. Revoke it any time on{" "}
           <Link href="/tokens" className="underline underline-offset-4">
-            Tokens
+            Access
           </Link>
           .
         </p>
