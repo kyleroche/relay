@@ -212,8 +212,11 @@ every job. Arm64 builds of the runner are published alongside x64; the vendor CL
 `.github/workflows/relay-run.yml` clones relay (for `scripts/runner/run-lane.sh`) and the target repo into
 `$RUNNER_TEMP`, runs the lane there, and deletes both directories afterwards. Nothing accumulates in the runner's
 `_work` directory, and no two jobs share a checkout. The lane itself runs with the vendor's own permission model:
-Claude Code with `--permission-mode acceptEdits` and an explicit tool allowlist, Codex with `--sandbox
-workspace-write`, Grok with `--permission-mode acceptEdits`. No lane ever runs with permission checks bypassed.
+Claude Code with `--permission-mode acceptEdits`, an explicit tool allowlist and its Bash inside Claude Code's OS
+sandbox (the `--settings` document from `relay lane settings`, so the runner needs `@kyleroche/relay` on PATH or
+reachable through `npx`; `RELAY_NO_SANDBOX=1` is the loud escape hatch; `docs/WORKERS.md`, "What a job may run"),
+Codex with `--sandbox workspace-write`, Grok with `--permission-mode acceptEdits`. No lane ever runs with permission
+checks bypassed.
 
 ## 5. Codex `auth.json` goes stale; keep it warm
 

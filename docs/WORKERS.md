@@ -29,7 +29,7 @@ embedded PGlite file), which is how the tests run and how a single laptop can se
 
 | Lane | Served when | The lane runs |
 |---|---|---|
-| `claude` | `claude auth status` reports logged in | `claude -p --permission-mode acceptEdits --allowedTools <CODE_TOOLS> --disallowedTools <CODE_DISALLOWED_TOOLS> --max-turns 40`, no MCP servers, no user settings ("What a job may run" below) |
+| `claude` | `claude auth status` reports logged in | `claude -p --permission-mode acceptEdits --allowedTools <CODE_TOOLS> --disallowedTools <CODE_DISALLOWED_TOOLS> --settings <sandbox> --max-turns 40`, no MCP servers, no user settings; Bash runs in Claude Code's OS sandbox ("What a job may run" below) |
 | `codex` | `codex login status` is logged in, or `fx status` lists a Codex login | `codex exec --json --sandbox workspace-write -c agents.enabled=false` (or `fx ask --auto` when only fx is installed) |
 | `grok` | the `grok` CLI is on PATH, or `fx status` lists a Grok login | `grok -p --output-format json --no-subagents --no-plan --permission-mode acceptEdits` (or fx) |
 
@@ -127,8 +127,33 @@ default; `--jobs 2` allows two, and the lane adapters still serialize per vendor
 
 ### What a job may run
 
-The Claude lane gets an allowlist of named commands and a refusal list (`CODE_TOOLS`, `CODE_DISALLOWED_TOOLS` in
-`packages/core/src/work/job.ts`; `scripts/runner/run-lane.sh` carries the same lists for Actions runners):
+The Claude lane's Bash, and every process it starts (git, pnpm, the repository's own scripts), runs inside Claude
+Code's OS sandbox: Seatbelt on macOS, bubblewrap with socat on Linux. The worker passes the sandbox as one
+`--settings` document (`claudeSandboxSettings` in `packages/core/src/lanes/sandbox.ts`; `relay lane settings` prints
+it) with `--setting-sources ""`, so it is the only settings the run sees and nothing in `~/.claude` or in the clone can
+loosen it. Inside it a command may:
+
+| May | May not |
+|---|---|
+| read and write the clone; write the pnpm and npm stores (`~/Library/pnpm`, `~/.local/share/pnpm`, `~/.npm`, their caches) | write anywhere else (`~`, `/tmp` outside Claude Code's own, another repository) |
+| reach `registry.npmjs.org`, `registry.yarnpkg.com`, `github.com`, `objects.githubusercontent.com`, `codeload.github.com`, `pypi.org`, `files.pythonhosted.org`, `crates.io`, `static.crates.io`, `proxy.golang.org`, plus `RELAY_LANE_ALLOWED_DOMAINS`; bind localhost ports | reach any other host (the local proxy answers 403; `strictAllowlist`) |
+| read the rest of the filesystem the worker's user can read | read `~/.harness`, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.grok`, `~/.fx`, `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.gitconfig` |
+
+The sandbox wraps Bash, not the Read/Edit/Write tools, so the same paths are denied again with `permissions.deny`
+rules and `blockReadsOutsideWorkingDirectories` keeps the Read tool inside the clone. The Claude Code process itself
+(the model call) is outside the sandbox; that is what lets the login work. Because `~/.gitconfig` is unreadable, the
+lane's git identity comes from `GIT_AUTHOR_NAME`/`GIT_COMMITTER_NAME` (and email) in the job's environment.
+
+A machine that cannot sandbox does not run the job unsandboxed: `failIfUnavailable` makes `claude` exit, the run is
+reported `failed` with a summary saying what to install (`relay doctor` has a `sandbox` line). Linux needs `bubblewrap`
+and `socat` on PATH (`sudo apt install bubblewrap socat`, or `dnf`); macOS needs nothing. `relay work --no-sandbox`
+turns the sandbox off for that worker: it logs a warning and registers the label `sandbox:off`, which the workers page
+shows. A dedicated OS user or an Apple `container` for the worker is the next tier (planned as `relay work --isolation
+container`, not built yet).
+
+Behind the sandbox, the Claude lane gets an allowlist of named commands and a refusal list (`CODE_TOOLS`,
+`CODE_DISALLOWED_TOOLS` in `packages/core/src/work/job.ts`; `scripts/runner/run-lane.sh` carries the same lists for
+Actions runners):
 
 | Allowed without asking | Refused outright |
 |---|---|
@@ -140,12 +165,13 @@ Anything else Claude Code would ask about, and in `-p` mode a question is a refu
 pushes (`--force-with-lease`, its own branch only) and opens the PR. Codex runs under its own `--sandbox
 workspace-write`; Grok and fx run under their permission modes with no OS sandbox.
 
-This allowlist is a permission policy, **not a sandbox**: `pnpm test` runs whatever the repository's `package.json`
-says, with the rights of the OS user the worker runs as, which is the user that holds your logins. Three things
-follow (`docs/SECURITY.md`, "Workers"): run `relay work` as a dedicated OS user or in a container that holds the
-vendor and `gh` logins and nothing else (no SSH keys, no sudo, no access to your home directory); turn on branch
-protection on every linked repository's default branch, since the worker pushes as your `gh` account; and set
-`RELAY_ALLOWED_SENDERS` so that only the logins you name can turn a label into a job on your machine.
+The allowlist is a permission policy, the second layer: it decides which tool calls the CLI accepts, the sandbox
+decides what the accepted commands can reach. `pnpm test` still runs whatever the repository's `package.json` says,
+as the OS user the worker runs as, boxed by the sandbox above. Three things still follow (`docs/SECURITY.md`,
+"Workers"): prefer running `relay work` as a dedicated OS user or in a container that holds the vendor and `gh` logins
+and nothing else (no SSH keys, no sudo, no access to your home directory); turn on branch protection on every linked
+repository's default branch, since the worker pushes as your `gh` account; and set `RELAY_ALLOWED_SENDERS` so that
+only the logins you name can turn a label into a job on your machine.
 
 ## Run it as a service
 
@@ -183,6 +209,11 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
 - A task flips `running` → `queued`: the worker lost its lease mid-run (asleep, offline, killed). The next claim starts
   over from the base branch; the earlier branch is replaced by `--force-with-lease`.
 - `run.failed` with *made no changes*: the lane finished without editing anything; its summary is in the event.
+- `run.failed` with *sandbox unavailable*: Claude Code could not set up its OS sandbox on that worker. On Linux install
+  `bubblewrap` and `socat`; `relay doctor` shows the `sandbox` line. The job was not run unsandboxed.
+- A Claude job needs a host the sandbox refuses (a private registry, a download in a test): add it with
+  `RELAY_LANE_ALLOWED_DOMAINS=host.example,other.example` in the worker's environment (`relay work --install --yes`
+  bakes it into the service when it is set at install time).
 - The service does not start on macOS: `launchctl print gui/$(id -u)/house.kyro.relay.work` shows the last exit
   status; `tail -f ~/.harness/work.log` the reason (usually a login or a PATH without the CLIs).
 - Codex logins go stale when unused; a weekly `relay probe codex:<model>` keeps the refresh token warm.

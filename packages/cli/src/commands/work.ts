@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { detectGitHub, httpWorkApi, localWorkApi, MAX_IDLE_MS, POLL_MS, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
+import { detectGitHub, httpWorkApi, laneRunner, localWorkApi, MAX_IDLE_MS, NO_SANDBOX_LABEL, POLL_MS, relayHome, runtimePaths, runWorker, servicePlan, type WorkApi, type WorkerView } from "@relay/core";
 import { log, openReady } from "./_common.ts";
 import { detectLanes } from "./probes.ts";
 
@@ -29,6 +29,8 @@ interface WorkOptions {
   maxInterval?: string;
   maxMinutes: string;
   keep?: boolean;
+  /** commander's `--no-sandbox`: true unless the flag was passed. */
+  sandbox: boolean;
   install?: boolean;
   uninstall?: boolean;
   yes?: boolean;
@@ -58,7 +60,7 @@ async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () =
   return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval">) {
+function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>) {
   const platform = process.platform === "darwin" ? "darwin" : "linux";
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
@@ -66,8 +68,11 @@ function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxIn
   if (o.jobs && o.jobs !== "1") args.push("--jobs", o.jobs);
   if (o.name) args.push("--name", o.name);
   if (o.maxInterval) args.push("--max-interval", o.maxInterval);
+  if (o.sandbox === false) args.push("--no-sandbox");
   const rp = runtimePaths();
-  return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}) });
+  // extra hosts for the Claude lane's sandbox travel with the service when set at install time
+  const domains = process.env.RELAY_LANE_ALLOWED_DOMAINS;
+  return servicePlan({ platform, node: process.execPath, cliArgv: rp.cliArgv, args, home: relayHome(), userHome: homedir(), path: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin", ...(process.getuid ? { uid: process.getuid() } : {}), ...(domains ? { env: { RELAY_LANE_ALLOWED_DOMAINS: domains } } : {}) });
 }
 
 const sh = (words: string[]): { ok: boolean; out: string } => {
@@ -110,6 +115,7 @@ export function registerWork(program: Command, version: string): void {
     .option("--max-interval <seconds>", `the longest tick while idle (default ${MAX_IDLE_MS / 1000}, or RELAY_WORK_MAX_INTERVAL); set it above your database's auto-suspend timeout to let it sleep`)
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
+    .option("--no-sandbox", `run the Claude lane's Bash without Claude Code's OS sandbox (allowlist only); logged, and advertised as the label ${NO_SANDBOX_LABEL}`)
     .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it")
     .option("--uninstall", "stop and remove that service; --yes to do it")
     .option("--yes", "write files and start/stop the service")
@@ -130,8 +136,14 @@ export function registerWork(program: Command, version: string): void {
       const pollMs = Math.max(5, Number(o.interval) || POLL_MS / 1000) * 1000;
       const maxIdleMs = maxIntervalMs(o.maxInterval, pollMs);
       const debug = process.env.RELAY_DEBUG ? (m: string) => out(`debug: ${m}`) : undefined;
+      const labels = list(o.labels);
+      if (!o.sandbox) {
+        // loud on purpose: this machine's Claude jobs run Bash with the rights of this OS user, boxed by the allowlist alone
+        out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers").`);
+        if (!labels.includes(NO_SANDBOX_LABEL)) labels.push(NO_SANDBOX_LABEL);
+      }
       const { api, where, close } = await openWorkApi();
-      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, log ${workLogPath()}`);
+      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, sandbox ${o.sandbox ? "on" : "OFF"}, log ${workLogPath()}`);
       const ac = new AbortController();
       const stop = () => ac.abort();
       process.once("SIGINT", stop);
@@ -142,7 +154,7 @@ export function registerWork(program: Command, version: string): void {
           name,
           host: hostname(),
           lanes: serving,
-          labels: list(o.labels),
+          labels,
           version,
           jobs,
           ...(o.once ? { once: true } : {}),
@@ -151,7 +163,7 @@ export function registerWork(program: Command, version: string): void {
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}) },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox: o.sandbox }) },
         });
         out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed` : ""}`);
         if (r.results.some((x) => x.outcome === "failed")) process.exitCode = 1;
@@ -217,6 +229,7 @@ export function registerWork(program: Command, version: string): void {
     }
     console.log(`would write ${p.path}:\n`);
     console.log(p.content.replace(/^/gm, "    "));
+    if (o.sandbox === false) console.log(`WARNING     the service will run the Claude lane's Bash without Claude Code's OS sandbox (--no-sandbox is baked in; label ${NO_SANDBOX_LABEL})`);
     for (const w of p.load) console.log(`would run   ${w.join(" ")}`);
     console.log(`log file    ${p.logPath}`);
     if (process.platform === "darwin") console.log("note        a LaunchAgent runs while this user is logged in; enable automatic login or keep a session open on a machine that must stay available");

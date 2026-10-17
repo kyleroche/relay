@@ -14,7 +14,8 @@ import * as repo from "../src/db/repo.ts";
 import { compileBrief } from "../src/brief/index.ts";
 import type { HttpFetch } from "../src/client/http.ts";
 import { httpWorkApi, localWorkApi, type WorkApi } from "../src/work/api.ts";
-import { cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, runJob, USAGE_MARKER, workDirFor, type GitHost, type LaneRunner, type PrRef } from "../src/work/job.ts";
+import { cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, runJob, SANDBOX_UNAVAILABLE_SUMMARY, USAGE_MARKER, workDirFor, type GitHost, type LaneRunner, type PrRef } from "../src/work/job.ts";
+import { SANDBOX_UNAVAILABLE } from "../src/lanes/sandbox.ts";
 import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError } from "../src/work/server.ts";
 import { runWorker } from "../src/work/worker.ts";
 
@@ -148,10 +149,33 @@ describe("the job's environment and tool policy", () => {
       expect(seen!.RELAY_SITE).toBeUndefined();
       expect(seen!.RELAY_HOME).toBeUndefined();
       expect(seen!.GIT_TERMINAL_PROMPT).toBe("0");
+      // the lane's git identity comes from the environment: ~/.gitconfig is unreadable inside the sandbox
+      expect(seen!.GIT_AUTHOR_NAME).toBe("relay-agent");
+      expect(seen!.GIT_COMMITTER_EMAIL).toBe("relay-agent@users.noreply.github.com");
     } finally {
       delete process.env.RELAY_TOKEN;
       delete process.env.RELAY_SITE;
     }
+  });
+
+  it("a lane that could not be sandboxed is a failed run whose summary tells the operator what to install", async () => {
+    const api = localWorkApi(db, { dispatch: false });
+    const { worker } = await api.register({ name: "mini", host: "mini.local", lanes: ["claude"], version: "0.1.0" });
+    const task = await newTask("claude");
+    const claim = await api.claim({ worker_id: worker.id });
+    const refusing: LaneRunner = async () => ({ tool: "claude", ok: false, text: "", error: `${SANDBOX_UNAVAILABLE}: Error: bubblewrap (bwrap) is not installed`, model: "anthropic/claude-opus-5", subscription: "max", tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 0, durationMs: 50 });
+    const logs: string[] = [];
+    const r = await runJob(claim!, { api, workerId: worker.id, workerName: "mini", home, gitHost: fakeHost(), lane: refusing, log: (m) => logs.push(m) });
+    expect(r.outcome).toBe("failed");
+    expect(r.error).toBe(SANDBOX_UNAVAILABLE_SUMMARY);
+    expect(r.error?.startsWith(SANDBOX_UNAVAILABLE)).toBe(true);
+    expect(SANDBOX_UNAVAILABLE_SUMMARY.length).toBeLessThanOrEqual(300); // release slices error and summary at 300
+    expect(r.summary).toBe(SANDBOX_UNAVAILABLE_SUMMARY);
+    expect(logs.some((l) => /bwrap\) is not installed/.test(l))).toBe(true); // claude's own words stay in the log
+    const view = await repo.taskView(db, task);
+    expect(view.state).toBe("failed");
+    const failed = (await repo.taskEvents(db, task)).find((e) => e.kind === "run.failed")!;
+    expect(JSON.stringify(failed)).toContain("apt install bubblewrap socat");
   });
 });
 

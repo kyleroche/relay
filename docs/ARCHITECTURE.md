@@ -33,7 +33,7 @@ dispatch comment.
 
 | Label | Executes on | Login lives | Brief | Result | Usage in the ledger |
 |---|---|---|---|---|---|
-| `agent:claude` | a worker, `claude -p` (acceptEdits, tool allowlist, max turns) | the worker's keychain | the worker fetches `GET /api/v1/projects/<slug>/brief?issue=N` and adds the issue text as quoted data | `relay/claude-<issue>` PR | yes, reported by the worker through `POST /api/v1/work/{task}/release` |
+| `agent:claude` | a worker, `claude -p` (Bash in Claude Code's OS sandbox, acceptEdits, tool allowlist, max turns) | the worker's keychain | the worker fetches `GET /api/v1/projects/<slug>/brief?issue=N` and adds the issue text as quoted data | `relay/claude-<issue>` PR | yes, reported by the worker through `POST /api/v1/work/{task}/release` |
 | `agent:codex` | a worker, `codex exec --sandbox workspace-write` or `fx` | the worker's `~/.codex` | same | `relay/codex-<issue>` PR | yes |
 | `agent:grok` | a worker, `grok -p` (acceptEdits, no subagents) | the worker's `~/.grok` | same | `relay/grok-<issue>` PR | yes |
 | `agent:codex-cloud` | Codex cloud (OpenAI's sandbox) on the ChatGPT plan | ChatGPT's GitHub connector, installed once | the site compiles it and posts it under `@codex` when the task is opened (`relay-cloud.yml` does the same for a label put on by hand) | `codex/...` PR from the connector | dispatch only (`run.dispatched`), tokens on the vendor's usage page |
