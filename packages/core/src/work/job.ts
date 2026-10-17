@@ -148,13 +148,25 @@ export function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   return env;
 }
 
-/** gh for GitHub, git for the clone: both under the machine's own login (`gh auth login`, `gh auth setup-git`). */
+/** The hint when a clone or push cannot authenticate: the worker uses HTTPS with gh's credential helper, nothing else. */
+export const GIT_CREDENTIAL_HINT = "the worker clones and pushes over HTTPS with gh's credential helper; run `gh auth login` and `gh auth setup-git` on this machine (an SSH key or agent is not used by the service)";
+
+/**
+ * gh for GitHub, git for the clone and push, both under the machine's own login (`gh auth login`, `gh auth setup-git`).
+ * The clone URL is HTTPS on purpose: gh's `git_protocol` may be ssh for the account, and a LaunchAgent or systemd
+ * service has no SSH agent, so `gh repo clone` would fail with "Permission denied (publickey)".
+ */
 export function ghHost(opts: { gh?: string; git?: string } = {}): GitHost {
   const gh = opts.gh ?? findOnPath("gh") ?? "gh";
   const git = opts.git ?? "git";
+  const withHint = (e: unknown): never => {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/authentication failed|could not read username|permission denied|publickey|terminal prompts disabled/i.test(msg)) throw new Error(`${msg} (${GIT_CREDENTIAL_HINT})`);
+    throw e;
+  };
   return {
     async clone(repo, dir) {
-      await must(gh, ["repo", "clone", repo, dir, "--", "--quiet"], { timeoutMs: 10 * 60_000 });
+      await must(git, ["clone", "--quiet", `https://github.com/${repo}.git`, dir], { timeoutMs: 10 * 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).catch(withHint);
     },
     async defaultBranch(repo, dir) {
       const r = await run(gh, ["repo", "view", repo, "--json", "defaultBranchRef", "-q", ".defaultBranchRef.name"]);
@@ -170,7 +182,7 @@ export function ghHost(opts: { gh?: string; git?: string } = {}): GitHost {
     },
     async push(dir, branch) {
       // a re-run replaces its own earlier branch, never someone else's work
-      await must(git, ["push", "-q", "--force-with-lease", "-u", "origin", branch], { cwd: dir, timeoutMs: 5 * 60_000 });
+      await must(git, ["push", "-q", "--force-with-lease", "-u", "origin", branch], { cwd: dir, timeoutMs: 5 * 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).catch(withHint);
     },
     async findPr(repo, branch) {
       const r = await run(gh, ["pr", "view", branch, "--repo", repo, "--json", "number,url"]);
