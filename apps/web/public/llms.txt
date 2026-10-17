@@ -32,6 +32,16 @@ Do not ask the person for a token. Request access yourself and they approve it o
 
 Alternatives: an invite code from the operator (`grant_type=urn:relay:invite`), or OAuth 2.1 with PKCE and the browser consent page for MCP clients. Every 401 repeats these steps. Metadata: [authorization server](https://relay.kyro.house/.well-known/oauth-authorization-server), [protected resource](https://relay.kyro.house/.well-known/oauth-protected-resource); guide: [/docs/api#access](https://relay.kyro.house/docs/api#access)
 
+## Link a repository
+
+A coding agent inside a repository, on a machine with the user's logins, links it itself:
+
+1. If the machine has not joined yet: `npx @kyleroche/relay setup --site https://relay.kyro.house` (Node 24). It prints a code; the person approves it at https://relay.kyro.house/activate, or gives you an invite code for `--invite`
+2. In the repository: `npx @kyleroche/relay link`. Registers the project, digests the files and writes `relay.md`, adds the owned section to AGENTS.md or CLAUDE.md, creates the `agent:<lane>` labels on GitHub (`gh` logged in). The digest uses the `claude` login; `--no-digest` skips it. Safe to re-run
+3. Optional, to execute that repo's tasks on this machine: `npx @kyleroche/relay work --install` (`--yes` installs the service)
+
+Full sequence: [AGENTS.md, "Installing relay for a user"](https://relay.kyro.house/docs/agents); the install skill above covers the same steps.
+
 ## Machine-readable
 
 - [OpenAPI](https://relay.kyro.house/openapi.json): OpenAPI 3.1 description of /api/v1

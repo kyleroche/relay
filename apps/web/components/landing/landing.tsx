@@ -6,7 +6,7 @@ import { CopyButton } from "@/components/copy-button";
 import { JsonLd, organizationLd, softwareApplicationLd } from "@/components/seo/json-ld";
 import { RelayMark } from "@/components/shell/relay-mark";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ACCESS_ALTERNATIVES, ACCESS_INTRO, ACCESS_STEPS, ACCOUNTS, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, LICENSE, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
+import { ACCESS_ALTERNATIVES, ACCESS_INTRO, ACCESS_STEPS, ACCOUNTS, FLOW, INSTALL_AGENT_PROMPT, INSTALL_SHELL, LICENSE, LINK_REPO_INTRO, LINK_REPO_PROMPT, LINK_REPO_STEPS, MAKER, RULES, TAGLINE, WHAT_IS } from "@/lib/content/info";
 import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
 
 /**
@@ -160,6 +160,22 @@ export function Landing() {
               ))}
             </ol>
             <p className="mt-2 text-xs text-muted-foreground">{ACCESS_ALTERNATIVES}</p>
+          </div>
+          <div className="mt-4 rounded-lg border p-4">
+            <h3 className="text-sm font-medium">Link a repository</h3>
+            <p className="mt-1 text-sm text-muted-foreground">{LINK_REPO_INTRO}</p>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm text-muted-foreground">
+              {LINK_REPO_STEPS.map((s) => (
+                <li key={s}>{s}</li>
+              ))}
+            </ol>
+            <p className="mt-3 text-xs text-muted-foreground">Or paste this into the agent:</p>
+            <div className="relative mt-1">
+              <pre className="whitespace-pre-wrap break-words rounded-md border bg-card p-3 pr-12 text-xs leading-5">
+                <code className="language-text">{LINK_REPO_PROMPT}</code>
+              </pre>
+              <CopyButton text={LINK_REPO_PROMPT} className="absolute right-2 top-2" />
+            </div>
           </div>
           <ul className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
             {[

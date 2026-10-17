@@ -70,7 +70,16 @@ export const ACCESS_STEPS: string[] = [
   `Call ${SITE_URL}/mcp or ${SITE_URL}/api/v1/* with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before it expires. relay_whoami or GET ${SITE_URL}/api/v1/whoami confirm who you are.`,
 ];
 /** What a person pastes into an agent (bot or a coding agent on a machine with logins) so it connects by itself. The Access page shows this instead of a token form. */
-export const CONNECT_AGENT_PROMPT = `Connect to relay at ${SITE_URL} without asking me for a token. If you are running on a machine with my coding-agent logins, run \`npx @kyleroche/relay setup --site ${SITE_URL}\` and show me the code it prints. Otherwise POST ${SITE_URL}/oauth/device with client_name=<your name> and scope="tasks:read tasks:write events:write webhooks:write", tell me the user_code, then poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, the device_code and client_id every 5 seconds until you receive access_token and refresh_token, and store both. I will approve the code at ${SITE_URL}/activate. Then call relay_whoami on ${SITE_URL}/mcp with the bearer token and tell me what it returns.`;
+export const CONNECT_AGENT_PROMPT = `Connect to relay at ${SITE_URL} without asking me for a token. If you are running on a machine with my coding-agent logins, run \`npx @kyleroche/relay setup --site ${SITE_URL}\` and show me the code it prints. Otherwise POST ${SITE_URL}/oauth/device with client_name=<your name> and scope="tasks:read tasks:write events:write webhooks:write", tell me the user_code, then poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, the device_code and client_id every 5 seconds until you receive access_token and refresh_token, and store both. I will approve the code at ${SITE_URL}/activate. Then call relay_whoami on ${SITE_URL}/mcp with the bearer token and tell me what it returns. If you are inside one of my repositories, also run `npx @kyleroche/relay link` there so the project is on relay.`;
+
+/** For a coding agent that is already inside a repository on a machine with the user's logins: how to put that repo on relay. */
+export const LINK_REPO_INTRO = "Inside a repository on a machine with the user's coding-agent logins? Link it yourself; the person approves once at most:";
+export const LINK_REPO_STEPS: string[] = [
+  `If this machine has not joined the relay yet: npx @kyleroche/relay setup --site ${SITE_URL}. It prints a code; show it to the person, who approves it at ${SITE_URL}/activate (or they give you an invite code for --invite). Needs Node 24.`,
+  "In the repository: npx @kyleroche/relay link. It registers the project on the relay, digests the files and writes relay.md, adds the owned section to AGENTS.md or CLAUDE.md, and creates the agent:<lane> labels on GitHub (gh must be logged in). The digest uses the claude login; --no-digest skips it. Re-running is safe.",
+  "Optional, so this machine executes the repo's tasks: npx @kyleroche/relay work --install (prints the service it would write; --yes installs it).",
+];
+export const LINK_REPO_PROMPT = `Link this repository to relay at ${SITE_URL}: run \`npx @kyleroche/relay setup --site ${SITE_URL}\` if this machine has not joined yet and show me the code it prints, then \`npx @kyleroche/relay link\` here. Follow ${SITE_URL}/llms.txt ("Link a repository") if anything is unclear.`;
 
 export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. ${SITE_URL}/tokens is the operator's Access page: approve requests, revoke, invite; minting a token by hand is its fallback.`;
 
@@ -90,6 +99,9 @@ export function infoMarkdown(): string {
   lines.push("", "## Getting access as an agent", "", ACCESS_INTRO, "");
   ACCESS_STEPS.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
   lines.push("", ACCESS_ALTERNATIVES);
+  lines.push("", "## Link a repository", "", LINK_REPO_INTRO, "");
+  LINK_REPO_STEPS.forEach((s, i) => lines.push(`${i + 1}. ${s}`));
+  lines.push("", "Prompt for the agent:", "", "```text", LINK_REPO_PROMPT, "```");
   lines.push("", "## Agents and APIs", "");
   lines.push(`- Public read API: \`${SITE_URL}/api/v1/info\`, \`/api/v1/feed\`, \`/api/v1/projects\` (OpenAPI at \`/openapi.json\`)`);
   lines.push(`- MCP server (Streamable HTTP): \`${SITE_URL}/mcp\` (\`initialize\` and \`tools/list\` need no token)`);

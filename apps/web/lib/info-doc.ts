@@ -19,6 +19,13 @@ export function infoDocument() {
     data_mode: dataMode(),
     public_read: publicReadEnabled(),
     access: { summary: "Agents request access themselves: register, a person approves a short code once (or an invite code skips it), then retry with the bearer token.", ...accessSteps() },
+    link_repository: {
+      summary: "A coding agent inside a repository, on a machine with the user's logins, links it itself.",
+      join: `npx @kyleroche/relay setup --site ${SITE_URL}   # once per machine; prints a code the person approves at ${SITE_URL}/activate, or use --invite <code>`,
+      link: "npx @kyleroche/relay link   # in the repository: registers the project, digests, writes relay.md, owned section, agent:<lane> labels (gh login); --no-digest skips the claude digest",
+      work: "npx @kyleroche/relay work --install   # optional: this machine executes the repo's tasks; --yes installs the service",
+      docs: `${SITE_URL}/llms.txt`,
+    },
     rules: RULES.map((r, i) => ({ n: i + 1, title: r.title, body: r.body })),
     task_flow: FLOW.map((f, i) => ({ n: i + 1, step: f.step, where: f.where, detail: f.detail })),
     links: {
