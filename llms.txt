@@ -1,6 +1,6 @@
 # relay
 
-> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on.
+> An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, workers on your own machines (`relay work`) that claim and run them, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on.
 
 ## Start here
 
@@ -10,7 +10,8 @@
 
 ## Guides
 
-- [Runners](docs/RUNNERS.md): registering a self-hosted GitHub Actions runner that holds your logins
+- [Workers](docs/WORKERS.md): how a machine becomes a worker with `relay work`: lanes from logins, the claim and lease protocol, what a job does, the service files, cloud lanes
+- [Runners](docs/RUNNERS.md): advanced and optional: self-hosted GitHub Actions runners, and the cloud lanes' vendor setup and limits
 - [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob
 - [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and the `relay_*` MCP tools

@@ -5,8 +5,8 @@ relay tells it when something happens. The reference integration is a chief-of-s
 conversation into tasks, watches them, and reports back; the same surface serves any agent that can call HTTP.
 
 Everything here runs against a hosted relay (`docs/HOSTING.md`), reachable as `<site>`, for example
-`https://relay.kyro.house`. The bot never sees a vendor login, a runner, or the database: it talks to the site, the
-site talks to GitHub, runners pick the work up from GitHub.
+`https://relay.kyro.house`. The bot never sees a vendor login, a worker, or the database: it talks to the site, the
+site talks to GitHub, and workers (`docs/WORKERS.md`) claim the work from the site.
 
 ## 1. The token
 
@@ -17,8 +17,9 @@ Sign in to `<site>/tokens` and create a token named after the bot with the scope
 | `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`) |
 | `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`) |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
-| `feed:read` | optional: read the whole feed and the projects |
+| `feed:read` | optional: read the whole feed, the projects and the workers |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
+| `work:claim` | not for a bot: the scope a machine's `relay work` token carries to register, heartbeat, claim and report (`docs/WORKERS.md`) |
 
 The plaintext is shown once; relay stores its SHA-256. Every write the bot makes is attributed to
 `bot:<token name>` in the feed. The bot cannot choose another actor: the server derives it from the token, and the
@@ -56,14 +57,17 @@ State is never stored. Every read folds the task's feed events (same repo and is
 | Event | State after it |
 |---|---|
 | none yet, or `issue.labeled` | `queued` |
-| `run.started` | `running` (and `runner` = the runner that claimed it) |
+| a worker holds a live lease on it (no run event yet; `docs/WORKERS.md`) | `claimed` (and `runner` = `runner:<worker>`) |
+| `run.started`, or `run.dispatched` (a cloud lane) | `running` (and `runner` = the worker that claimed it) |
 | `run.finished` with a failing conclusion, or `run.failed` | `failed` |
 | `run.finished` otherwise, or `pr.opened` | `review` (`pr` and `pr_url` set) |
 | `pr.merged` or `issue.closed` | `done` |
 | `pr.closed` without merge | `queued` |
+| the lease behind a `run.started` expired with no finish (the worker vanished) | `queued` |
 
-So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a human. The
-GitHub webhook (`docs/FEED.md`) is what feeds these transitions; without it a task stays `queued`.
+So "what is happening with my tasks" is `relay_task_list(state: "review")`: the ones waiting for a human. Workers
+(`relay work`) write the `run.*` transitions as they go; the GitHub webhook (`docs/FEED.md`) adds the PR and merge
+ones. Without any worker online a task stays `queued`.
 
 ## 3. The webhook
 
