@@ -54,14 +54,61 @@ const toHook = (r: Record<string, unknown>): WebhookRow => ({
 
 export const generateWebhookSecret = (): string => "whsec_" + randomBytes(32).toString("base64url");
 
-export function validateWebhookUrl(url: string): string | undefined {
+const ipv4 = (host: string): number[] | undefined => {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!m) return undefined;
+  const parts = m.slice(1).map(Number);
+  return parts.every((n) => n <= 255) ? parts : undefined;
+};
+
+/** Lower-cased, without IPv6 brackets; an IPv4-mapped IPv6 address (`::ffff:10.0.0.1`, which URL parsing renders as `::ffff:a00:1`) becomes its dotted quad. */
+const bareHost = (hostname: string): string => {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const mapped = /^::ffff:(?:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(host);
+  if (!mapped) return host;
+  if (mapped[1]) return mapped[1];
+  const hi = parseInt(mapped[2]!, 16);
+  const lo = parseInt(mapped[3]!, 16);
+  return `${hi >> 8}.${hi & 255}.${lo >> 8}.${lo & 255}`;
+};
+
+/** Loopback: the machine itself. A developer may point a hook here outside production. */
+export function isLoopbackHost(hostname: string): boolean {
+  const host = bareHost(hostname);
+  if (host === "localhost" || host.endsWith(".localhost") || host === "::1" || host === "0.0.0.0" || host === "::") return true;
+  const v4 = ipv4(host);
+  return !!v4 && v4[0] === 127;
+}
+
+/** Link-local, RFC 1918, carrier-grade NAT and unique-local addresses, and `.internal` / `.local` names: never a webhook target. */
+export function isPrivateHost(hostname: string): boolean {
+  const host = bareHost(hostname);
+  if (host.endsWith(".internal") || host.endsWith(".local")) return true;
+  if (/^fe[89ab][0-9a-f]:/.test(host) || /^f[cd][0-9a-f]{2}:/.test(host)) return true; // fe80::/10, fc00::/7
+  const v4 = ipv4(host);
+  if (!v4) return false;
+  const [a, b] = v4 as [number, number, number, number];
+  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+}
+
+/**
+ * A webhook must point at a public https endpoint: the dispatcher runs on the site and would otherwise be a way to
+ * reach the site's own network (loopback, link-local, RFC 1918, `.internal`, `.local`). Outside production a
+ * loopback http URL is allowed so `relay webhook test` works against a local receiver. Returns the reason to refuse,
+ * or undefined. DNS is not resolved here: a public name that resolves privately is for the dispatcher to refuse.
+ */
+export function validateWebhookUrl(url: string, nodeEnv: string | undefined = process.env.NODE_ENV): string | undefined {
   let u: URL;
   try {
     u = new URL(url);
   } catch {
-    return "url must be an absolute http(s) URL";
+    return "url must be an absolute https URL";
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return "url must use http or https";
+  if (u.protocol !== "https:" && u.protocol !== "http:") return "url must use https";
+  const production = nodeEnv === "production";
+  if (isLoopbackHost(u.hostname)) return production ? "url must not point at this machine (loopback)" : undefined;
+  if (isPrivateHost(u.hostname)) return "url must not point at a link-local, private or internal network address";
+  if (u.protocol !== "https:") return "url must use https (http is allowed for localhost outside production only)";
   return undefined;
 }
 

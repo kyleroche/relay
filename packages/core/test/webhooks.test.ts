@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
+import { isLoopbackHost, isPrivateHost, validateWebhookUrl } from "../src/db/webhooks.ts";
 import { deliverWebhook, dispatchEvent, pingPayload, signWebhook, verifyWebhookSignature, webhookPayload, type FetchLike } from "../src/webhooks/dispatch.ts";
 
 let db: Db;
@@ -32,6 +33,36 @@ function scripted(script: Array<number | "ECONNRESET">): { fetch: FetchLike; cal
   };
   return { fetch, calls };
 }
+
+describe("webhook targets", () => {
+  it("accepts public https only; http is for loopback outside production", () => {
+    expect(validateWebhookUrl("https://bot.example/relay", "production")).toBeUndefined();
+    expect(validateWebhookUrl("https://bot.example:8443/relay", "development")).toBeUndefined();
+    expect(validateWebhookUrl("http://bot.example/relay", "development")).toMatch(/https/);
+    expect(validateWebhookUrl("http://bot.example/relay", "production")).toMatch(/https/);
+    expect(validateWebhookUrl("http://localhost:3000/hook", "development")).toBeUndefined();
+    expect(validateWebhookUrl("http://127.0.0.1:3000/hook", undefined)).toBeUndefined();
+    expect(validateWebhookUrl("http://localhost:3000/hook", "production")).toMatch(/loopback/);
+    expect(validateWebhookUrl("https://127.0.0.1/hook", "production")).toMatch(/loopback/);
+    expect(validateWebhookUrl("ftp://bot.example/x", "development")).toMatch(/https/);
+    expect(validateWebhookUrl("not a url", "development")).toMatch(/absolute/);
+  });
+
+  it("refuses link-local, RFC 1918, unique-local and internal names in every environment", () => {
+    for (const host of ["10.0.0.5", "172.16.0.1", "172.31.255.254", "192.168.1.1", "169.254.169.254", "100.64.0.1", "[fe80::1]", "[fd00::1]", "[::ffff:10.0.0.1]", "metadata.internal", "printer.local", "db.corp.INTERNAL"]) {
+      expect(validateWebhookUrl(`https://${host}/hook`, "development"), host).toMatch(/private or internal/);
+      expect(validateWebhookUrl(`https://${host}/hook`, "production"), host).toMatch(/private or internal/);
+    }
+    for (const host of ["172.32.0.1", "11.0.0.1", "192.169.0.1", "bot.example", "internal.example.com", "local.example.com"]) expect(validateWebhookUrl(`https://${host}/hook`, "production"), host).toBeUndefined();
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("app.localhost")).toBe(true);
+    expect(isPrivateHost("::1")).toBe(false);
+  });
+
+  it("createWebhook refuses a private target", async () => {
+    await expect(repo.createWebhook(db, { url: "https://192.168.0.10/hook", events: ["*"], createdBy: "t" })).rejects.toThrow(/private or internal/);
+  });
+});
 
 describe("webhook signature", () => {
   it("signs <ts>.<body> with HMAC-SHA256 and verifies within the tolerance", () => {
