@@ -62,6 +62,9 @@ describe("relay mcp tools", () => {
       "relay_task_create",
       "relay_task_get",
       "relay_task_list",
+      "relay_webhook_subscribe",
+      "relay_webhook_unsubscribe",
+      "relay_whoami",
     ]);
     await client.close();
     await server.close();
@@ -190,6 +193,39 @@ describe("relay mcp tools", () => {
     expect(unknownProject.isError).toBe(true);
     // write scope does not include memory
     expect((await client.callTool({ name: "relay_recall", arguments: { query: "x" } })).isError).toBe(true);
+    await client.close();
+    await server.close();
+  });
+
+  it("whoami and webhook subscribe/unsubscribe over a scoped connection", async () => {
+    const { client, server } = await connect({ canWrite: false, scopes: ["webhooks:write"], actor: "token:oauth:grok-bot", identity: { name: "oauth:grok-bot", expires_at: "2026-10-17T10:00:00.000Z", source: "db" } });
+    const who = jsonOf<{ actor: string; name: string; scopes: string[]; expires_at: string; source: string; authenticated: boolean }>(await client.callTool({ name: "relay_whoami", arguments: {} }));
+    expect(who).toMatchObject({ actor: "token:oauth:grok-bot", name: "oauth:grok-bot", scopes: ["webhooks:write"], expires_at: "2026-10-17T10:00:00.000Z", source: "db", authenticated: true });
+
+    const sub = jsonOf<{ webhook: { id: string; url: string; events: string[]; has_bearer: boolean; project: string | null; created_by: string }; secret: string }>(
+      await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "https://grok.example/routines/relay", events: ["pr.merged", "run."], bearer: "rk_1", project: "demo" } }),
+    );
+    expect(sub.secret).toMatch(/^whsec_/);
+    expect(sub.webhook).toMatchObject({ url: "https://grok.example/routines/relay", events: ["pr.merged", "run."], has_bearer: true, project: "demo", created_by: "bot:oauth:grok-bot" });
+    expect(sub.webhook).not.toHaveProperty("secret");
+    expect((await repo.getWebhook(db, sub.webhook.id))?.bearer).toBe("rk_1");
+
+    expect((await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "ftp://x", events: ["*"] } })).isError).toBe(true);
+    expect((await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "https://x.example", events: ["*"], project: "ghost" } })).isError).toBe(true);
+
+    expect(jsonOf<{ removed: string }>(await client.callTool({ name: "relay_webhook_unsubscribe", arguments: { id: sub.webhook.id } })).removed).toBe(sub.webhook.id);
+    expect((await client.callTool({ name: "relay_webhook_unsubscribe", arguments: { id: sub.webhook.id } })).isError).toBe(true);
+    expect(await repo.getWebhook(db, sub.webhook.id)).toBeUndefined();
+    await client.close();
+    await server.close();
+  });
+
+  it("whoami tells an anonymous caller how to authenticate", async () => {
+    const { client, server } = await connect({ canWrite: false, scopes: [], authorizationServer: "https://relay.test/.well-known/oauth-authorization-server" });
+    const who = jsonOf<{ authenticated: boolean; name: string; how_to_authenticate: string }>(await client.callTool({ name: "relay_whoami", arguments: {} }));
+    expect(who.authenticated).toBe(false);
+    expect(who.name).toBe("anonymous");
+    expect(who.how_to_authenticate).toContain("oauth-authorization-server");
     await client.close();
     await server.close();
   });
