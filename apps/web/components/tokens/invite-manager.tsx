@@ -4,10 +4,11 @@ import { Check, Copy, Ticket, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createInviteAction, revokeInviteAction, type TokenActionResult } from "@/app/tokens/actions";
-import { Scopes, Tag } from "@/components/tokens/bits";
+import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pill } from "@/components/ui/pill";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
@@ -156,7 +157,7 @@ export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWr
           <span className="font-medium" title={i.id}>
             {i.name}
           </span>
-          {i.why && <Tag>{i.why}</Tag>}
+          {i.why && <Pill>{i.why}</Pill>}
           <Scopes scopes={i.scopes} />
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">

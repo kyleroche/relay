@@ -5,6 +5,7 @@ import Link from "next/link";
 import { CoverageBar } from "@/components/coverage-bar";
 import { EventRow } from "@/components/feed/event-row";
 import { ModelStatusBadge } from "@/components/model-status";
+import { Pill } from "@/components/ui/pill";
 import { getProject } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
 import { dayKeyIn, dayLabelIn } from "@/lib/tz";
@@ -88,9 +89,11 @@ export default async function ProjectPage({ params }: Props) {
               <dd className="mt-0.5 flex flex-wrap gap-1">
                 {p.lanes.length === 0 && <span className="text-muted-foreground">—</span>}
                 {p.lanes.map((l) => (
-                  <Link key={l} href={`/?project=${p.slug}&lane=${l}`} className="rounded border bg-muted px-1.5 py-px font-mono text-xs hover:border-primary/50" title={`Feed: ${p.slug} on the ${l} lane`}>
-                    {l}
-                  </Link>
+                  <Pill key={l} asChild mono className="hover:border-primary/50 hover:text-foreground">
+                    <Link href={`/?project=${p.slug}&lane=${l}`} title={`Feed: ${p.slug} on the ${l} lane`}>
+                      {l}
+                    </Link>
+                  </Pill>
                 ))}
               </dd>
             </div>

@@ -8,6 +8,7 @@ import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
+import { Pill } from "@/components/ui/pill";
 import { dataMode } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
 import { getDb } from "@/lib/db";
@@ -84,7 +85,7 @@ export default async function TaskPage({ params }: Props) {
               <a href={t.issue_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono text-xs hover:text-primary">
                 {t.repo}#{t.issue} <ArrowUpRight className="size-3" aria-hidden="true" />
               </a>
-              <span className="font-mono text-xs">{t.lane ?? "no lane"}</span>
+              {t.lane ? <Pill mono>{t.lane}</Pill> : <span className="text-xs">no lane</span>}
               {t.runner && <span className="font-mono text-xs">{t.runner.replace(/^runner:/, "worker ")}</span>}
               {t.branch && <span className="font-mono text-xs">{t.branch}</span>}
               <Link href={`/projects/${t.project}`} className="text-xs hover:text-foreground">

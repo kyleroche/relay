@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Circle, Pause, Power } from "lucide-react";
 import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
+import { Pill } from "@/components/ui/pill";
 import { getWorkers } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
 import type { WorkerStatus } from "@/lib/types";
@@ -87,20 +88,20 @@ export default async function WorkersPage() {
               </div>
               <ul className="flex flex-wrap gap-1" aria-label="Lanes and labels">
                 {w.lanes.map((l) => (
-                  <li key={`lane:${l}`} className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">
-                    {l}
-                  </li>
+                  <Pill key={`lane:${l}`} asChild tone="primary" mono title={`Serves the ${l} lane`}>
+                    <li>{l}</li>
+                  </Pill>
                 ))}
                 {w.labels.map((l) =>
                   l === "sandbox:off" ? (
                     // relay work --no-sandbox: this machine runs the Claude lane's Bash without Claude Code's OS sandbox
-                    <li key={`label:${l}`} className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[10px] text-destructive" title="Started with --no-sandbox: the Claude lane's Bash runs without Claude Code's OS sandbox on this machine">
-                      {l}
-                    </li>
+                    <Pill key={`label:${l}`} asChild tone="bad" mono title="Started with --no-sandbox: the Claude lane's Bash runs without Claude Code's OS sandbox on this machine">
+                      <li>{l}</li>
+                    </Pill>
                   ) : (
-                    <li key={`label:${l}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                      {l}
-                    </li>
+                    <Pill key={`label:${l}`} asChild mono>
+                      <li>{l}</li>
+                    </Pill>
                   ),
                 )}
               </ul>

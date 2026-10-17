@@ -4,9 +4,10 @@ import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/tokens/actions";
-import { Scopes, Tag } from "@/components/tokens/bits";
+import { Scopes } from "@/components/tokens/bits";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Pill } from "@/components/ui/pill";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -67,8 +68,8 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
           <span className="font-medium" title={t.id}>
             {t.name}
           </span>
-          {t.revoked && <Tag>revoked</Tag>}
-          {!t.revoked && t.expired && <Tag>expired</Tag>}
+          {t.revoked && <Pill>revoked</Pill>}
+          {!t.revoked && t.expired && <Pill>expired</Pill>}
           <Scopes scopes={t.scopes} />
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">{meta(t)}</p>

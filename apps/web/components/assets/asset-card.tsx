@@ -2,6 +2,7 @@ import { FileText, File as FileIcon, Film, Globe, Image as ImageIcon, Music } fr
 import Link from "next/link";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { StatusBadge } from "@/components/assets/status-badge";
+import { Pill } from "@/components/ui/pill";
 import { fmtAgo } from "@/lib/format";
 import type { Asset, AssetKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -34,9 +35,9 @@ export function Thumb({ asset, className, large = false }: { asset: Pick<Asset, 
         <Icon className={cn("text-muted-foreground/60", large ? "size-10" : "size-6")} aria-hidden="true" />
       )}
       {asset.kind === "video" && (
-        <span className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded bg-background/85 px-1.5 py-0.5 font-mono text-[10px] text-foreground backdrop-blur">
-          <Film className="size-3" aria-hidden="true" /> video
-        </span>
+        <Pill size="sm" className="absolute bottom-1.5 right-1.5 border-transparent bg-background/85 text-foreground backdrop-blur">
+          <Film aria-hidden="true" /> video
+        </Pill>
       )}
     </div>
   );

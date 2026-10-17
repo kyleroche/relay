@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { CoverageBar } from "@/components/coverage-bar";
 import { PageIntro } from "@/components/page-intro";
+import { Pill } from "@/components/ui/pill";
 import { getProjects } from "@/lib/data";
 import { fmtAgo } from "@/lib/format";
 
@@ -68,9 +69,9 @@ export default async function ProjectsPage() {
               </dl>
               <div className="flex flex-wrap gap-1">
                 {p.lanes.map((l) => (
-                  <span key={l} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground" title={`Issues labelled agent:${l} run on this lane`}>
+                  <Pill key={l} mono title={`Issues labelled agent:${l} run on this lane`}>
                     {l}
-                  </span>
+                  </Pill>
                 ))}
               </div>
             </Link>

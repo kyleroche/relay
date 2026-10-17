@@ -14,6 +14,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Pill } from "@/components/ui/pill";
 import type { Session } from "@/lib/session-token";
 
 const THEMES = [
@@ -57,7 +58,7 @@ export function ViewerMenu({ session }: { session: Session | null }) {
         <DropdownMenuLabel className="flex flex-col gap-0.5 font-normal">
           <span className="flex items-center gap-2">
             <span className="truncate font-medium">{session.login}</span>
-            {session.demo && <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">demo</span>}
+            {session.demo && <Pill>demo</Pill>}
           </span>
           {session.name && session.name !== session.login && <span className="truncate text-xs text-muted-foreground">{session.name}</span>}
         </DropdownMenuLabel>

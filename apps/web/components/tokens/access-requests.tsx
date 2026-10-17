@@ -4,8 +4,9 @@ import { Check, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { decideAccessAction, type TokenActionResult } from "@/app/tokens/actions";
+import { Scopes } from "@/components/tokens/bits";
 import { Button } from "@/components/ui/button";
-import { Scopes, Tag } from "@/components/tokens/bits";
+import { Pill } from "@/components/ui/pill";
 import { cn } from "@/lib/utils";
 
 export type RequestState = "pending" | "approved" | "redeemed" | "denied" | "expired";
@@ -70,10 +71,14 @@ export function AccessRequests({ requests, canWrite }: { requests: RequestView[]
       <div className="min-w-0">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <span className="font-medium">{r.client_name}</span>
-          {r.state === "pending" && <Tag tone="warn">{r.user_code}</Tag>}
-          {r.state === "approved" && <Tag tone="primary">approved</Tag>}
-          {r.state === "denied" && <Tag>denied</Tag>}
-          {r.state === "expired" && <Tag>expired</Tag>}
+          {r.state === "pending" && (
+            <Pill tone="warn" mono>
+              {r.user_code}
+            </Pill>
+          )}
+          {r.state === "approved" && <Pill tone="primary">approved</Pill>}
+          {r.state === "denied" && <Pill>denied</Pill>}
+          {r.state === "expired" && <Pill>expired</Pill>}
           <Scopes scopes={r.scopes} />
         </p>
         <p className="mt-0.5 text-xs text-muted-foreground">{meta(r)}</p>

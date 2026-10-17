@@ -6,6 +6,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
+import { Pill } from "@/components/ui/pill";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { fmtAgo } from "@/lib/format";
@@ -32,7 +33,7 @@ function Row({ t, now }: { t: TaskView; now: number }) {
         </Link>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           <span className="font-mono">{t.id}</span>
-          <span className="font-mono">{t.lane ?? "no lane"}</span>
+          {t.lane ? <Pill mono>{t.lane}</Pill> : <span>no lane</span>}
           {t.pr && (
             <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono hover:text-primary">
               PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />

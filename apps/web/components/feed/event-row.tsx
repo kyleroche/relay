@@ -2,6 +2,7 @@ import { ArrowUpRight } from "lucide-react";
 import Link from "next/link";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { KindIcon } from "@/components/feed/kind-icon";
+import { Pill } from "@/components/ui/pill";
 import { kindInfo } from "@/lib/events";
 import { fmtCost, fmtDuration, fmtTokens } from "@/lib/format";
 import { clockIn } from "@/lib/tz";
@@ -85,7 +86,9 @@ export function EventRow({
             </Link>
           )}
           {e.lane && e.kind !== "issue.labeled" && (
-            <span className="hidden shrink-0 rounded bg-muted px-1 py-px font-mono text-[10px] text-muted-foreground md:inline">{e.lane}</span>
+            <Pill size="sm" mono className="hidden md:inline-flex">
+              {e.lane}
+            </Pill>
           )}
         </div>
         <div className="flex shrink-0 items-center justify-end gap-2 font-mono text-[11px] tabular-nums text-muted-foreground">

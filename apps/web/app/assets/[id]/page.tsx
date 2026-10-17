@@ -7,6 +7,7 @@ import { AssetViewer } from "@/components/assets/asset-viewer";
 import { ReviewControls } from "@/components/assets/review-controls";
 import { StatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
+import { Pill } from "@/components/ui/pill";
 import { getAsset } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -164,9 +165,9 @@ export default async function AssetPage({ params }: Props) {
           {asset.tags.length > 0 && (
             <ul className="flex flex-wrap gap-1" aria-label="Tags">
               {asset.tags.map((t) => (
-                <li key={t} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                  {t}
-                </li>
+                <Pill key={t} asChild mono>
+                  <li>{t}</li>
+                </Pill>
               ))}
             </ul>
           )}
