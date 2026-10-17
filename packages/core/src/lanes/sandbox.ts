@@ -13,7 +13,7 @@
  */
 
 /** Hosts a code run may reach without the operator adding any: package registries and GitHub's download hosts. */
-export const SANDBOX_DEFAULT_DOMAINS = ["registry.npmjs.org", "registry.yarnpkg.com", "github.com", "objects.githubusercontent.com", "codeload.github.com", "pypi.org", "files.pythonhosted.org", "crates.io", "static.crates.io", "proxy.golang.org"] as const;
+export const SANDBOX_DEFAULT_DOMAINS = ["registry.npmjs.org", "registry.yarnpkg.com", "github.com", "objects.githubusercontent.com", "codeload.github.com", "fonts.googleapis.com", "fonts.gstatic.com", "pypi.org", "files.pythonhosted.org", "crates.io", "static.crates.io", "proxy.golang.org"] as const;
 
 /**
  * Paths no sandboxed process and no Read/Edit tool call may touch: relay's own secrets and database, every vendor CLI's login and
