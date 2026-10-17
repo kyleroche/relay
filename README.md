@@ -27,7 +27,7 @@ Or by hand, with Node 24 or newer and no checkout:
 npx @kyleroche/relay setup --site https://relay.example.com   # join a hosted relay (device flow or --invite <code>); skip for a single machine
 npx @kyleroche/relay doctor     # what is installed, logged in, reachable, and which lanes this machine can serve
 npx @kyleroche/relay work --install --yes   # this machine becomes a worker: a service that claims and runs tasks for those lanes
-npx @kyleroche/relay setup      # hooks + memory server into each CLI you have; --yes writes
+npx @kyleroche/relay setup      # hooks + memory server into each CLI you have, and Claude Code's plan-meter status line; --yes writes
 cd ~/code/some-repo && npx @kyleroche/relay link
 ```
 

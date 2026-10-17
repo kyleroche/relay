@@ -109,6 +109,12 @@ export interface SubscriptionUsage {
 }
 
 /** A plan meter. percentUsed is null when the vendor exposes no meter for that window. */
+/**
+ * Where a plan meter's number came from: `vendor` is a reading Claude Code handed relay's status line on a worker
+ * (lib/meters.ts), `manual` the RELAY_PLAN_METERS override, `demo` mock data, `none` no reading at all.
+ */
+export type PlanMeterSource = "vendor" | "manual" | "demo" | "none";
+
 export interface PlanMeter {
   id: string;
   label: string;
@@ -116,6 +122,11 @@ export interface PlanMeter {
   percentUsed: number | null;
   resetsAt: string | null;
   resetsIn: string | null;
+  source: PlanMeterSource;
+  /** When the vendor reading was taken (ISO); null unless `source` is `vendor`. */
+  capturedAt: string | null;
+  /** The worker (machine) that reported the reading; null unless `source` is `vendor`. */
+  worker: string | null;
   /** Human note for the unknown case, e.g. "Codex does not publish a weekly meter". */
   note?: string;
 }

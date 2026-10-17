@@ -52,7 +52,7 @@ Every step is a REST call under `/api/v1` with the bearer token; the same functi
 | Step | Route | Writes |
 |---|---|---|
 | register | `POST /workers` `{name, host, lanes, labels, version}` | upsert by name (the id is stable); `worker.registered` on first sight, `worker.online` when a worker returns after an offline report |
-| heartbeat | `POST /workers/{id}/heartbeat` `{status?, interval_ms?}` every 60 s while a lease is held, at most every 5 min while idle | `last_seen` and `poll_ms`; every live lease the worker holds is extended to 30 minutes from now; `status: offline` writes `worker.offline` |
+| heartbeat | `POST /workers/{id}/heartbeat` `{status?, interval_ms?, meters?}` every 60 s while a lease is held, at most every 5 min while idle | `last_seen`, `poll_ms` and `meters` (replaced when sent, kept when absent; "Plan meters" below); every live lease the worker holds is extended to 30 minutes from now; `status: offline` writes `worker.offline` |
 | doorbell | `GET /work/doorbell?lanes=claude,codex` (`work:claim` or `feed:read`) on every idle tick | nothing. Returns `{version, queued, ts}`: the queue version and how many tasks look queued for those lanes ("The loop" below) |
 | claim | `POST /work/claim` `{worker_id, lanes?, labels?}` when the doorbell says so | the oldest `queued` task whose lane and labels match, leased for 30 minutes; `claim: null` when nothing is claimable |
 | start | `POST /work/{owner}/{repo}%23{issue}/start` `{worker_id, branch}` | `run.started` as `runner:<name>`; the task is `running` |
@@ -95,6 +95,27 @@ want it to sleep. `RELAY_DEBUG=1 relay work` logs every interval and version cha
 doorbell and drains the queue with claims alone. A site that predates the doorbell answers 404 and the worker
 claims on every tick, with the same backoff. Local mode (no site) runs the identical loop against the machine's own
 database.
+
+### Plan meters
+
+The header's 5-hour and weekly bars are the subscription's own usage, which relay cannot compute: its ledger counts
+relay's runs, the vendor counts everything the login did. The one documented source is Claude Code's status line
+(`docs/MEMORY.md`, "The status line"): `relay setup` points it at relay's `statusline.mjs`, which saves the
+`rate_limits` Claude Code hands it under `~/.harness/meters/claude.json`. On every heartbeat the worker reads
+`~/.harness/meters/*.json`, keeps the readings captured within the last 48 hours, and sends
+
+```json
+"meters": [
+  { "subscription": "max", "window": "5h", "used_percentage": 42, "resets_at": "2026-10-17T15:00:00.000Z", "captured_at": "2026-10-17T11:58:04.120Z", "source": "claude-statusline" },
+  { "subscription": "max", "window": "7d", "used_percentage": 44, "resets_at": "2026-10-20T09:00:00.000Z", "captured_at": "2026-10-17T11:58:04.120Z", "source": "claude-statusline" }
+]
+```
+
+The server stores the list on the worker row (`workers.meters`, jsonb; at most 20 entries, every field bounded) and
+`GET /workers` returns it. The site composes the bars from `RELAY_PLAN_METERS` when set (a manual override), else the
+freshest reading per window across workers that are online or idle, else "no reading" with a note saying how to get
+one. A machine that uses Claude Code but runs no worker contributes nothing: the reading only travels with a
+heartbeat. `relay doctor` shows the file's values and age on the machine.
 
 ### Leases
 

@@ -5,7 +5,7 @@
  *   getFeed      -> repo.listEvents (project, kind, actor, lane, before, after)
  *   getProjects  -> repo.listProjects + repo.projectStats
  *   getProject   -> repo.getProject + listDecisions(current) + listEvents + listModels
- *   getUsage     -> repo.usageSummary + repo.usageDaily; plan meters from RELAY_PLAN_METERS or unknown
+ *   getUsage     -> repo.usageSummary + repo.usageDaily; plan meters from RELAY_PLAN_METERS, else the workers' heartbeat readings (lib/meters.ts)
  *   getWorkers   -> the last run.* events per runner:* actor (until a heartbeat exists)
  *   getModels    -> repo.listModels
  *   writeEvent   -> repo.writeEvent (dedupe_key makes redeliveries a no-op)
@@ -19,8 +19,8 @@ import { getStore, taskUrl, toAsset, toVersion } from "./assets.ts";
 import { getDb } from "./db.ts";
 import type { EventKind } from "./events.ts";
 import { deriveStation, failureLine, IN_MOTION, type FlowSnapshot, type FlowTask } from "./flow.ts";
-import { fmtUntil } from "./format.ts";
 import { taskTitle } from "./tasks.ts";
+import { composeMeters } from "./meters.ts";
 import type {
   Asset,
   AssetDetail,
@@ -70,36 +70,13 @@ function laneModels(lanes: Lane[], models: ModelInfo[]): ModelInfo[] {
 }
 
 /**
- * Plan meters are vendor numbers the app cannot compute from the ledger. RELAY_PLAN_METERS may carry a JSON array of
- * { id, label, subscription, percentUsed, resetsAt } written by a future route or a cron; otherwise every meter is
- * unknown and the header shows nothing rather than a guess.
+ * Plan meters are vendor numbers the app cannot compute from the ledger (lib/meters.ts): RELAY_PLAN_METERS overrides,
+ * then the freshest reading the workers reported with their heartbeats (Claude Code's own rate limits, saved by relay's
+ * status line), else unknown with a note that says how to get one.
  */
-function meters(now: number): PlanMeter[] {
-  const raw = process.env.RELAY_PLAN_METERS;
-  if (raw) {
-    try {
-      const list = JSON.parse(raw) as Array<Partial<PlanMeter>>;
-      return list
-        .filter((m) => m.id && m.label && m.subscription)
-        .map((m) => ({
-          id: m.id as string,
-          label: m.label as string,
-          subscription: m.subscription as Subscription,
-          percentUsed: typeof m.percentUsed === "number" ? Math.max(0, Math.min(100, Math.round(m.percentUsed))) : null,
-          resetsAt: m.resetsAt ?? null,
-          resetsIn: m.resetsAt ? fmtUntil(m.resetsAt, now) : null,
-          ...(m.note ? { note: m.note } : {}),
-        }));
-    } catch {
-      /* fall through to unknown */
-    }
-  }
-  return [
-    { id: "max-5h", label: "5-hour", subscription: "max", percentUsed: null, resetsAt: null, resetsIn: null, note: "No plan meter source configured (RELAY_PLAN_METERS)." },
-    { id: "max-week", label: "Weekly, all models", subscription: "max", percentUsed: null, resetsAt: null, resetsIn: null, note: "No plan meter source configured (RELAY_PLAN_METERS)." },
-    { id: "codex-week", label: "Weekly", subscription: "codex", percentUsed: null, resetsAt: null, resetsIn: null, note: "Codex publishes no plan meter; see calls and cost equivalent instead." },
-    { id: "grok-week", label: "Weekly", subscription: "grok", percentUsed: null, resetsAt: null, resetsIn: null, note: "SuperGrok publishes no plan meter." },
-  ];
+async function meters(db: Awaited<ReturnType<typeof getDb>>, now: number): Promise<PlanMeter[]> {
+  const workers = await repo.workerViews(db, now);
+  return composeMeters({ override: process.env.RELAY_PLAN_METERS, workers, now });
 }
 
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -168,7 +145,7 @@ export const dbSource: DataSource = {
     const since = new Date(now - WINDOW_MS[window]).toISOString();
     const days = window === "30d" ? 30 : 7;
     const seriesSince = new Date(now - days * D).toISOString();
-    const [rows, perDay] = await Promise.all([repo.usageSummary(db, since), repo.usageDaily(db, seriesSince)]);
+    const [rows, perDay, windows] = await Promise.all([repo.usageSummary(db, since), repo.usageDaily(db, seriesSince), meters(db, now)]);
     const subscriptions = rows
       .filter((r) => asSubscription(r.subscription))
       .map((r) => ({ subscription: r.subscription as Subscription, calls: r.calls, tokens_in: r.tokens_in, tokens_out: r.tokens_out, cache_read: r.cache_read, cost_equiv: r.cost_equiv, avg_ctx: Math.round(r.avg_ctx) }));
@@ -191,7 +168,7 @@ export const dbSource: DataSource = {
     }
     const totalCalls = rows.reduce((s, r) => s + r.calls, 0);
     const totalCtx = rows.reduce((s, r) => s + r.tokens_in + r.cache_read, 0);
-    return { window, since, subscriptions, windows: meters(now), daily, avgCtx, avgCtxWindow: totalCalls ? Math.round(totalCtx / totalCalls) : 0 };
+    return { window, since, subscriptions, windows, daily, avgCtx, avgCtxWindow: totalCalls ? Math.round(totalCtx / totalCalls) : 0 };
   },
 
   /**

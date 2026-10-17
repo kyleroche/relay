@@ -8,6 +8,7 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus, type ClaimLike } from "../src/db/tasks.ts";
+import type { MeterReading } from "../src/meters.ts";
 import { localWorkApi, type WorkApi } from "../src/work/api.ts";
 import type { JobResult } from "../src/work/job.ts";
 import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
@@ -332,6 +333,51 @@ describe("doorbell", () => {
     // a heartbeat without one keeps the last
     expect((await heartbeatServer(fresh, worker.id)).worker.poll_ms).toBe(300_000);
     expect((await repo.workerViews(fresh)).find((w) => w.name === "slow")?.poll_ms).toBe(300_000);
+  });
+
+  it("the heartbeat stores the plan meters the worker read, replaces them when sent, keeps them when not, drops junk", async () => {
+    const { worker } = await repo.registerWorker(fresh, { name: "metered", lanes: ["claude"] });
+    expect(worker.meters).toEqual([]);
+    const captured = new Date().toISOString();
+    const five: MeterReading = { subscription: "max", window: "5h", used_percentage: 42, resets_at: "2026-10-17T15:00:00.000Z", captured_at: captured, source: "claude-statusline" };
+    const week: MeterReading = { subscription: "max", window: "7d", used_percentage: 44, resets_at: null, captured_at: captured, source: "claude-statusline" };
+    const hb = await heartbeatServer(fresh, worker.id, { interval_ms: 15_000, meters: [five, week] });
+    expect(hb.worker.meters).toEqual([five, week]);
+    // no meters in the body: the stored list stays; the view and the local WorkApi expose it
+    expect((await heartbeatServer(fresh, worker.id)).worker.meters).toEqual([five, week]);
+    expect((await repo.workerViews(fresh)).find((w) => w.name === "metered")?.meters).toEqual([five, week]);
+    expect((await localWorkApi(fresh, { dispatch: false }).workers()).find((w) => w.name === "metered")?.meters).toHaveLength(2);
+    // a later heartbeat replaces the list (the 7d window vanished); junk entries never reach the row
+    const hb2 = await heartbeatServer(fresh, worker.id, { meters: [{ ...five, used_percentage: 43 }, { window: "1y", used_percentage: 1, captured_at: captured } as unknown as MeterReading] });
+    expect(hb2.worker.meters).toEqual([{ ...five, used_percentage: 43 }]);
+    expect((await heartbeatServer(fresh, worker.id, { meters: [] })).worker.meters).toEqual([]);
+  });
+
+  it("the worker loop sends the meter files it reads with every heartbeat, including the offline one", async () => {
+    const { worker } = await repo.registerWorker(fresh, { name: "loop-meters", lanes: ["claude"] });
+    const sent: Array<MeterReading[] | undefined> = [];
+    const base = localWorkApi(fresh, { dispatch: false });
+    const api: WorkApi = { ...base, heartbeat: (id, input = {}) => (sent.push(input.meters), base.heartbeat(id, input)) };
+    const reading: MeterReading = { subscription: "max", window: "5h", used_percentage: 9, resets_at: null, captured_at: new Date().toISOString(), source: "claude-statusline" };
+    await runWorker({ api, name: "loop-meters", host: "h", lanes: ["claude"], version: "t", once: true, meters: () => [reading] });
+    expect(sent.length).toBeGreaterThan(0);
+    expect(sent.every((m) => m?.length === 1 && m[0]!.used_percentage === 9)).toBe(true);
+    expect((await repo.getWorker(fresh, worker.id))?.meters).toEqual([reading]);
+    // a reader that throws costs nothing: the heartbeat goes out with no meters
+    const sent2: Array<MeterReading[] | undefined> = [];
+    const api2: WorkApi = { ...base, heartbeat: (id, input = {}) => (sent2.push(input.meters), base.heartbeat(id, input)) };
+    await runWorker({
+      api: api2,
+      name: "loop-meters",
+      host: "h",
+      lanes: ["claude"],
+      version: "t",
+      once: true,
+      meters: () => {
+        throw new Error("disk");
+      },
+    });
+    expect(sent2.every((m) => Array.isArray(m) && m.length === 0)).toBe(true);
   });
 });
 

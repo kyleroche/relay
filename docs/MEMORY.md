@@ -71,17 +71,31 @@ Nothing reads memory inside the model loop. Memory is injected at two edges and 
 
    | CLI | File | Events installed | Injects |
    |---|---|---|---|
-   | Claude Code | `~/.claude/settings.json` (hooks), `~/.claude.json` (user-scope `mcpServers.relay`) | `SessionStart`, `UserPromptSubmit`, `SessionEnd` | brief ≤2.5K tokens; recall ≤1K tokens; capture |
+   | Claude Code | `~/.claude/settings.json` (hooks, `statusLine`), `~/.claude.json` (user-scope `mcpServers.relay`) | `SessionStart`, `UserPromptSubmit`, `SessionEnd`, `statusLine` | brief ≤2.5K tokens; recall ≤1K tokens; capture; plan meters |
    | Codex | `~/.codex/config.toml`, one block between `# relay:begin` and `# relay:end`: `[mcp_servers.relay]`, `[[hooks.SessionStart]]`, `[[hooks.SessionEnd]]` | `SessionStart`, `SessionEnd` (Codex has no `UserPromptSubmit`; the `relay_recall` tool covers it) | brief ≤2.5K tokens; capture |
    | Grok Build | `~/.grok/hooks/relay.json` (relay owns the whole file), `~/.grok/settings.json` (`mcpServers.relay`) | `SessionStart`, `UserPromptSubmit`, `Stop` | brief ≤2.5K tokens; recall ≤1K tokens; capture |
 
-   The hooks are `packages/cli/hooks/{session-start,user-prompt,session-end}.mjs --cli <name>`: dependency-free Node
+   The hooks are `packages/cli/hooks/{session-start,user-prompt,session-end}.mjs --cli <name>` (and `statusline.mjs`, below): dependency-free Node
    scripts that read the hook payload on stdin, look for `.relay/rules.json` above the cwd (so an unlinked repo gets
    nothing and costs nothing), and call the relay CLI through the repo's own `tsx`. `session-start` keeps the brief
    per project and lane for ten minutes under `~/.harness/cache/brief/` and answers from the cache without starting
    the CLI (≈30 ms); a cold start is ≈0.5 s. `user-prompt` skips prompts shorter than 20 characters and slash
    commands. `relay decide` and `relay prefer` drop the project's cache so a new decision reaches the next session.
    The budgets are fixed in the scripts (2.5K / 1K), not preferences.
+
+   **The status line (Claude Code only).** `relay setup` also sets `statusLine` in `~/.claude/settings.json` to
+   `{"type": "command", "command": "<node> <relay>/hooks/statusline.mjs"}`. Claude Code runs that command on every
+   status refresh with a JSON document on stdin; for claude.ai Pro/Max logins it carries `rate_limits.five_hour` and
+   `rate_limits.seven_day` as `{used_percentage, resets_at}`, the only documented source of the plan usage the web
+   app's header shows (relay's own ledger counts only relay's runs). The script writes them to
+   `~/.harness/meters/claude.json` (`{subscription, five_hour, seven_day, captured_at}`, written to a temp file and
+   renamed, mode 0600) and nothing else; `relay work` sends the fresh readings with every heartbeat
+   (`docs/WORKERS.md`, "Plan meters"). A status line already configured is kept: setup records it in
+   `~/.harness/statusline.prev.json`, relay's script runs it with the same stdin and passes its output through, and
+   `relay setup --remove` puts it back. Without one, the script prints `<model> · <cwd> · 5h 42% · 7d 44%`.
+   `relay setup --no-statusline` skips this; `relay doctor` prints a `meters` line with the last reading and its age,
+   or says to run one interactive `claude` session (the file appears after the first API response). Nothing
+   equivalent is documented for Codex or Grok, so only Claude has a vendor meter.
 3. **Session end (hooks).** `session-end` starts `relay capture --transcript <path>` detached, so the session never
    waits on a model call, and logs to `~/.harness/cache/capture.log`. Capture parses the transcript (Claude Code and
    Grok JSONL, Codex rollouts, or plain text), splits it into ≈2.5K-token segments on turn boundaries, gates each
@@ -197,7 +211,7 @@ one line saying so. `relay setup --no-site` returns to local mode.
 ## Working with memory by hand
 
 ```text
-pnpm relay setup [--yes] [--only claude|codex|grok] [--remove]   # hooks + MCP server per CLI; prints the plan, writes with --yes
+pnpm relay setup [--yes] [--only claude|codex|grok] [--remove] [--no-statusline]   # hooks + MCP server per CLI (+ Claude Code's plan-meter status line); prints the plan, writes with --yes
 pnpm relay setup --site <url> [--invite <code> | --token <t>] | --no-site   # site mode: device flow (approve the code at /activate), invite, or a pasted token
 pnpm relay invite create --for <name> --scopes a,b [--expires 24h] [--uses 1]   # one-time code another machine redeems with --invite
 pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400] [--no-events]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels, GitHub App check

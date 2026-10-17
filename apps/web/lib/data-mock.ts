@@ -77,12 +77,16 @@ function meters(events: FeedEvent[], now: number): PlanMeter[] {
   const r5 = nextFiveHourReset(now);
   const rw = nextWeeklyReset(now);
   const pct = (x: number) => Math.min(100, Math.round(x * 100));
+  // Demo numbers (source "demo" so the UI can say so): computed from the mock ledger against made-up caps. A real
+  // deployment composes these from the workers' heartbeat readings (lib/meters.ts).
+  const demo = { source: "demo" as const, capturedAt: new Date(now - 4 * 60_000).toISOString(), worker: "kyrobook" };
+  const none = { source: "none" as const, capturedAt: null, worker: null };
   return [
-    { id: "max-5h", label: "5-hour", subscription: "max", percentUsed: pct(five), resetsAt: r5, resetsIn: fmtUntil(r5, now) },
-    { id: "max-week", label: "Weekly, all models", subscription: "max", percentUsed: pct(weekAll), resetsAt: rw, resetsIn: fmtUntil(rw, now) },
-    { id: "max-week-fable", label: "Weekly, Fable", subscription: "max", percentUsed: pct(weekNamed), resetsAt: rw, resetsIn: fmtUntil(rw, now) },
-    { id: "codex-week", label: "Weekly", subscription: "codex", percentUsed: null, resetsAt: null, resetsIn: null, note: "Codex publishes no plan meter; see calls and cost equivalent instead." },
-    { id: "grok-week", label: "Weekly", subscription: "grok", percentUsed: null, resetsAt: null, resetsIn: null, note: "SuperGrok publishes no plan meter." },
+    { id: "max-5h", label: "5-hour", subscription: "max", percentUsed: pct(five), resetsAt: r5, resetsIn: fmtUntil(r5, now), ...demo },
+    { id: "max-week", label: "Weekly, all models", subscription: "max", percentUsed: pct(weekAll), resetsAt: rw, resetsIn: fmtUntil(rw, now), ...demo },
+    { id: "max-week-fable", label: "Weekly, Fable", subscription: "max", percentUsed: pct(weekNamed), resetsAt: rw, resetsIn: fmtUntil(rw, now), ...demo },
+    { id: "codex-week", label: "Weekly", subscription: "codex", percentUsed: null, resetsAt: null, resetsIn: null, ...none, note: "Codex publishes no plan meter; see calls and cost equivalent instead." },
+    { id: "grok-week", label: "Weekly", subscription: "grok", percentUsed: null, resetsAt: null, resetsIn: null, ...none, note: "SuperGrok publishes no plan meter." },
   ];
 }
 

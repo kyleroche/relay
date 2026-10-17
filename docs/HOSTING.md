@@ -55,7 +55,7 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
 | `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
 | `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
-| `RELAY_PLAN_METERS` | optional JSON | plan meters for the header until a vendor route exists: `[{"id","label","subscription","percentUsed","resetsAt"}]` |
+| `RELAY_PLAN_METERS` | optional JSON | a manual override for the header's plan meters, per meter id: `[{"id","label","subscription","percentUsed","resetsAt"}]`. By default the meters come from the workers: Claude Code's own 5-hour and weekly rate limits, saved by relay's status line on each machine and sent with the worker heartbeat (`docs/WORKERS.md`, "Plan meters"). Set `max-week-fable` here to show a third Claude bar; nothing documented reports a per-model meter |
 
 Tokens for API clients come from the site's authorization server (`docs/INTEGRATIONS.md`: OAuth with consent for MCP
 clients, the device flow for CLIs and bots approved on `/activate`, invite codes from `relay invite create`) or from

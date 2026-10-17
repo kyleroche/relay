@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { AvgContextOverTime, CostByDay } from "@/components/usage/charts";
 import { getUsage } from "@/lib/data";
 import { fmtCost, fmtInt, fmtTokens } from "@/lib/format";
+import { meterSourceLine } from "@/lib/meters";
 import { SERIES } from "@/lib/series";
 import type { UsageWindow } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -69,7 +70,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
 
       <section aria-labelledby="meters" className="mb-10">
         <h2 id="meters" className="text-lg font-semibold tracking-tight">Plan meters</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-3 lg:grid-cols-5">
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {usage.windows.map((m) => (
             <div key={m.id} className="rounded-md border bg-card p-3" title="Amber above 70%, red above 90%. Where a vendor publishes no meter, the bar says so instead of guessing.">
               <p className="mb-2 font-mono text-[11px] text-muted-foreground">{m.subscription}</p>
@@ -77,6 +78,9 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
             </div>
           ))}
         </div>
+        <p className="mt-3 max-w-3xl text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">Where these numbers come from.</span> {meterSourceLine(usage.windows)}
+        </p>
       </section>
 
       <section aria-labelledby="by-subscription" className="mb-10">

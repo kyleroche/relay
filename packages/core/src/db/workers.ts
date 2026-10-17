@@ -7,6 +7,7 @@
  * `doorbell` is what an idle worker reads between claims: the queue version (db/queue.ts) and a queued estimate.
  */
 import { type Db, iso, num } from "./client.ts";
+import { sanitizeMeters, type MeterReading } from "../meters.ts";
 import { listPreferences, type PreferenceRow } from "./memory.ts";
 import { bumpQueueVersion, getQueueVersion } from "./queue.ts";
 import { taskClaims, taskEvents, deriveTaskStatus, toTask, TASK_COLS, type TaskRow } from "./tasks.ts";
@@ -34,6 +35,8 @@ export interface WorkerRow {
   status: "online" | "offline";
   /** The poll interval (ms) the worker reported with its last heartbeat; null until one did. */
   poll_ms: number | null;
+  /** Plan meters the worker sent with its last heartbeat (`meters.ts`); empty until one did. */
+  meters: MeterReading[];
   created_at: string;
 }
 
@@ -64,7 +67,7 @@ export interface WorkerView extends WorkerRow {
   current: LiveClaim | null;
 }
 
-const W = "id, name, host, lanes, labels, version, last_seen, status, poll_ms, created_at";
+const W = "id, name, host, lanes, labels, version, last_seen, status, poll_ms, meters, created_at";
 const arr = (v: unknown): string[] => (Array.isArray(v) ? (v as unknown[]).map(String) : typeof v === "string" && v.startsWith("{") ? v.slice(1, -1).split(",").filter(Boolean) : []);
 const toWorker = (r: Record<string, unknown>): WorkerRow => ({
   id: r.id as string,
@@ -76,6 +79,7 @@ const toWorker = (r: Record<string, unknown>): WorkerRow => ({
   last_seen: iso(r.last_seen) ?? "",
   status: r.status === "offline" ? "offline" : "online",
   poll_ms: r.poll_ms === null || r.poll_ms === undefined ? null : num(r.poll_ms),
+  meters: sanitizeMeters(typeof r.meters === "string" ? JSON.parse(r.meters) : r.meters) ?? [],
   created_at: iso(r.created_at) ?? "",
 });
 
@@ -131,17 +135,19 @@ export async function listWorkers(db: Db): Promise<WorkerRow[]> {
 }
 
 /**
- * A heartbeat: touch last_seen, record the status the worker reports (and the poll interval it is on, when it says),
- * and renew every live lease it holds. Returns the worker and the leases as they stand after renewal; undefined for
- * an unknown id.
+ * A heartbeat: touch last_seen, record the status the worker reports (the poll interval it is on and the plan meters
+ * it read, when it says; a heartbeat that carries `meters` replaces the stored list, one that omits it keeps it), and
+ * renew every live lease it holds. Returns the worker and the leases as they stand after renewal; undefined for an
+ * unknown id.
  */
-export async function heartbeatWorker(db: Db, id: string, opts: { status?: "online" | "offline"; pollMs?: number; leaseMs?: number; now?: number } = {}): Promise<{ worker: WorkerRow; leases: ClaimRow[] } | undefined> {
+export async function heartbeatWorker(db: Db, id: string, opts: { status?: "online" | "offline"; pollMs?: number; meters?: MeterReading[]; leaseMs?: number; now?: number } = {}): Promise<{ worker: WorkerRow; leases: ClaimRow[] } | undefined> {
   const now = opts.now ?? Date.now();
-  const r = await db.query(`UPDATE workers SET last_seen = $2::timestamptz, status = $3, poll_ms = coalesce($4::integer, poll_ms) WHERE id = $1 RETURNING ${W}`, [
+  const r = await db.query(`UPDATE workers SET last_seen = $2::timestamptz, status = $3, poll_ms = coalesce($4::integer, poll_ms), meters = coalesce($5::jsonb, meters) WHERE id = $1 RETURNING ${W}`, [
     id,
     new Date(now).toISOString(),
     opts.status ?? "online",
     opts.pollMs && Number.isFinite(opts.pollMs) ? Math.round(opts.pollMs) : null,
+    opts.meters ? JSON.stringify(sanitizeMeters(opts.meters) ?? []) : null,
   ]);
   if (!r[0]) return undefined;
   const leases = await db.query(`UPDATE claims SET lease_until = $2::timestamptz WHERE worker_id = $1 AND released_at IS NULL RETURNING ${C}`, [id, new Date(now + (opts.leaseMs ?? LEASE_MS)).toISOString()]);

@@ -1,6 +1,7 @@
 export * from "./config.ts";
 export * from "./util.ts";
 export * from "./runtime.ts";
+export * from "./meters.ts";
 export * from "./harness.ts";
 export { openDb, DbError, DEFAULT_PGLITE_FILE, type Db, type OpenDbOptions } from "./db/client.ts";
 export { migrate, currentVersion, loadMigrations, MIGRATIONS_DIR, type Migration } from "./db/migrate.ts";

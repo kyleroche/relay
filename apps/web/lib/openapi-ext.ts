@@ -402,10 +402,24 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["work"],
         summary: "Heartbeat: touch last_seen and renew this worker's leases",
         description:
-          "Sent by `relay work` every 60 seconds while it holds a lease and at most every 5 minutes while idle. Every live claim the worker holds is extended to 30 minutes from now. `interval_ms` records the poll interval the worker is on (shown on the workers page); `status: offline` records a clean shutdown (`worker.offline`).",
+          "Sent by `relay work` every 60 seconds while it holds a lease and at most every 5 minutes while idle. Every live claim the worker holds is extended to 30 minutes from now. `interval_ms` records the poll interval the worker is on (shown on the workers page); `meters` carries the plan meters relay's Claude Code status line saved on that machine (the header's 5-hour and weekly bars; present replaces the stored list, absent keeps it); `status: offline` records a clean shutdown (`worker.offline`).",
         security: [{ bearer: ["work:claim"] }],
         parameters: [idParam],
-        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { status: { type: "string", enum: ["online", "offline"] }, interval_ms: { type: "integer", minimum: 1, description: "The worker's current poll interval in milliseconds." } } } } } },
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  status: { type: "string", enum: ["online", "offline"] },
+                  interval_ms: { type: "integer", minimum: 1, description: "The worker's current poll interval in milliseconds." },
+                  meters: { type: "array", maxItems: 20, items: { $ref: "#/components/schemas/MeterReading" }, description: "Plan meters read on the worker's machine (Claude Code's rate limits via relay's status line)." },
+                },
+              },
+            },
+          },
+        },
         responses: { "200": response("The worker and its leases.", "#/components/schemas/Heartbeat"), "404": problemResponse("No such worker."), "501": notImplemented, ...commonErrors },
       },
     },
@@ -780,7 +794,21 @@ export const integrationSchemas: Record<string, unknown> = {
       last_seen: { type: "string", format: "date-time" },
       status: { type: "string", enum: ["online", "offline"], description: "What the worker last reported." },
       poll_ms: nullable("integer", { description: "The poll interval (ms) the worker reported with its last heartbeat; 15000 right after activity, up to 300000 when idle." }),
+      meters: { type: "array", items: { $ref: "#/components/schemas/MeterReading" }, description: "Plan meters the worker sent with its last heartbeat; empty until one did." },
       created_at: { type: "string", format: "date-time" },
+    },
+  },
+  MeterReading: {
+    type: "object",
+    required: ["subscription", "window", "used_percentage", "captured_at", "source"],
+    description: "One plan-meter window as Claude Code reported it to relay's status line on a worker: the subscription's own used percentage, not relay's ledger.",
+    properties: {
+      subscription: { type: "string", description: "`max` for a claude.ai Pro/Max login." },
+      window: { type: "string", enum: ["5h", "7d"] },
+      used_percentage: { type: "integer", minimum: 0, maximum: 100 },
+      resets_at: nullable("string", { format: "date-time" }),
+      captured_at: { type: "string", format: "date-time", description: "When the status line saw the number." },
+      source: { type: "string", enum: ["claude-statusline"] },
     },
   },
   Doorbell: {
