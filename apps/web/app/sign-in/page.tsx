@@ -44,12 +44,20 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
   const allowlistEmpty = parseAllowedUsers(process.env.RELAY_ALLOWED_USERS).length === 0;
   const setup = missing.length > 0 ? `Not configured yet: set ${missing.join(", ")}.` : allowlistEmpty ? "RELAY_ALLOWED_USERS is empty: add the GitHub logins that may sign in." : null;
 
+  const waiting = next.startsWith("/activate") ? "device" : next.startsWith("/oauth/authorize") ? "client" : null;
+
   return (
     <section className="mx-auto flex max-w-sm flex-col gap-6 py-20 sm:py-28">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Sign in</h1>
         <p className="mt-2 text-sm text-muted-foreground">The feed, projects, usage, workers and assets are for the people who run this relay.</p>
       </div>
+
+      {waiting && (
+        <p role="status" className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm">
+          {waiting === "device" ? "A CLI or bot is waiting for you to approve its access code. Sign in and you will see what it asks for." : "An application is asking for access to relay. Sign in to see what it asks for and decide."}
+        </p>
+      )}
 
       {error && (
         <p role="alert" className="rounded-md border border-bad/40 bg-bad/5 p-3 text-sm">
@@ -80,8 +88,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
           </p>
         )}
         <p>
-          Agents, runners and the CLI do not sign in here. They call <code className="rounded bg-muted px-1 font-mono">/api/v1</code> and <code className="rounded bg-muted px-1 font-mono">/mcp</code> with a bearer token from{" "}
-          <code className="rounded bg-muted px-1 font-mono">relay token create</code>. <Link href="/docs/api" className="underline underline-offset-4">API docs</Link>.
+          Agents, workers and the CLI do not sign in here. They request access themselves (<code className="rounded bg-muted px-1 font-mono">POST /oauth/device</code>, or <code className="rounded bg-muted px-1 font-mono">relay setup --site</code>) and a signed-in person approves the code once. <Link href="/docs/api#access" className="underline underline-offset-4">How access works</Link>.
         </p>
       </div>
     </section>
