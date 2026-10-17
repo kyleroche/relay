@@ -309,7 +309,8 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           signal: ac.signal,
           job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox }) },
         });
-        out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed` : ""}`);
+        const held = r.results.filter((x) => x.outcome === "held").length;
+        out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed${held ? `, ${held} held at the gate` : ""}` : ""}`);
         if (r.results.some((x) => x.outcome === "failed")) process.exitCode = 1;
       } finally {
         process.off("SIGINT", stop);

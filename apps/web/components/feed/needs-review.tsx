@@ -9,8 +9,8 @@ import { taskPagePath } from "@/lib/tasks";
 import type { Asset, TaskView } from "@/lib/types";
 
 /**
- * What is waiting for the reader, at the top of the feed: tasks in review (a pull request is open, perhaps a
- * preview) above pending assets. Each task links to its page, where the decision is made.
+ * What is waiting for the reader, at the top of the feed: tasks held at the injection gate and tasks in review (a
+ * pull request is open, perhaps a preview) above pending assets. Each task links to its page, where the decision is made.
  */
 export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets: Asset[]; now: number }) {
   if (!tasks.length && !assets.length) return null;
@@ -36,6 +36,7 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
                   <span className="truncate text-sm">{t.run_summary ?? t.summary ?? t.id}</span>
                   <span className="flex items-center gap-2 text-xs text-muted-foreground">
                     <span className="truncate font-mono">{t.id}</span>
+                    {t.state === "held" && <span className="text-warn">held at the gate</span>}
                     {t.pr && (
                       <span className="inline-flex items-center gap-0.5 font-mono">
                         PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />

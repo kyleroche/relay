@@ -51,7 +51,7 @@ Scopes are named and granted per token:
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
 | \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
-| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode); /api/v1/access and /api/v1/invites; relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke. A token (not a signed-in person) may approve or invite only to scopes it holds itself, and never tokens:write (403) |
+| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode); /api/v1/access and /api/v1/invites; relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke. A token (not a signed-in person) may approve or invite only to scopes it holds itself, and never tokens:write (403). Also POST /api/v1/tasks/{id}/release and relay_task_release: lift the injection gate's hold on a task, never one the bot opened itself |
 
 The operator can also mint tokens by hand, under "Mint a token by hand" on the [Access page](/access) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
 
@@ -192,10 +192,11 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 |---|---|---|
 | \`POST /api/v1/tasks\` (\`createTask\`) | \`tasks:write\` | \`{"project","title","body","lane","priority","idempotency_key"}\`: opens the GitHub issue with \`agent:<lane>\`, records the task, writes \`issue.opened\` and \`task.created\`; 201, or 200 for a repeated key |
 | \`GET /api/v1/tasks\` (\`listTasks\`) | \`tasks:read\` | tasks newest first with derived state; \`project\`, \`state\`, \`limit\` |
-| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, claimed, running, review, done, failed), \`runner\`, \`pr_url\`, \`preview_url\` and \`preview_state\`, \`run_summary\`, \`usage\`, \`review\`, \`merged_at\`, last \`summary\` |
+| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, held, claimed, running, review, done, failed), \`runner\`, \`pr_url\`, \`preview_url\` and \`preview_state\`, \`run_summary\`, \`usage\`, \`review\`, \`merged_at\`, last \`summary\` |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/approve\` (\`approveTask\`) | \`tasks:write\` | squash-merge the PR of a task in review, delete its branch, write \`task.approved\` (the task is done); a bot may not approve a PR its own lane produced, and GitHub's refusal comes back as 502 with \`task.merge_failed\` |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/request-changes\` (\`requestTaskChanges\`) | \`tasks:write\` | \`{"note"}\`: comment on the PR, write \`task.changes_requested\`, queue the task again; the next run gets the note in its brief |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/requeue\` (\`requeueTask\`) | \`tasks:write\` | \`{"lane"?,"reason"?}\`: put a task back in the queue from any state but done, optionally on another lane (the \`agent:*\` label on the issue moves, best effort); a live worker claim is released and \`task.requeued\` written; for a task stuck running or on the wrong lane |
+| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/release\` (\`releaseTask\`) | \`tokens:write\` | \`{"note"?}\`: release a task the injection gate \`held\` (its issue text read as instructions aimed at the agent; the \`task.held\` row has the score and reasons); writes \`task.released\`, the task is queued again and the next worker grades it again. Never for a task the bot opened itself |
 | \`POST /api/v1/events\` (\`logEvent\`) | \`events:write\` | \`{"kind":"external.<x>","project","summary","url","cost_equiv","source"}\`; the actor is the token's |
 | \`GET /api/v1/usage\` (\`getUsage\`) | \`feed:read\` | per-subscription totals since \`since\` |
 | \`GET /api/v1/projects/{slug}/decisions\` (\`listProjectDecisions\`) | \`memory:read\` | decision history, \`current=1\` for open ones |
@@ -233,9 +234,10 @@ curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/requeue" -H "Authorizat
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
 | \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
-| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, claimed, running, review, done, failed) with runner, PR, preview URL, run summary, usage and the review decision |
+| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, held, claimed, running, review, done, failed) with runner, PR, preview URL, run summary, usage and the review decision; \`held\` is what the injection gate stopped |
 | \`relay_task_approve\`, \`relay_task_request_changes\` | \`tasks:write\` | approve a task in review (relay squash-merges the PR and deletes the branch) or send it back with a note (PR comment, task queued again, note in the next brief). A bot never approves a PR its own lane produced |
 | \`relay_task_requeue\` | \`tasks:write\` | put a task back in the queue from any state but done, optionally on another lane (the issue's \`agent:*\` label moves with it, a live claim is released, \`task.requeued\` is written); for a task stuck running or on the wrong lane |
+| \`relay_task_release\` | \`tokens:write\` | release a task the injection gate held (\`task.released\`; queued again, graded again by the next worker); for text a person has read. A bot never releases a task it opened itself |
 | \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
 | \`relay_whoami\` | public | this connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
 | \`relay_webhook_subscribe\`, \`relay_webhook_unsubscribe\` | \`webhooks:write\` | register an outbound webhook (the signing secret is returned once) and remove one |

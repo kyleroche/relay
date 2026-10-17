@@ -28,6 +28,8 @@ export const EVENT_KINDS = {
   "task.changes_requested": { group: "pr", source: "web", label: "Changes requested", description: "A reviewer sent the PR back with a note (also posted on the PR); the task is queued again and the next run's brief carries the note." },
   "task.merge_failed": { group: "pr", source: "web", label: "Merge refused", description: "GitHub refused the merge an approval asked for (conflicts, checks, permissions); payload.error has its message. The task stays in review." },
   "task.requeued": { group: "task", source: "web", label: "Requeued", description: "An operator put the task back in the queue, perhaps on another lane (payload.lane, previous_lane, previous_state, reason); a live claim was released and the issue's agent:* label moved. The task is queued again." },
+  "task.held": { group: "task", source: "runner", label: "Held at the gate", description: "The injection gate flagged the task's text before a lane ran it: payload.score, reasons and grader (precheck or model). The worker gave its claim back; the task is held until a person or a tokens:write bot releases it." },
+  "task.released": { group: "task", source: "web", label: "Released", description: "A person or a tokens:write bot released a held task (payload.note, held); the task is queued again and the next worker grades it again." },
   // GitHub webhook: pull requests, reviews, CI
   "pr.opened": { group: "pr", source: "github", label: "PR opened", description: "The runner pushed a branch and opened the result." },
   "pr.review": { group: "pr", source: "github", label: "Review", description: "A review was submitted (approved, changes requested or commented)." },

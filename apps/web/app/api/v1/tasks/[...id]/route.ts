@@ -1,4 +1,4 @@
-import { approveTask, parseTaskId, repo, requestChanges, requeueTask, TaskRequeueError, TaskReviewError } from "@relay/core";
+import { approveTask, parseTaskId, releaseTask, repo, requestChanges, requeueTask, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
 import { api, callerGrant, json, problem } from "@/lib/api";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -9,9 +9,9 @@ export const dynamic = "force-dynamic";
 
 type Ctx = { params: Promise<{ id: string[] }> };
 
-const ACTIONS = new Set(["approve", "request-changes", "requeue"]);
+const ACTIONS = new Set(["approve", "request-changes", "requeue", "release"]);
 
-/** `owner/repo%23n[/approve|/request-changes|/requeue]`: the id and the action the trailing segment names. */
+/** `owner/repo%23n[/approve|/request-changes|/requeue|/release]`: the id and the action the trailing segment names. */
 function parts(raw: string[]): { id: string; action: string | null } {
   const segs = raw.map((p) => decodeURIComponent(p));
   if (segs.length === 3 && ACTIONS.has(segs[2] as string)) return { id: `${segs[0]}/${segs[1]}`, action: segs[2] as string };
@@ -41,14 +41,16 @@ const STATUS_TITLE: Record<number, string> = { 400: "Bad Request", 403: "Forbidd
  * branch and writes `task.approved`; request-changes comments on the PR with `{ "note" }` and writes
  * `task.changes_requested` (the task is queued again). Requeue (packages/core/src/tasks/requeue.ts) takes
  * `{ "lane"?, "reason"? }` from any state but `done`: moves the lane label, releases a live claim, writes
- * `task.requeued`. A signed-in person is unrestricted; a token needs `tasks:write` and may not approve a PR its own
- * lane produced. All answer with the updated task.
+ * `task.requeued`. Release (`…/release`, packages/core/src/tasks/gate.ts) takes `{ "note"? }` and lifts the injection
+ * gate's hold on a `held` task: writes `task.released`, the task is queued again. A signed-in person is unrestricted; a
+ * token needs `tasks:write` (release: `tokens:write`, and never the bot that opened the task) and may not approve a PR
+ * its own lane produced. All answer with the updated task.
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
     const { id, action } = parts((await ctx.params).id);
     const instance = req.nextUrl.pathname;
-    if (!action) return problem(405, "Method Not Allowed", "POST …/approve, …/request-changes or …/requeue; a task itself is read with GET.", instance, {}, { allow: "GET" });
+    if (!action) return problem(405, "Method Not Allowed", "POST …/approve, …/request-changes, …/requeue or …/release; a task itself is read with GET.", instance, {}, { allow: "GET" });
     if (!parseTaskId(id)) return problem(400, "Bad Request", "task id must be owner/repo#n.", instance, { parameter: "id" });
     const refused = needsDb(instance);
     if (refused) return refused;
@@ -66,6 +68,12 @@ export const POST = api<Ctx>(
         dispatchAfter(r.events);
         return json(r.task);
       }
+      if (action === "release") {
+        const body = (await readJson(req)) ?? {};
+        const r = await releaseTask(db, id, actor, { note: str(body.note) ?? null, scopes });
+        dispatchAfter(r.events);
+        return json(r.task);
+      }
       const body = await readJson(req);
       const note = str(body?.note);
       if (!note) return problem(400, "Bad Request", "Body must be a JSON object with a non-empty note.", instance, { parameter: "note" });
@@ -73,7 +81,7 @@ export const POST = api<Ctx>(
       dispatchAfter(r.events);
       return json(r.task);
     } catch (e) {
-      if (e instanceof TaskRequeueError) return problem(e.status, STATUS_TITLE[e.status] ?? "Error", e.message, instance);
+      if (e instanceof TaskRequeueError || e instanceof TaskGateError) return problem(e.status, STATUS_TITLE[e.status] ?? "Error", e.message, instance);
       if (e instanceof TaskReviewError) {
         // the merge refusal is in the feed too (task.merge_failed), so the webhooks hear about it
         const db2 = await getDb();

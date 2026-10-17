@@ -59,6 +59,8 @@ export interface FlowTask {
   preview_url: string | null;
   /** `runner:<name>` of the worker on it, when one is. */
   runner: string | null;
+  /** The injection gate holds it at Queue (state `held`); the pill shows a flag and the hover says so. */
+  held?: true;
   /** The run's error line, for the failed siding's hover. */
   error?: string;
   /** Folded cost equivalent, when any step.usage landed. */

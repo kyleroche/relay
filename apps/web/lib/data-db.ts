@@ -309,6 +309,7 @@ export const dbSource: DataSource = {
       preview_url: r.preview_url,
       runner: r.runner,
       ...(r.cost != null ? { cost: r.cost } : {}),
+      ...(r.state === "held" ? { held: true as const } : {}),
       ...(r.state === "failed" && r.last_error ? { error: r.last_error } : {}),
     }));
     // one stop per project with a task that is not done; the repo from the project row, else from the task itself

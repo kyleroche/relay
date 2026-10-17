@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
-import { ArrowUpRight, Globe, TriangleAlert } from "lucide-react";
+import { ArrowUpRight, Globe, ShieldAlert, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CLOUD_LANES, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
+import { CLOUD_LANES, heldInfo, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
 type EventRow = core.EventRow;
 import { ActorChip } from "@/components/feed/actor-chip";
 import { EventRow as FeedRow } from "@/components/feed/event-row";
+import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
@@ -47,12 +48,13 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: l ? `${l.task.id}: ${l.title}` : "Task not found", robots: { index: false } };
 }
 
-const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
+const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
 /** States a task can be requeued from on this page: anything in flight or stuck. A queued task is already queued; a done one is finished. */
 const REQUEUE_STATES = new Set(["running", "failed", "review", "claimed"]);
 
 /**
- * One task, top to bottom: the issue (title, id, lane, state, worker), the preview as the primary element when there
+ * One task, top to bottom: the issue (title, id, lane, state, worker), the Held card while the injection gate holds
+ * it (score, reasons, Release and Requeue), the preview as the primary element when there
  * is one, the decision buttons while the task is in review (and Requeue whenever the task is in flight or stuck), the
  * PR, the run's summary and cost, the review history and
  * every feed row about the task. Everything of record is on GitHub; this page reads the feed and acts through the
@@ -68,6 +70,8 @@ export default async function TaskPage({ params }: Props) {
   const history = events.filter((e) => REVIEW_KINDS.has(e.kind)).slice(-12).reverse();
   const inReview = t.state === "review";
   const canRequeue = REQUEUE_STATES.has(t.state);
+  const isHeld = t.state === "held";
+  const held = isHeld ? heldInfo(events) : undefined;
   const mergeFailed = inReview ? [...events].reverse().find((e) => e.kind === "task.merge_failed") : undefined;
   const lastDecisionAt = t.review.at ?? "";
   const showMergeFailure = mergeFailed && mergeFailed.ts >= lastDecisionAt;
@@ -103,6 +107,46 @@ export default async function TaskPage({ params }: Props) {
       </section>
 
       <div className="flex flex-col gap-6">
+        {isHeld && (
+          <section aria-labelledby="held-h" className="rounded-lg border border-warn/40 bg-warn/5 p-4">
+            <SectionHeading id="held-h">
+              <span className="inline-flex items-center gap-1.5">
+                <ShieldAlert className="size-4 text-warn" aria-hidden="true" /> Held at the gate
+              </span>
+            </SectionHeading>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              The injection gate read the issue text{held?.grader === "precheck" ? " (a marker no honest feature request contains)" : held?.grader === "model" ? ` (${held.model ?? "the grader"})` : ""} and found instructions aimed at the agent rather than at the work. No worker runs it until someone reads the issue and releases it; the next worker grades it again. A tripwire, not a boundary: the sandbox and the allowlist still apply after a release.
+            </p>
+            {held && (
+              <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
+                <dt className="text-xs text-muted-foreground">Score</dt>
+                <dd className="font-mono tabular-nums">{held.score.toFixed(2)}</dd>
+                <dt className="text-xs text-muted-foreground">Held by</dt>
+                <dd className="text-xs">
+                  <ActorChip actor={held.by} className="align-middle" />{" "}
+                  <time dateTime={held.at} title={held.at}>
+                    {fmtAgo(held.at, now)}
+                  </time>
+                </dd>
+                <dt className="text-xs text-muted-foreground">Reasons</dt>
+                <dd>
+                  <ul className="flex flex-col gap-0.5">
+                    {held.reasons.map((r, i) => (
+                      <li key={i} className="whitespace-pre-wrap rounded bg-muted px-2 py-1 font-mono text-xs">
+                        {r}
+                      </li>
+                    ))}
+                  </ul>
+                </dd>
+              </dl>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <ReleaseAction taskId={t.id} canWrite={dataMode() === "db"} />
+              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+            </div>
+          </section>
+        )}
+
         {t.preview_url ? (
           <section aria-labelledby="preview-h" className="rounded-lg border bg-card p-4">
             <SectionHeading id="preview-h">
@@ -246,6 +290,8 @@ export default async function TaskPage({ params }: Props) {
                   <p className="mt-1">{e.kind === "task.merge_failed" ? <span className="text-muted-foreground">merge refused</span> : e.summary}</p>
                   {e.kind === "task.changes_requested" && typeof e.payload.note === "string" && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
                   {e.kind === "task.requeued" && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
+                  {e.kind === "task.held" && Array.isArray(e.payload.reasons) && e.payload.reasons.length > 0 && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{(e.payload.reasons as unknown[]).map(String).join("\n")}</p>}
+                  {e.kind === "task.released" && typeof e.payload.note === "string" && e.payload.note && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
                 </li>
               ))}
             </ul>

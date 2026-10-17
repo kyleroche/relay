@@ -6,6 +6,7 @@ import { SITE_URL } from "./site.ts";
 
 export const STATE_HINT: Record<TaskState, string> = {
   queued: "Waiting for a worker that serves its lane (or sent back with a note or requeued, waiting for the next run).",
+  held: "The injection gate flagged the issue text as instructions aimed at the agent; no worker runs it until someone reads it and releases it.",
   claimed: "A worker holds the lease and is cloning the repository.",
   running: "The lane is working in a fresh clone on the worker.",
   review: "A pull request is open. Look at the preview, then approve or request changes.",
@@ -15,6 +16,7 @@ export const STATE_HINT: Record<TaskState, string> = {
 
 export const STATE_TONE: Record<TaskState, StatusTone> = {
   queued: "muted",
+  held: "warn",
   claimed: "muted",
   running: "primary",
   review: "warn",
