@@ -116,7 +116,7 @@ source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`
    Purpose, Stack and layout, Commands, Conventions and Gotchas; a rejected answer is re-requested once, a second
    rejection fails the stage (the old summary is kept) and link exits non-zero;
 5. render `relay.md` from the real summary (rewritten whenever its content changed);
-6. caller workflows and GitHub labels (`--no-workflows`, `--no-labels`);
+6. GitHub labels (`--no-labels`); the Actions caller workflows only with `--workflows` (`docs/RUNNERS.md`);
 7. in site mode, the upload of the project, its digests and the summary, then the `events` stage: is the site's
    GitHub App installed on this repo (`GET /api/v1/projects/{slug}/github`)? `ok` with the installation id, or `warn`
    with the install link (and a closing `left:` line naming it as the one thing left to do); without a site the line

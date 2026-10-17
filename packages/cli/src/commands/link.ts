@@ -42,15 +42,15 @@ interface LinkOptions {
 export function registerLink(program: Command): void {
   program
     .command("link")
-    .description("Link this repo: register it, digest changed files, write the project summary and relay.md, install the owned sections, caller workflows and lane labels")
+    .description("Link this repo: register it, digest changed files, write the project summary and relay.md, install the owned sections and lane labels, check GitHub events reach the site")
     .option("--repo <owner/name>", "override the origin remote")
     .option("--project <slug>", "project slug (default: the repo name)")
-    .option("--refresh", "re-digest stale files and rewrite the summary, relay.md and the caller workflows")
+    .option("--refresh", "re-digest stale files and rewrite the summary, relay.md (and the caller workflows with --workflows)")
     .option("--force", "overwrite a locally edited owned section")
     .option("--no-digest", "skip the model steps (file digests and the project summary)")
     .option("--max-files <n>", "max files to digest in this run", "400")
     .option("--no-labels", "skip gh label creation")
-    .option("--no-workflows", "skip the caller workflows")
+    .option("--workflows", "also install the GitHub Actions caller workflows (docs/RUNNERS.md): only for repos run by self-hosted runners; workers need none")
     .option("--no-events", "skip the check that GitHub events for this repo reach the site (the GitHub App installation)")
     .option("--cwd <path>")
     .action(async (o: LinkOptions) => {
@@ -116,7 +116,8 @@ export function registerLink(program: Command): void {
           log(`relay.md: ${prev === undefined ? "written" : "updated"} (${rules.tokens} tokens${noSummary})`);
         }
 
-        // 6. caller workflows
+        // 6. caller workflows: opt-in. The worker path needs none; a committed caller would queue an Actions run on every
+        // label that waits for a self-hosted runner that may not exist.
         if (o.workflows) {
           const relayRepo = h.cfg.relayRepo ?? `${repoName.split("/")[0]}/relay`;
           const relayRef = h.cfg.relayRef ?? "main";

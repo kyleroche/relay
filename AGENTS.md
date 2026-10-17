@@ -20,7 +20,7 @@ pnpm -r typecheck
 pnpm -r test          # vitest; DB tests run on PGlite, no server needed
 pnpm relay --help
 pnpm relay setup      # plan hooks + MCP server for the CLIs on this machine; --yes writes
-pnpm relay link       # in a repo (bin/relay link from elsewhere): digests, summary, relay.md, owned sections, workflows, labels, GitHub App check (site mode); idempotent
+pnpm relay link       # in a repo (bin/relay link from elsewhere): digests, summary, relay.md, owned sections, labels, GitHub App check (site mode); --workflows adds the Actions callers; idempotent
 pnpm relay brief 42   # the memory envelope a lane would get for issue 42
 pnpm relay work --once                            # claim and run queued tasks for the lanes this machine is logged in to, then exit
 pnpm relay work --install                         # plan the LaunchAgent / systemd user unit that keeps `relay work` running; --yes writes and starts it
