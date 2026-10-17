@@ -249,7 +249,7 @@ does anything:
    is `$RELAY_HOME/container`; about a minute to build (plus the base image's download the first time), 300 MB to
    fetch and 800 MB unpacked, most of it Claude Code.
 2. **Creates the volume and the container**: `container volume create relay-work-home`, then `container create
-   --name relay-work --volume relay-work-home:/home/relay --masked-path NONE --read-only-path NONE --memory 4G
+   --name relay-work --volume relay-work-home:/home/relay --publish 127.0.0.1:3000:3000 --masked-path NONE --read-only-path NONE --memory 4G
    --cpus 4 --env RELAY_HOME=/home/relay/.harness --env RELAY_ISOLATION=container --env
    RELAY_WORKER_NAME=<host>-container --env RELAY_WORKER_HOST=<host> relay-worker:<version> relay work [--lanes …]`.
    No bind mount: nothing from the Mac is visible inside. The volume (an ext4 image under `~/Library/Application
@@ -363,3 +363,6 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
   warns `bubblewrap cannot start` when the container was created without `--masked-path NONE --read-only-path NONE`
   (an older relay); recreate it with `--install --yes`.
 - Codex logins go stale when unused; a weekly `relay probe codex:<model>` keeps the refresh token warm.
+
+
+fx's `login codex` and `login grok` open the Mac's browser and expect the redirect at `http://localhost:3000/callback`; the container publishes that port to the Mac's loopback so the login completes inside. Claude Code's login pastes a code and gh uses a device code, so they need no port.
