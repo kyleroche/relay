@@ -46,18 +46,22 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | a second, public Blob store | `relay asset publish` and `POST /assets/{id}/publish` |
 | `RELAY_ASSET_SIGNING_KEY` | `openssl rand -hex 32` | signs local view/upload URLs and HTML bundle URLs |
 | `CRON_SECRET` | `openssl rand -hex 32` | Vercel sends it as a bearer to `/api/cron/assets-expire` (the daily retention sweep in `apps/web/vercel.json`) |
-| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | asset comments on issues and PRs; reopen on rejection; reading `RELAY_ALLOWED_SENDERS` for usage comments |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | opening tasks, asset comments, reopening rejected issues, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
+| `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
+| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | the fallback when no app is configured: asset comments, reopening rejected issues, opening tasks |
 | `RELAY_ALLOWED_SENDERS` | optional, comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone) |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
-| `RELAY_SESSION_SECRET` | `openssl rand -hex 32` | signs the `relay_session` cookie (HS256); rotating it signs everyone out |
+| `RELAY_SESSION_SECRET` | `openssl rand -hex 32` | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
 | `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
 | `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
 | `RELAY_PLAN_METERS` | optional JSON | plan meters for the header until a vendor route exists: `[{"id","label","subscription","percentUsed","resetsAt"}]` |
 
-Tokens for API clients come from the CLI: `pnpm relay token create --name ci --scopes feed:read,assets:write` stores a
-hash in the `tokens` table and prints the token once. The app checks the `tokens` table when it runs on a database,
-then `RELAY_API_TOKENS`, then `RELAY_MEMORY_TOKEN`.
+Tokens for API clients come from the site's authorization server (`docs/INTEGRATIONS.md`: OAuth with consent for MCP
+clients, the device flow for CLIs and bots approved on `/activate`, invite codes from `relay invite create`) or from
+the CLI by hand: `pnpm relay token create --name ci --scopes feed:read,assets:write` stores a hash in the `tokens`
+table and prints the token once. The app checks the `tokens` table when it runs on a database, then
+`RELAY_API_TOKENS`, then `RELAY_MEMORY_TOKEN`.
 
 Secrets are values, never files: nothing in the repo contains one, and `.env.example` stays names-only.
 
@@ -99,9 +103,38 @@ Routes the proxy leaves public (info, docs, the well-known files, OpenAPI, llms.
 webhooks, the cron, signed asset URLs, and `/api/v1` with a bearer) and the ones that need a session are tabled in
 `docs/SECURITY.md`. Mock mode has no sign-in: it runs as the fake viewer `human:demo`.
 
+## 4b. GitHub App (tasks, comments, the task bus)
+
+The web app acts on GitHub as an App installed once per organization, so no person's token is stored anywhere. Two
+ways to set it up; the environment always wins over a stored app, which is also how you rotate.
+
+**One click (fresh deployment).** Sign in, open `https://<site>/setup/github`, optionally name the organization that
+should own the app, and press Create. The page posts a GitHub App manifest (name `relay-<host>`, permissions Actions
+read, Contents read, Deployments read, Issues write, Metadata read, Pull requests write; events issues, issue_comment,
+pull_request, pull_request_review, workflow_run, deployment_status; webhook `https://<site>/api/webhooks/github`) to
+`https://github.com/settings/apps/new` (or the organization's page). GitHub asks you to confirm and redirects to
+`/setup/github/callback`, which exchanges the one-time code (`POST /app-manifests/{code}/conversions`) and stores the
+app id and slug plain and the private key, webhook secret and client secret sealed with `RELAY_SESSION_SECRET` in the
+`settings` table. Then press Install and pick the repositories. The app's webhook is verified with its own secret, so
+`GITHUB_WEBHOOK_SECRET` is not needed for app deliveries (keep it for an organization webhook you still run).
+
+**By hand.** Create the app under GitHub → Settings → Developer settings → GitHub Apps with the same permissions and
+events, webhook URL `https://<site>/api/webhooks/github` and a webhook secret you generate; generate a private key; set
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (the whole PEM; `\n`-escaped on one line or base64 is fine), `GITHUB_APP_SLUG`
+and `GITHUB_WEBHOOK_SECRET`; redeploy; install the app on the repositories.
+
+**Rotate.** Generate a new private key on GitHub and put it in `GITHUB_APP_PRIVATE_KEY` (wins at once), or remove the
+stored app on `/setup/github` and run the manifest flow again; then revoke the old key on GitHub. Rotating
+`RELAY_SESSION_SECRET` makes a stored key unreadable, which the setup page reports as "not configured".
+
+Without an app, `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` (a fine-grained personal token) still works as before.
+
 ## 5. GitHub webhook (organization level)
 
-One webhook on the organization feeds every repo relay manages. Organization → Settings → Webhooks → Add webhook:
+With the GitHub App installed you need no separate webhook: the app delivers the same events to
+`https://<site>/api/webhooks/github`, plus `installation` and `installation_repositories`, which become
+`project.github_connected` rows (and register a project when the repository holds a `relay.md`). Keep an organization
+webhook only for repositories the app is not installed on. Organization → Settings → Webhooks → Add webhook:
 
 - Payload URL: `https://<RELAY_PUBLIC_URL>/api/webhooks/github`
 - Content type: `application/json`
@@ -141,6 +174,8 @@ Protection) for previews, which have no OAuth app of their own.
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview
 - [ ] Variables from `.env.example` set, including the four sign-in ones
 - [ ] GitHub OAuth app created with callback `https://<site>/auth/github/callback`; your login in `RELAY_ALLOWED_USERS`; signing in works
+- [ ] GitHub App configured (environment, or `/setup/github`) and installed on the managed repositories; `/setup/github` lists the installation
+- [ ] `relay setup --site https://<site>` on a laptop prints a code, `/activate` approves it, `relay doctor` shows the token
 - [ ] GitHub org webhook created, recent deliveries return 200
 - [ ] Vercel webhook created for the projects that deploy previews
 - [ ] Custom domain resolves and `RELAY_PUBLIC_URL` matches it

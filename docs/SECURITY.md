@@ -62,8 +62,12 @@ else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded fr
   `RELAY_REF` to a tag or SHA if you do not want runners to pick up `main` automatically.
 - Jobs leave nothing behind: `$RUNNER_TEMP/work` and `$RUNNER_TEMP/relay` are removed in an `always()` step. The
   brief and the CLI's JSON output are written to a `mktemp -d` directory that is removed on exit.
-- The web app receives only webhooks (verified with `GITHUB_WEBHOOK_SECRET` and `VERCEL_WEBHOOK_SECRET`) and memory
-  calls (bearer `RELAY_MEMORY_TOKEN`). It can never reach a runner; runners call it, not the reverse.
+- The web app receives only webhooks (verified with `GITHUB_WEBHOOK_SECRET`, the GitHub App's own secret, and
+  `VERCEL_WEBHOOK_SECRET`) and API and MCP calls carrying a scoped bearer token. It can never reach a runner; runners
+  call it, not the reverse.
+- The web app's GitHub credential is an App, not a person's token: installation tokens are minted per repository, last
+  an hour and live only in memory; the private key sits in `GITHUB_APP_PRIVATE_KEY` or, when the manifest flow created
+  the app, sealed in the database under `RELAY_SESSION_SECRET` (`docs/HOSTING.md`).
 
 ## Never allowed
 
@@ -90,13 +94,14 @@ attach.
 
 ## Signing in to the web app
 
-The web app uses GitHub OAuth only, with no third-party auth library. Sign-in is allowed for the GitHub logins listed
-in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities runners trust as issue senders. An
-empty list means nobody can sign in, and the sign-in page says so. A successful sign-in mints a signed session cookie
-scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they authenticate
-with scoped bearer tokens from `relay token create`; there is no OAuth authorization server for tokens and no
-self-serve sign-up. Public read of the feed is off in production; the landing, the trust pages, the docs, the
-methodology, and the install skill stay public.
+The web app signs people in with GitHub OAuth, with no third-party auth library. Sign-in is allowed for the GitHub
+logins listed in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities runners trust as issue
+senders. An empty list means nobody can sign in, and the sign-in page says so. A successful sign-in mints a signed
+session cookie scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they
+hold scoped bearer tokens, issued by the site's own authorization server after one approval by a signed-in person
+("Access for agents" below) or minted by the operator with `relay token create`. There is no self-serve sign-up: every
+token traces to a person on the allowlist. Public read of the feed is off in production; the landing, the trust pages,
+the docs, the methodology, and the install skill stay public.
 
 Needed in the environment: `GITHUB_OAUTH_CLIENT_ID`, `GITHUB_OAUTH_CLIENT_SECRET`, `RELAY_SESSION_SECRET`,
 `RELAY_ALLOWED_USERS`. `docs/HOSTING.md` has the OAuth app setup.
@@ -137,6 +142,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 | `/info`, `/about`, `/contact`, `/privacy`, `/docs`, `/docs/*`, `/api/markdown` | the public overview, the trust pages and the docs, HTML and Markdown |
 | `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/*`, `/server.json`, `/robots.txt`, `/sitemap.xml`, `/manifest*`, `/skills/*` | the agent-readiness surface |
 | `/sign-in`, `/auth/*` | the sign-in flow itself |
+| `/oauth/*` | the authorization server: `register`, `token`, `device`, `revoke` are for clients; `authorize` asks for the session itself and returns to the consent page after sign-in |
 | `/api/v1/info` | the API's own description |
 | `/api/v1/*` with an `Authorization: Bearer` header | the token's scopes decide (`apps/web/lib/auth.ts`) |
 | `/api/v1/*` `GET` without a bearer when `RELAY_PUBLIC_READ=1` | anonymous read, limited to the public read scopes (`feed:read`, `memory:read`); off by default outside mock mode |
@@ -147,7 +153,8 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Session required | |
 |---|---|
-| `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*` | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/tokens` | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/activate`, `/setup/*` | approving a device code; the GitHub App setup |
 | `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |
 | anything not listed | neither: Next answers 404 (Markdown when `Accept: text/markdown`), never a redirect to sign-in, so agents and scanners see a real not-found |
@@ -155,3 +162,68 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 In mock mode (`RELAY_DATA=mock`, or no `DATABASE_URL` with `RELAY_DATA` unset) there is no sign-in: every request
 runs as the fake viewer `human:demo`, the header says "demo mode", and `RELAY_REVIEWER` may rename that actor. The
 fake session never reaches `/api/v1`: anonymous API callers in mock mode get only what `RELAY_PUBLIC_READ` allows.
+
+## Access for agents
+
+Tokens are never copied between people, machines or chats. The web app runs an OAuth 2.1 authorization server
+(`/.well-known/oauth-authorization-server`, RFC 8414; the API and MCP server point at it from
+`/.well-known/oauth-protected-resource`, RFC 9728, and from every `WWW-Authenticate` challenge) and every grant ends in
+one approval by a person who signed in here. The code is `packages/core/src/oauth/server.ts`, framework-free and
+covered by `packages/core/test/oauth.test.ts`; the routes under `apps/web/app/oauth` only parse requests.
+`docs/INTEGRATIONS.md` is the how-to.
+
+### What a token is
+
+| Kind | Where it lives | Lifetime | Rotation |
+|---|---|---|---|
+| access token (`rly_…`) | a row in `tokens` named `oauth:<client name>`, SHA-256 only, with `expires_at` and `client_id` | **24 hours** | replaced on every refresh; the old one is revoked when the new one is minted |
+| refresh token (`rrt_…`) | `oauth_refresh_tokens`, SHA-256 only, linked to its access token | **90 days** | single use: each refresh issues a new pair and marks the old refresh token used; **using an old one again revokes the whole lineage** (every descendant and their access tokens) and writes `access.revoked` |
+| authorization code (`rac_…`) | `oauth_codes`, SHA-256, bound to the client, redirect URI and PKCE challenge | 10 minutes, one use | a second exchange fails and the code stays spent (a wrong `code_verifier` also spends it) |
+| device code (`rdc_…`) | `oauth_device_codes`, SHA-256, with the `RLAY-XXXX` user code | 15 minutes, one redemption | polling faster than `interval` answers `slow_down` |
+| invite code (`rin_…`) | `invites`, SHA-256, with `uses_left` | what `--expires` says (default 24 h), `--uses` redemptions (default 1) | spent atomically; revocable by id or name |
+| operator token (`relay token create`, `/tokens`) | the same `tokens` table, no expiry | until revoked | none |
+
+PKCE `S256` is mandatory and `plain` is refused; `code_challenge_methods_supported` says only `S256`. Redirect URIs are
+registered at `POST /oauth/register` and must be `https`, loopback `http` (any port, RFC 8252) or a private-use scheme;
+an authorization request whose client or redirect URI does not match is answered on the page, never by redirecting
+to the URI the attacker supplied. Scopes requested may only narrow on refresh. A `resource` indicator must name this
+site. The device flow registers a public client per machine (`client_name`), so the consent page can say who asks.
+
+### What the consent page shows
+
+`/oauth/authorize` (and `/activate` for device codes) renders, for the signed-in person: the client's registered name
+(`relay-cli@studio`, `Grok Bot`), each requested scope with the one-line description from `TOKEN_SCOPE_DESCRIPTIONS`,
+where the browser returns afterwards (the redirect URI's host) and, when present, the `resource`, plus the two facts
+that matter: the token lasts 24 hours and renews itself for 90 days, and it can be revoked on `/tokens`. Approve and
+Deny are plain form posts; the session cookie is `SameSite=Lax`, so a cross-site form cannot approve on the person's
+behalf, and the decision route re-validates the client and redirect URI against the registration before issuing
+anything the hidden fields could not have changed. A request that was not started by the person should be denied,
+and the page says so.
+
+Approvals without a browser go through `POST /api/v1/access/<user_code>/approve` with a `tokens:write` token or the
+session; `GET /api/v1/access` lists what is pending. Giving a chat bot `tokens:write` is a deliberate choice: it can
+then approve devices and mint invites. Every request and decision is a feed row (`access.requested`, `access.granted`,
+`access.denied`, `access.revoked`) with the user code, client and scopes in its payload, so the trail is auditable
+and a webhook can relay it.
+
+### Revocation
+
+- `relay token revoke oauth:<client>`, the `/tokens` page, or `DELETE /api/v1/tokens/{id}` revoke an access token at
+  once; its refresh token keeps working until it is also revoked, so revoke the refresh token too when the holder is
+  not trusted: `POST /oauth/revoke` with `token=<refresh or access token>` (RFC 7009) does both at once.
+- `relay invite revoke <id|name>` or `DELETE /api/v1/invites/{id}` stops an unredeemed code.
+- Rotating `RELAY_SESSION_SECRET` signs every browser session out and makes the sealed GitHub App key unreadable;
+  it does not touch tokens, which live in the database by hash.
+- A reused refresh token revokes its lineage automatically; the holder sees `invalid_grant` and must be approved again.
+
+### GitHub App
+
+The web app's GitHub credential is an App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`, or the sealed settings the
+manifest flow on `/setup/github` wrote; the environment wins). It needs Actions read, Contents read, Deployments read,
+Issues write, Metadata read, Pull requests write, and the events issues, issue_comment, pull_request,
+pull_request_review, workflow_run, deployment_status. Installation tokens are minted per repository with a nine-minute
+RS256 app JWT, cached in memory for their one-hour life and refreshed a minute early. The app's webhook deliveries are
+verified with the same HMAC as an organization webhook. `installation` events write `project.github_connected` /
+`project.github_disconnected`; a repository is auto-registered as a project only when it already holds a `relay.md`.
+Rotation: a new private key in the environment wins immediately; or remove the stored app on `/setup/github` and run
+the manifest flow again, then revoke the old key on GitHub.

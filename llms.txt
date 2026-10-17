@@ -2,6 +2,16 @@
 
 > An open-source harness that turns one person's coding-agent subscriptions (Claude, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did. Credentials never leave the machine they were created on.
 
+## Getting access as an agent
+
+No person hands you a token. Register and ask, a person approves once, then retry:
+
+1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write` → `device_code`, `user_code` (`RLAY-XXXX`), `verification_uri`.
+2. Tell the person "approve `RLAY-XXXX` at https://relay.kyro.house/activate" (or a bot with `tokens:write` posts `POST /api/v1/access/RLAY-XXXX/approve`); meanwhile poll `POST /oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…` every 5 s until it returns `access_token` (24 h) and `refresh_token` (90 d).
+3. Call `/mcp` or `/api/v1/*` with `Authorization: Bearer <access_token>`; refresh with `grant_type=refresh_token` before it expires. `relay_whoami` / `GET /api/v1/whoami` confirm who you are.
+
+Zero-browser path: an operator runs `relay invite create --for <you> --scopes …` and you redeem the code with `grant_type=urn:relay:invite&invite=<code>`. Browser clients use `POST /oauth/register` + `GET /oauth/authorize` (PKCE S256). Metadata: `/.well-known/oauth-authorization-server`; guide: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md); the human fallback is the `/tokens` page.
+
 ## Start here
 
 - [README](README.md): what it does, quick install, how to link model accounts
@@ -11,12 +21,12 @@
 ## Guides
 
 - [Runners](docs/RUNNERS.md): registering a self-hosted GitHub Actions runner that holds your logins
-- [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob
-- [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, what is never allowed
+- [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob, the GitHub App (environment or one-click manifest flow)
+- [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, sign-in, token lifetimes and revocation, what the consent page shows, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and the `relay_*` MCP tools
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
 - [Feed](docs/FEED.md): event kinds, sources, the ledger view, and the outbound webhook contract (payload, signature)
-- [Integrations](docs/INTEGRATIONS.md): what an external bot needs: a scoped token, the task and event tools, the webhook, and a Grok Bot walkthrough
+- [Connect in one step](docs/INTEGRATIONS.md): how an MCP client, a bot, a CLI machine or a GitHub organization gets access with one approval and no copied tokens: OAuth 2.1 with consent, the device flow, invite codes, the GitHub App, the tools, the webhook contract, and a Grok Bot walkthrough
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it
 - [Versioning](docs/VERSIONING.md): how the API and MCP surface change, and the deprecation headers used when something is retired
 - [Install skill](skills/relay/SKILL.md): the agent skill for installing and operating relay

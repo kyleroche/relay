@@ -55,6 +55,26 @@ Do these steps in order and stop at anything that needs the user's browser.
 
    relay ingests only the vendor's official docs and skills. Do not add community prompt guides.
 
+## Connecting a machine to a hosted relay
+
+A machine that should use a hosted relay (for example https://relay.kyro.house) instead of its own database does not need anyone to hand it a token:
+
+```bash
+npx @kyleroche/relay setup --site https://relay.kyro.house
+```
+
+This starts the device flow: it prints a code like `RLAY-4F7Q` and the URL `https://relay.kyro.house/activate`. Show both to the user, who approves once in the browser (or any relay bot holding `tokens:write` can approve it over `POST /api/v1/access/RLAY-4F7Q/approve`); the CLI then stores the token, which renews itself. With an invite code from the operator (`relay invite create --for <name> --scopes …`), `--invite <code>` needs no browser at all. `relay doctor` shows how the machine authenticates.
+
+## Getting access as an agent
+
+If you are an agent that found this site and want to call `/mcp` or `/api/v1` yourself, do not ask the user for a token:
+
+1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write`. The reply has `device_code`, `user_code` and `verification_uri`.
+2. Tell the user "approve `<user_code>` at https://relay.kyro.house/activate" and poll `POST https://relay.kyro.house/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code` and `client_id` every 5 seconds until it returns `access_token` and `refresh_token`.
+3. Use `Authorization: Bearer <access_token>`; refresh with `grant_type=refresh_token` before 24 hours. `relay_whoami` tells you what you are.
+
+Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-server`.
+
 ## Rules you must keep
 
 - Never move or copy a login, token, or `auth.json` between machines.

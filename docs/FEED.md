@@ -27,6 +27,12 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `runner.offline` | GitHub webhook `workflow_job` (queued) with no matching runner for longer than a threshold, or a failed keep-alive | `bot:relay` | lane, payload.runner | which label has nobody serving it |
 | `task.created` | `relay_task_create`, `POST /api/v1/tasks`, `relay task create` (alongside an `issue.opened` row for the same issue) | `bot:<token name>` or `human:<login>` | project, repo, issue, lane, url, payload.task_id/priority/idempotency_key | `<task id>: <title>` |
 | `external.*` | `relay_event_log`, `POST /api/v1/events`: an external bot's own note | always `bot:<token name>` (derived from the token, never from the client) | project, url, cost_equiv, payload.source | whatever the bot said, ≤500 chars |
+| `access.requested` | `POST /oauth/device`: a CLI or bot asked for a token | `bot:<client name>` | payload.user_code, client_name, scopes, verification_uri_complete, approve_api, expires_at | "<client> asks for access (<scopes>): approve RLAY-XXXX at <site>/activate" |
+| `access.granted` | consent on `/oauth/authorize`, approval on `/activate` or `POST /api/v1/access/<code>/approve`, a code or device exchange, an invite redeemed | `human:<login>` (who approved) or the invite's creator | payload.via, user_code, client_id, token_id, scopes | who approved what, or which client received a token |
+| `access.denied` | Deny on `/activate` or `{"decision":"deny"}` over the API | `human:<login>` | payload.user_code, client_name, scopes | who denied which code |
+| `access.revoked` | `POST /oauth/revoke`, or a reused refresh token cutting its lineage | the grant's actor | payload.token_id, client_id, reason, revoked_tokens | what was revoked and why |
+| `project.github_connected` | GitHub App `installation` (created) or `installation_repositories` (added) | `human:<installer>` | repo, project (when known), url, payload.installation_id, registered | installed on which repo; "registered project" when `relay.md` was present |
+| `project.github_disconnected` | GitHub App `installation` (deleted, suspend) or `installation_repositories` (removed) | `human:<login>` | repo, project, payload.installation_id | removed from which repo |
 
 `subscription` is derived from the lane: `claude -> max`, `codex -> codex`, `grok -> grok`, overflow lanes `->
 gateway`. `cost_equiv` is computed at ingest from the Gateway list-price table in `packages/core/src/ledger`, so the

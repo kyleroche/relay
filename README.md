@@ -31,6 +31,16 @@ pnpm relay setup      # hooks + memory server into each CLI you have
 cd ~/code/some-repo && ~/relay/bin/relay link
 ```
 
+To point a machine at a hosted relay instead of its own database, nobody hands it a token:
+
+```bash
+npx @kyleroche/relay setup --site https://relay.kyro.house     # prints a code; approve it once at relay.kyro.house/activate
+npx @kyleroche/relay setup --site https://relay.kyro.house --invite <code>   # zero-browser: a code from `relay invite create`
+```
+
+Agents get access the same way, by themselves: `POST /oauth/device`, a person approves the short code once, then the
+bearer token works on `/mcp` and `/api/v1` and renews itself ([Connect in one step](docs/INTEGRATIONS.md)).
+
 `relay link` is the only per-repo step: it registers the repo, digests its files and writes the project summary
 (Sonnet, a few cents), renders `relay.md` from that summary, and installs the owned sections, caller workflows and
 labels. It prints each stage and one cost line, and a second run with nothing changed makes no model calls.
