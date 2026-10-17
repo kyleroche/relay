@@ -9,6 +9,7 @@ import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { Pill } from "@/components/ui/pill";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
 import { getDb } from "@/lib/db";
@@ -103,9 +104,9 @@ export default async function TaskPage({ params }: Props) {
       <div className="flex flex-col gap-6">
         {t.preview_url ? (
           <section aria-labelledby="preview-h" className="rounded-lg border bg-card p-4">
-            <h2 id="preview-h" className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <SectionHeading id="preview-h">
               Preview <PreviewBadge state={t.preview_state} />
-            </h2>
+            </SectionHeading>
             <a
               href={t.preview_url}
               target="_blank"
@@ -128,9 +129,7 @@ export default async function TaskPage({ params }: Props) {
 
         {(inReview || canRequeue) && (
           <section aria-labelledby="decide-h" className="rounded-lg border bg-card p-4">
-            <h2 id="decide-h" className="text-xs font-medium text-muted-foreground">
-              Decide
-            </h2>
+            <SectionHeading id="decide-h">Decide</SectionHeading>
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
               {inReview
                 ? `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"}; Request changes sends your note to the next run.`
@@ -157,9 +156,7 @@ export default async function TaskPage({ params }: Props) {
 
         <section aria-labelledby="result-h" className="grid gap-4 sm:grid-cols-2">
           <div className="rounded-lg border bg-card p-4">
-            <h2 id="result-h" className="text-xs font-medium text-muted-foreground">
-              Pull request
-            </h2>
+            <SectionHeading id="result-h">Pull request</SectionHeading>
             {t.pr ? (
               <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="mt-1 inline-flex items-center gap-1 font-mono text-sm hover:text-primary">
                 #{t.pr} <ArrowUpRight className="size-3.5" aria-hidden="true" />
@@ -176,7 +173,7 @@ export default async function TaskPage({ params }: Props) {
             )}
           </div>
           <div className="rounded-lg border bg-card p-4">
-            <h2 className="text-xs font-medium text-muted-foreground">Cost</h2>
+            <SectionHeading>Cost</SectionHeading>
             {t.usage ? (
               <dl className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                 <dt className="text-xs text-muted-foreground">Equivalent</dt>
@@ -205,9 +202,7 @@ export default async function TaskPage({ params }: Props) {
 
         {t.run_summary && (
           <section aria-labelledby="summary-h" className="rounded-lg border bg-card p-4">
-            <h2 id="summary-h" className="text-xs font-medium text-muted-foreground">
-              What the {t.lane ?? ""} lane said
-            </h2>
+            <SectionHeading id="summary-h">What the {t.lane ?? ""} lane said</SectionHeading>
             <p className="mt-1 whitespace-pre-wrap text-sm leading-6">{t.run_summary}</p>
             <p className="mt-2 text-xs text-muted-foreground">The full summary and the usage block are the PR's first comment.</p>
           </section>
@@ -215,9 +210,9 @@ export default async function TaskPage({ params }: Props) {
 
         {history.length > 0 && (
           <section aria-labelledby="history-h">
-            <h2 id="history-h" className="mb-2 text-xs font-medium text-muted-foreground">
+            <SectionHeading id="history-h" className="mb-2">
               Review history
-            </h2>
+            </SectionHeading>
             <ul className="flex flex-col gap-2">
               {history.map((e) => (
                 <li key={e.id} className="rounded-md border bg-card p-3 text-sm">
@@ -241,9 +236,9 @@ export default async function TaskPage({ params }: Props) {
         )}
 
         <section aria-labelledby="events-h">
-          <h2 id="events-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Every event <span className="font-mono tabular-nums text-foreground">{events.length}</span>
-          </h2>
+          <SectionHeading id="events-h" count={events.length} className="mb-2">
+            Every event
+          </SectionHeading>
           <ol className="flex flex-col divide-y rounded-md border bg-card">
             {[...events].reverse().map((e) => (
               <FeedRow key={e.id} event={toFeedEvent(e)} tz={tz} showProject={false} />

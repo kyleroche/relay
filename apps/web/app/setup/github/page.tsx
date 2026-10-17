@@ -6,6 +6,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { ManifestForm } from "@/components/github/manifest-form";
 import { PageIntro } from "@/components/page-intro";
 import { Button } from "@/components/ui/button";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { appManifest, githubApp, githubAppConfig, manifestState, type ResolvedGitHubApp } from "@/lib/github-app";
 import { requireSession } from "@/lib/session";
@@ -78,9 +79,7 @@ function Configured({ resolved, installations, installError }: { resolved: Resol
   return (
     <div className="flex flex-col gap-6">
       <section aria-labelledby="status-h" className="rounded-lg border bg-card p-4 sm:p-5">
-        <h2 id="status-h" className="text-sm font-medium">
-          Configured
-        </h2>
+        <SectionHeading id="status-h">Configured</SectionHeading>
         <dl className="mt-3 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-[auto_1fr]">
           <dt className="text-muted-foreground">App</dt>
           <dd>
@@ -114,16 +113,19 @@ function Configured({ resolved, installations, installError }: { resolved: Resol
       </section>
 
       <section aria-labelledby="installs-h">
-        <div className="flex items-center justify-between gap-3">
-          <h2 id="installs-h" className="text-xs font-medium text-muted-foreground">
-            Installations <span className="font-mono tabular-nums">{installations.length}</span>
-          </h2>
-          <Button asChild size="sm">
-            <a href={installUrl} rel="noopener noreferrer">
-              Install on an account
-            </a>
-          </Button>
-        </div>
+        <SectionHeading
+          id="installs-h"
+          count={installations.length}
+          action={
+            <Button asChild size="sm">
+              <a href={installUrl} rel="noopener noreferrer">
+                Install on an account
+              </a>
+            </Button>
+          }
+        >
+          Installations
+        </SectionHeading>
         {installError ? (
           <Alert tone="bad" className="mt-2">
             Could not list installations: {installError}
@@ -156,9 +158,7 @@ function Manifest({ canManifest, db, org, login, secret, legacyToken }: { canMan
   return (
     <div className="flex flex-col gap-6">
       <section aria-labelledby="status-h" className="rounded-lg border bg-card p-4 sm:p-5">
-        <h2 id="status-h" className="text-sm font-medium">
-          Not configured
-        </h2>
+        <SectionHeading id="status-h">Not configured</SectionHeading>
         <p className="mt-1 text-xs text-muted-foreground">
           {legacyToken ? (
             <>
@@ -193,9 +193,9 @@ function Manifest({ canManifest, db, org, login, secret, legacyToken }: { canMan
       </section>
 
       <section aria-labelledby="create-h">
-        <h2 id="create-h" className="mb-2 text-xs font-medium text-muted-foreground">
+        <SectionHeading id="create-h" className="mb-2">
           Create the app on GitHub
-        </h2>
+        </SectionHeading>
         <ManifestForm manifest={JSON.stringify(manifest)} state={state} disabled={!canManifest} initialOrg={org} />
         <p className="mt-2 text-xs text-muted-foreground">
           GitHub shows the app above, asks you to confirm and sends the credentials back here. Or create it yourself and set <code className="font-mono">GITHUB_APP_ID</code>, <code className="font-mono">GITHUB_APP_PRIVATE_KEY</code>, <code className="font-mono">GITHUB_APP_SLUG</code> and <code className="font-mono">GITHUB_WEBHOOK_SECRET</code> (

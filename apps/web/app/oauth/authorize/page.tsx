@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { OAuthError, scopeDescriptions, validateAuthorizeRequest, type AuthorizeRequest } from "@relay/core";
 import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { oauthOptions } from "@/lib/oauth";
@@ -60,10 +61,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Authorize</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          <span className="font-mono">{request.client.name}</span> wants access to relay
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{request.client.name} wants access to relay</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Signed in as <span className="font-medium text-foreground">{session.login}</span>. Approving mints a token named <code className="rounded bg-muted px-1 font-mono">oauth:{request.client.name}</code> that lasts 24 hours and renews itself for 90 days; every write it makes is attributed to it in the feed. Revoke it any time on{" "}
           <Link href="/tokens" className="underline underline-offset-4">
@@ -74,7 +72,7 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="rounded-lg border p-4">
-        <h2 className="text-xs font-medium text-muted-foreground">It asks to</h2>
+        <SectionHeading>It asks to</SectionHeading>
         <ul className="mt-2 flex flex-col gap-1.5 text-sm">
           {scopeDescriptions(request.scopes).map((s) => (
             <li key={s.scope} className="flex items-start gap-2">

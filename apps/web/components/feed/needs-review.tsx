@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Thumb } from "@/components/assets/asset-card";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { PreviewBadge } from "@/components/tasks/state-badge";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { fmtAgo } from "@/lib/format";
 import { taskPagePath } from "@/lib/tasks";
 import type { Asset, TaskView } from "@/lib/types";
@@ -17,10 +18,9 @@ export function NeedsReview({ tasks, assets, now }: { tasks: TaskView[]; assets:
   const shownAssets = assets.slice(0, 6);
   return (
     <section aria-labelledby="needs-review-h" className="flex flex-col gap-3 rounded-md border border-warn/40 bg-warn/5 p-3">
-      <h2 id="needs-review-h" className="flex items-baseline gap-2 text-sm font-medium">
+      <SectionHeading id="needs-review-h" count={tasks.length + assets.length}>
         Needs review
-        <span className="font-mono text-[11px] tabular-nums text-muted-foreground">{tasks.length + assets.length}</span>
-      </h2>
+      </SectionHeading>
       {tasks.length > 0 && (
         <div>
           <h3 className="flex items-baseline gap-2 text-xs text-muted-foreground">

@@ -8,6 +8,7 @@ import { ReviewControls } from "@/components/assets/review-controls";
 import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { Pill } from "@/components/ui/pill";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { getAsset } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -67,9 +68,9 @@ export default async function AssetPage({ params }: Props) {
           <AssetViewer asset={asset} />
           {versions.length > 1 && (
             <section aria-labelledby="versions-h">
-              <h2 id="versions-h" className="mb-2 text-xs font-medium text-muted-foreground">
-                Versions <span className="font-mono tabular-nums">{versions.length}</span>
-              </h2>
+              <SectionHeading id="versions-h" count={versions.length} className="mb-2">
+                Versions
+              </SectionHeading>
               <ol className="flex gap-2 overflow-x-auto pb-1">
                 {versions.map((v) => {
                   const current = v.id === asset.id;

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MeterBar } from "@/components/meters/plan-meters";
 import { PageIntro } from "@/components/page-intro";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AvgContextOverTime, CostByDay } from "@/components/usage/charts";
 import { getUsage } from "@/lib/data";
@@ -82,7 +83,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
       <section aria-labelledby="by-subscription" className="mb-10">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 id="by-subscription" className="text-lg font-semibold tracking-tight">By subscription</h2>
+            <SectionHeading id="by-subscription">By subscription</SectionHeading>
             <p className="mt-1 text-sm text-muted-foreground">
               {fmtInt(totalCalls)} calls, {fmtCost(totalCost)} cost equivalent in the last {WINDOWS.find((w) => w.id === window)?.label}.
             </p>
@@ -146,12 +147,12 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
 
       <div className="grid gap-10 lg:grid-cols-2">
         <section aria-labelledby="cost-by-day">
-          <h2 id="cost-by-day" className="text-lg font-semibold tracking-tight">Cost equivalent per day</h2>
+          <SectionHeading id="cost-by-day">Cost equivalent per day</SectionHeading>
           <p className="mb-3 mt-1 text-sm text-muted-foreground">Stacked by subscription, last {days} days.</p>
           <CostByDay daily={usage.daily} days={days} />
         </section>
         <section aria-labelledby="ctx-over-time">
-          <h2 id="ctx-over-time" className="text-lg font-semibold tracking-tight">Average context per call</h2>
+          <SectionHeading id="ctx-over-time">Average context per call</SectionHeading>
           <p className="mb-3 mt-1 text-sm text-muted-foreground">Input plus cache-read tokens, averaged per day, against the baseline.</p>
           <AvgContextOverTime series={usage.avgCtx} baseline={baseline} days={days} />
         </section>

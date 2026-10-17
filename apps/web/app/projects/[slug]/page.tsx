@@ -6,6 +6,7 @@ import { CoverageBar } from "@/components/coverage-bar";
 import { EventRow } from "@/components/feed/event-row";
 import { ModelStatusBadge } from "@/components/model-status";
 import { Pill } from "@/components/ui/pill";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { getProject } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
 import { dayKeyIn, dayLabelIn } from "@/lib/tz";
@@ -104,9 +105,9 @@ export default async function ProjectPage({ params }: Props) {
       <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex flex-col gap-10">
           <section aria-labelledby="decisions">
-            <h2 id="decisions" className="text-lg font-semibold tracking-tight">
-              Current decisions <span className="ml-1 font-mono text-sm font-normal text-muted-foreground">{p.decisions.length}</span>
-            </h2>
+            <SectionHeading id="decisions" count={p.decisions.length}>
+              Current decisions
+            </SectionHeading>
             {p.decisions.length === 0 ? (
               <p className="mt-4 rounded-md border border-dashed p-4 text-sm text-muted-foreground">
                 No decisions captured yet. They are extracted when a PR merges and from session-end hooks.
@@ -142,16 +143,22 @@ export default async function ProjectPage({ params }: Props) {
           </section>
 
           <section aria-labelledby="timeline">
-            <h2 id="timeline" className="flex items-baseline gap-3 text-lg font-semibold tracking-tight">
+            <SectionHeading
+              id="timeline"
+              action={
+                <Link href={`/?project=${p.slug}`} className="text-primary underline underline-offset-4">
+                  Open in the feed
+                </Link>
+              }
+            >
               Timeline
-              <Link href={`/?project=${p.slug}`} className="text-xs font-normal text-primary underline underline-offset-4">
-                Open in the feed
-              </Link>
-            </h2>
+            </SectionHeading>
             <div className="mt-4 flex flex-col gap-4">
               {groups.map((g) => (
                 <div key={g.key}>
-                  <h3 className="mb-1 text-xs font-medium text-muted-foreground">{g.label}</h3>
+                  <SectionHeading as="h3" className="mb-1 text-xs text-muted-foreground">
+                    {g.label}
+                  </SectionHeading>
                   <ul className="-mx-2 divide-y divide-border/60">
                     {g.items.map((e) => (
                       <EventRow key={e.id} event={e} tz={tz} showProject={false} />
@@ -165,7 +172,7 @@ export default async function ProjectPage({ params }: Props) {
 
         <aside className="flex flex-col gap-8">
           <section aria-labelledby="models">
-            <h2 id="models" className="text-lg font-semibold tracking-tight">Models in use</h2>
+            <SectionHeading id="models">Models in use</SectionHeading>
             <ul className="mt-4 flex flex-col gap-3">
               {p.models.map((m) => (
                 <li key={m.id} className="rounded-md border bg-card p-3">

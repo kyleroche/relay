@@ -4,6 +4,7 @@ import { listApprovedAwaitingPoll, listPendingAccess, lookupDeviceRequest, norma
 import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { oauthOptions } from "@/lib/oauth";
@@ -42,13 +43,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Activate</p>
-          <Link href="/tokens" className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
-            Back to Access
-          </Link>
-        </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">Approve a device</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Approve a device</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           A CLI or bot that ran <code className="rounded bg-muted px-1 font-mono">relay setup --site</code> shows a code like <code className="rounded bg-muted px-1 font-mono">RLAY-4F7Q</code>. Enter it here, check what it asks for, and approve. The token it receives lasts 24 hours and renews for 90 days; revoke it on{" "}
           <Link href="/tokens" className="underline underline-offset-4">
@@ -73,9 +68,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {request && !done ? (
         <div className="rounded-lg border p-4">
-          <h2 className="text-sm font-medium">
-            <span className="font-mono">{request.client_name}</span> asks for access
-          </h2>
+          <SectionHeading>{request.client_name} asks for access</SectionHeading>
           <p className="mt-1 text-xs text-muted-foreground">
             Code <span className="font-mono">{request.user_code}</span>, requested {new Date(request.created_at).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC
             {request.expired ? ", expired" : request.status !== "pending" ? `, already ${request.status}` : ""}.
@@ -121,9 +114,9 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {pending.length > 0 && (
         <section aria-labelledby="pending-h">
-          <h2 id="pending-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Waiting for a decision <span className="font-mono tabular-nums">{pending.length}</span>
-          </h2>
+          <SectionHeading id="pending-h" count={pending.length} className="mb-2">
+            Waiting for a decision
+          </SectionHeading>
           <ul className="divide-y rounded-lg border text-sm">
             {pending.map((p) => (
               <li key={p.user_code} className="flex items-center justify-between gap-3 px-3 py-2">
@@ -141,9 +134,9 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {awaiting.length > 0 && (
         <section aria-labelledby="awaiting-h">
-          <h2 id="awaiting-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Approved, waiting for the device to poll <span className="font-mono tabular-nums">{awaiting.length}</span>
-          </h2>
+          <SectionHeading id="awaiting-h" count={awaiting.length} className="mb-2">
+            Approved, waiting for the device to poll
+          </SectionHeading>
           <ul className="divide-y rounded-lg border text-sm">
             {awaiting.map((a) => (
               <li key={a.user_code} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">

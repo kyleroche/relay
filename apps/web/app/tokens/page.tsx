@@ -7,6 +7,7 @@ import { GrantList, MintByHand, type TokenOrigin, type TokenRowView } from "@/co
 import { CopyButton } from "@/components/copy-button";
 import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { CONNECT_AGENT_PROMPT } from "@/lib/content/info";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -108,9 +109,7 @@ export default async function AccessPage() {
         <section aria-labelledby="connect-h" className="relative rounded-lg border bg-card p-4">
           <CopyButton text={CONNECT_AGENT_PROMPT} className="absolute right-2 top-2" />
           <div className="pr-10">
-            <h2 id="connect-h" className="text-sm font-medium">
-              Connect an agent
-            </h2>
+            <SectionHeading id="connect-h">Connect an agent</SectionHeading>
             <p className="mt-0.5 text-xs text-muted-foreground">Paste this into the bot or coding agent that should use this relay. It asks for access itself; the code shows up under Requests.</p>
           </div>
           <p className="mt-3 max-w-3xl text-xs leading-5 text-muted-foreground">{CONNECT_AGENT_PROMPT}</p>
@@ -122,24 +121,24 @@ export default async function AccessPage() {
         </section>
 
         <section aria-labelledby="requests-h">
-          <h2 id="requests-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Requests{waiting > 0 && <span className="ml-1 font-mono tabular-nums text-foreground">{waiting}</span>}
-          </h2>
+          <SectionHeading id="requests-h" count={waiting > 0 ? waiting : null} className="mb-2">
+            Requests
+          </SectionHeading>
           <AccessRequests requests={data.requests} canWrite={db} />
         </section>
 
         <section aria-labelledby="grants-h">
-          <h2 id="grants-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Grants{live > 0 && <span className="ml-1 font-mono tabular-nums text-foreground">{live}</span>}
-          </h2>
+          <SectionHeading id="grants-h" count={live > 0 ? live : null} className="mb-2">
+            Grants
+          </SectionHeading>
           <GrantList tokens={data.tokens} canWrite={db} />
         </section>
 
         {data.invites.length > 0 && (
           <section aria-labelledby="invites-h">
-            <h2 id="invites-h" className="mb-2 text-xs font-medium text-muted-foreground">
+            <SectionHeading id="invites-h" className="mb-2">
               Invites
-            </h2>
+            </SectionHeading>
             <InviteList invites={data.invites} canWrite={db} />
           </section>
         )}
