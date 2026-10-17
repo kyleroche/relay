@@ -187,7 +187,10 @@ describe("local store signed urls", () => {
       expect(ok.key).toBe("demo/x/a.txt");
       expect(readFileSync(ok.path, "utf8")).toBe("hello");
     }
-    expect(verifyLocalSignedUrl(url.replace(/sig=./, "sig=Z"), store).ok).toBe(false);
+    // Flip the first signature character to one it is not, so the tamper never happens to be a no-op.
+    const tampered = url.replace(/sig=(.)/, (_, c: string) => `sig=${c === "Z" ? "Y" : "Z"}`);
+    expect(tampered).not.toBe(url);
+    expect(verifyLocalSignedUrl(tampered, store).ok).toBe(false);
     expect(verifyLocalSignedUrl(url.replace("a.txt", "b.txt"), store).ok).toBe(false);
     expect(verifyLocalSignedUrl(url, store, Date.now() + 120_000)).toEqual({ ok: false, reason: "expired" });
     expect(verifyLocalSignedUrl("file:///etc/passwd?exp=1&sig=x", store).ok).toBe(false);
