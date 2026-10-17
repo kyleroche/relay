@@ -5,6 +5,8 @@ import { AccessRequests, type RequestView } from "@/components/tokens/access-req
 import { ClientList, type ClientView } from "@/components/tokens/client-list";
 import { InviteManager, type InviteView } from "@/components/tokens/invite-manager";
 import { GrantList, MintByHand, type TokenOrigin, type TokenRowView } from "@/components/tokens/token-manager";
+import { CopyButton } from "@/components/copy-button";
+import { CONNECT_AGENT_PROMPT } from "@/lib/content/info";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { oauthOptions } from "@/lib/oauth";
@@ -72,8 +74,9 @@ const EMPTY: Loaded = { requests: [], tokens: [], invites: [], clients: [] };
 
 /**
  * /tokens, the Access page: what is asking (device requests, with Approve and Deny), what exists (every token and how it
- * was issued), what is promised (invites), who is registered (clients), and, folded away at the bottom, the by-hand
- * fallback. /activate stays the focused approval page a device points a person at.
+ * was issued), what is promised (invites), who is registered (clients), and the prompt to hand an agent so it connects
+ * by itself. Forms (invite, token by hand) open only from an explicit button. /activate stays the focused approval
+ * page a device points a person at.
  */
 export default async function AccessPage() {
   await requireSession("/tokens");
@@ -135,7 +138,22 @@ export default async function AccessPage() {
           <ClientList clients={data.clients} canWrite={db} />
         </section>
 
-        <MintByHand scopes={scopes} canWrite={db} siteUrl={SITE_URL} />
+        <section aria-labelledby="connect-h">
+          <h2 id="connect-h" className="mb-2 text-xs font-medium text-muted-foreground">
+            Connect an agent
+          </h2>
+          <p className="mb-2 text-xs text-muted-foreground">Paste this into the bot or coding agent that should use this relay. It asks for access itself; you approve the code under Requests.</p>
+          <div className="relative">
+            <pre className="whitespace-pre-wrap break-words rounded-md border bg-card p-4 pr-12 text-[13px] leading-6">
+              <code className="language-text">{CONNECT_AGENT_PROMPT}</code>
+            </pre>
+            <CopyButton text={CONNECT_AGENT_PROMPT} className="absolute right-2 top-2" />
+          </div>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <MintByHand scopes={scopes} canWrite={db} siteUrl={SITE_URL} />
+            <span className="text-xs text-muted-foreground">Only for something that cannot run the device flow, such as a CI secret.</span>
+          </div>
+        </section>
       </div>
     </>
   );

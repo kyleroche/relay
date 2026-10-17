@@ -8,7 +8,7 @@
 4. Second question: "am I about to hit a plan cap?" Three meters sit in the header on every page, amber at 70, red at 90.
 5. Third question, weekly: "is relay actually cutting context per call?" The usage page leads with that number against a baseline.
 6. Decisions they make here: approve a PR (link out), re-run or re-label an issue (link out), stop using a lane that is near its cap, re-onboard a stale model.
-7. They never type here. No forms, no chat. Everything of record lives in GitHub; this page is the read model.
+7. They rarely type here. Anything an agent can do for itself (get access, join a machine, open a task) is self-serve, so the page shows the prompt to hand the agent, not a form. A form exists only as a fallback and opens from an explicit button (a sheet), never inline on the page. Everything of record lives in GitHub; this page is the read model.
 8. Density follows the question: the feed is dense and keyboard-driven; project and info pages breathe.
 9. Nothing animates for decoration. Motion only confirms a state change (new events, meter refresh).
 10. `/info` is the front door for newcomers and agents alike: it must read well on a phone in a chat preview.

@@ -6,6 +6,7 @@ import { useState, useTransition } from "react";
 import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/tokens/actions";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -111,8 +112,9 @@ export function GrantList({ tokens, canWrite }: { tokens: TokenRowView[]; canWri
 }
 
 /**
- * The fallback: mint a token by hand, inside a collapsed details. Bots and CLIs should request access instead
- * (the Requests section), so nothing is preselected and the copy says so. The plaintext appears once, under the form.
+ * The fallback: mint a token by hand. It is an explicit action (a button that opens a sheet), never a form on the page,
+ * because bots and CLIs request access themselves (the Requests section); nothing is preselected and the copy says
+ * so. The plaintext appears once, inside the sheet, until it is closed.
  */
 export function MintByHand({ scopes, canWrite, siteUrl }: { scopes: ScopeOption[]; canWrite: boolean; siteUrl: string }) {
   const router = useRouter();
@@ -147,14 +149,20 @@ export function MintByHand({ scopes, canWrite, siteUrl }: { scopes: ScopeOption[
   };
 
   return (
-    <details className="rounded-lg border p-4 sm:p-5">
-      <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium">
-        <KeyRound className="size-4" aria-hidden="true" /> Mint a token by hand
-      </summary>
-      <p className="mt-2 text-xs text-muted-foreground">
-        The fallback for something that cannot run the device flow, such as a CI secret. Bots and CLIs should request access themselves (<code className="font-mono">relay setup --site</code>, or <code className="font-mono">POST /oauth/device</code>) so the token renews and can be traced to a client. A token minted here never expires until you revoke it. The secret is shown once; only its hash is stored.
-      </p>
-      <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+    <Sheet>
+      <SheetTrigger asChild>
+        <Button variant="outline" size="sm" disabled={!canWrite}>
+          <KeyRound className="size-3.5" aria-hidden="true" /> Mint a token by hand
+        </Button>
+      </SheetTrigger>
+      <SheetContent side="right" className="overflow-y-auto sm:max-w-lg">
+        <SheetHeader>
+          <SheetTitle>Mint a token by hand</SheetTitle>
+          <SheetDescription>
+            The fallback for something that cannot run the device flow, such as a CI secret. Bots and CLIs should request access themselves (<code className="font-mono">relay setup --site</code>, or <code className="font-mono">POST /oauth/device</code>) so the token renews and can be traced to a client. A token minted here never expires until you revoke it. The secret is shown once; only its hash is stored.
+          </SheetDescription>
+        </SheetHeader>
+        <div className="flex flex-col gap-3 px-4 sm:flex-row sm:items-end">
         <label className="flex flex-1 flex-col gap-1 text-xs">
           <span className="text-muted-foreground">Name</span>
           <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. ci-runner" maxLength={80} disabled={!canWrite || pending} aria-label="Token name" />
@@ -163,14 +171,16 @@ export function MintByHand({ scopes, canWrite, siteUrl }: { scopes: ScopeOption[
           Create token
         </Button>
       </div>
-      <ScopePicker scopes={scopes} chosen={chosen} onToggle={(s) => setChosen((prev) => toggleIn(prev, s))} disabled={!canWrite || pending} idPrefix="mint" />
-      {result && !result.ok && (
-        <p role="alert" className="mt-3 text-xs text-destructive">
-          {result.message}
-        </p>
-      )}
-      {result?.ok && result.token && (
-        <div role="status" className="mt-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
+        <div className="px-4">
+          <ScopePicker scopes={scopes} chosen={chosen} onToggle={(s) => setChosen((prev) => toggleIn(prev, s))} disabled={!canWrite || pending} idPrefix="mint" />
+        </div>
+        {result && !result.ok && (
+          <p role="alert" className="px-4 text-xs text-destructive">
+            {result.message}
+          </p>
+        )}
+        {result?.ok && result.token && (
+          <div role="status" className="mx-4 mb-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
           <p className="font-medium">
             Token <code className="font-mono">{result.name}</code> created. Copy it now; it will not be shown again.
           </p>
@@ -182,10 +192,11 @@ export function MintByHand({ scopes, canWrite, siteUrl }: { scopes: ScopeOption[
             </Button>
           </div>
           <p className="mt-2 text-muted-foreground">
-            CLI: <code className="font-mono">relay setup --site {siteUrl} --token &lt;paste&gt;</code>. Bots: <code className="font-mono">Authorization: Bearer &lt;paste&gt;</code> against <code className="font-mono">{siteUrl}/api/v1</code> and <code className="font-mono">{siteUrl}/mcp</code>.
+            CLI: <code className="font-mono">relay setup --site {siteUrl} --token &lt;paste&gt;</code>. Bots: <code className="font-mono">Authorization: Bearer &lt;paste&gt;</code> against <code className="font-mono">{siteUrl}/api/v1</code> and <code className="font-mono">{siteUrl}/mcp</code>. Closing this panel hides it for good.
           </p>
         </div>
       )}
-    </details>
+      </SheetContent>
+    </Sheet>
   );
 }

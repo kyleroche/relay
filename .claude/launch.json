@@ -3,14 +3,14 @@
   "configurations": [
     {
       "name": "web",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@relay/web", "dev"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "export PATH=/opt/homebrew/opt/node@24/bin:$PATH && exec pnpm --filter @relay/web dev"],
       "port": 3000
     },
     {
       "name": "web-db",
-      "runtimeExecutable": "pnpm",
-      "runtimeArgs": ["--filter", "@relay/web", "exec", "next", "dev", "--port", "3100"],
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "export PATH=/opt/homebrew/opt/node@24/bin:$PATH && exec pnpm --filter @relay/web exec next dev --port 3100"],
       "port": 3100
     }
   ]

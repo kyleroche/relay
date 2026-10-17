@@ -6,6 +6,7 @@ import { useState, useTransition } from "react";
 import { createInviteAction, revokeInviteAction, type TokenActionResult } from "@/app/tokens/actions";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -104,14 +105,21 @@ export function InviteManager({ invites, scopes, canWrite, siteUrl }: { invites:
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="rounded-lg border p-4 sm:p-5">
-        <h3 className="flex items-center gap-2 text-sm font-medium">
-          <Ticket className="size-4" aria-hidden="true" /> New invite
-        </h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Approval given in advance: whoever redeems the code gets a token named <code className="font-mono">oauth:&lt;name&gt;</code> with exactly these scopes, no code to approve. The code is shown once.
-        </p>
-        <div className="mt-4 grid gap-3 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
+      <div className="flex flex-wrap items-center gap-3">
+        <Sheet>
+          <SheetTrigger asChild>
+            <Button variant="outline" size="sm" disabled={!canWrite}>
+              <Ticket className="size-3.5" aria-hidden="true" /> Create an invite
+            </Button>
+          </SheetTrigger>
+          <SheetContent side="right" className="overflow-y-auto sm:max-w-lg">
+            <SheetHeader>
+              <SheetTitle>Create an invite</SheetTitle>
+              <SheetDescription>
+                Approval given in advance, for a machine or bot that cannot show you a code: whoever redeems it gets a token named <code className="font-mono">oauth:&lt;name&gt;</code> with exactly these scopes. The code is shown once.
+              </SheetDescription>
+            </SheetHeader>
+        <div className="grid gap-3 px-4 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
           <label className="flex flex-col gap-1 text-xs">
             <span className="text-muted-foreground">For</span>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. woodhouse" maxLength={80} disabled={!canWrite || pending} aria-label="Invite name" />
@@ -128,14 +136,16 @@ export function InviteManager({ invites, scopes, canWrite, siteUrl }: { invites:
             Create invite
           </Button>
         </div>
-        <ScopePicker scopes={scopes} chosen={chosen} onToggle={(s) => setChosen((prev) => toggleIn(prev, s))} disabled={!canWrite || pending} idPrefix="invite" />
+        <div className="px-4">
+          <ScopePicker scopes={scopes} chosen={chosen} onToggle={(s) => setChosen((prev) => toggleIn(prev, s))} disabled={!canWrite || pending} idPrefix="invite" />
+        </div>
         {result && !result.ok && (
-          <p role="alert" className="mt-3 text-xs text-destructive">
+          <p role="alert" className="px-4 text-xs text-destructive">
             {result.message}
           </p>
         )}
         {result?.ok && result.code && (
-          <div role="status" className="mt-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
+          <div role="status" className="mx-4 mb-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
             <p className="font-medium">
               Invite for <code className="font-mono">{result.name}</code> created. Send this line now; the code will not be shown again.
             </p>
@@ -147,10 +157,13 @@ export function InviteManager({ invites, scopes, canWrite, siteUrl }: { invites:
               </Button>
             </div>
             <p className="mt-2 text-muted-foreground">
-              Without the CLI: <code className="font-mono">POST {siteUrl}/oauth/token</code> with <code className="font-mono">grant_type=urn:relay:invite&amp;invite=&lt;code&gt;</code>.
+              Without the CLI: <code className="font-mono">POST {siteUrl}/oauth/token</code> with <code className="font-mono">grant_type=urn:relay:invite&amp;invite=&lt;code&gt;</code>. Closing this panel hides it for good.
             </p>
           </div>
         )}
+          </SheetContent>
+        </Sheet>
+        <span className="text-xs text-muted-foreground">An invite is approval given in advance; most agents should request access instead.</span>
       </div>
 
       {live.length === 0 ? (
