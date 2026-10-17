@@ -6,11 +6,11 @@
 import { compileBrief, type BriefIssue } from "../brief/index.ts";
 import type { Db } from "../db/client.ts";
 import type { EventRow } from "../db/events.ts";
-import type { WorkerInput, WorkerView } from "../db/workers.ts";
+import type { Doorbell, WorkerInput, WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
 import { dispatchEvent } from "../webhooks/dispatch.ts";
 import { RelayHttpError, normalizeSite, taskPath, type HttpFetch } from "../client/http.ts";
-import { claimServer, heartbeatServer, listWorkersServer, registerWorkerServer, releaseServer, startServer, type ClaimInput, type ClaimResult, type HeartbeatInput, type HeartbeatResult, type RegisterResult, type ReleaseInput, type StartInput } from "./server.ts";
+import { claimServer, doorbellServer, heartbeatServer, listWorkersServer, registerWorkerServer, releaseServer, startServer, type ClaimInput, type ClaimResult, type DoorbellInput, type HeartbeatInput, type HeartbeatResult, type RegisterResult, type ReleaseInput, type StartInput } from "./server.ts";
 
 export interface BriefRequest {
   project: string;
@@ -23,6 +23,8 @@ export interface WorkApi {
   readonly mode: "local" | "site";
   register(input: WorkerInput): Promise<RegisterResult>;
   heartbeat(workerId: string, input?: HeartbeatInput): Promise<HeartbeatResult>;
+  /** The queue version and queued estimate; null when the site predates the doorbell (the loop then claims on every tick). */
+  doorbell(input?: DoorbellInput): Promise<Doorbell | null>;
   claim(input: ClaimInput): Promise<ClaimResult | null>;
   start(taskId: string, input: StartInput): Promise<void>;
   release(taskId: string, input: ReleaseInput): Promise<void>;
@@ -54,6 +56,7 @@ export function localWorkApi(db: Db, opts: LocalWorkApiOptions = {}): WorkApi {
       await after(r.events);
       return r;
     },
+    doorbell: (input = {}) => doorbellServer(db, input),
     claim: (input) => claimServer(db, input, { github: opts.github }),
     async start(taskId, input) {
       await after((await startServer(db, taskId, input)).events);
@@ -103,6 +106,17 @@ export function httpWorkApi(opts: HttpWorkApiOptions): WorkApi {
     mode: "site",
     register: (input) => rest<RegisterResult>("POST", "/workers", input),
     heartbeat: (id, input = {}) => rest<HeartbeatResult>("POST", `/workers/${encodeURIComponent(id)}/heartbeat`, input),
+    async doorbell(input = {}) {
+      try {
+        const r = await rest<Partial<Doorbell>>("GET", "/work/doorbell", undefined, { lanes: input.lanes?.length ? input.lanes.join(",") : undefined });
+        if (typeof r.version !== "number") return null;
+        return { version: r.version, queued: typeof r.queued === "number" ? r.queued : 0, ts: r.ts ?? new Date().toISOString() };
+      } catch (e) {
+        // an older site has no doorbell: say so once per call and let the loop claim instead
+        if (e instanceof RelayHttpError && (e.status === 404 || e.status === 405 || e.status === 501)) return null;
+        throw e;
+      }
+    },
     async claim(input) {
       const r = await rest<{ claim: ClaimResult | null }>("POST", "/work/claim", input);
       return r.claim ?? null;

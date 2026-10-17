@@ -5,6 +5,7 @@
  */
 import { type Db, iso, num } from "./client.ts";
 import { EVENT_COLS, toEvent, type EventRow } from "./events.ts";
+import { bumpQueueVersion } from "./queue.ts";
 
 export interface TaskRow {
   /** "<owner>/<repo>#<n>" */
@@ -90,13 +91,17 @@ export async function createTask(db: Db, t: { project: string; repo: string; iss
      ON CONFLICT (id) DO NOTHING RETURNING ${cols}`,
     [id, t.project, t.repo, t.issue, key, t.createdBy, t.lane ?? null],
   );
-  if (r[0]) return { task: toTask(r[0]), created: true };
+  if (r[0]) {
+    await bumpQueueVersion(db); // a new task: idle workers' doorbells ring (docs/WORKERS.md)
+    return { task: toTask(r[0]), created: true };
+  }
   const existing = await getTask(db, id);
   if (!existing) throw new Error(`task ${id} could not be created`);
   // a row opened without a lane (or re-labelled on GitHub) learns it from the caller that knows it
   if (t.lane && existing.lane !== t.lane) {
     await db.query("UPDATE tasks SET lane = $2 WHERE id = $1", [id, t.lane]);
     existing.lane = t.lane;
+    await bumpQueueVersion(db);
   }
   return { task: existing, created: false };
 }

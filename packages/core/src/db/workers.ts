@@ -4,11 +4,15 @@
  * required labels it carries. A claim is a lease (30 minutes, renewed by every heartbeat); when it runs out the
  * task is queued again. One live claim per task is enforced by a partial unique index, and the claim itself is taken
  * inside a transaction with `FOR UPDATE SKIP LOCKED`, so two workers polling the same site never run the same task.
+ * `doorbell` is what an idle worker reads between claims: the queue version (db/queue.ts) and a queued estimate.
  */
-import { type Db, iso } from "./client.ts";
+import { type Db, iso, num } from "./client.ts";
 import { listPreferences, type PreferenceRow } from "./memory.ts";
+import { bumpQueueVersion, getQueueVersion } from "./queue.ts";
 import { taskClaims, taskEvents, deriveTaskStatus, toTask, TASK_COLS, type TaskRow } from "./tasks.ts";
 import { ulid } from "../util.ts";
+
+export { bumpQueueVersion, getQueueVersion };
 
 export const LEASE_MS = 30 * 60_000;
 /** A worker whose last heartbeat is older than this is shown offline (and `markOffline` records it). */
@@ -28,6 +32,8 @@ export interface WorkerRow {
   last_seen: string;
   /** What the worker last reported: `online`, or `offline` when it shut down cleanly. */
   status: "online" | "offline";
+  /** The poll interval (ms) the worker reported with its last heartbeat; null until one did. */
+  poll_ms: number | null;
   created_at: string;
 }
 
@@ -58,7 +64,7 @@ export interface WorkerView extends WorkerRow {
   current: LiveClaim | null;
 }
 
-const W = "id, name, host, lanes, labels, version, last_seen, status, created_at";
+const W = "id, name, host, lanes, labels, version, last_seen, status, poll_ms, created_at";
 const arr = (v: unknown): string[] => (Array.isArray(v) ? (v as unknown[]).map(String) : typeof v === "string" && v.startsWith("{") ? v.slice(1, -1).split(",").filter(Boolean) : []);
 const toWorker = (r: Record<string, unknown>): WorkerRow => ({
   id: r.id as string,
@@ -69,6 +75,7 @@ const toWorker = (r: Record<string, unknown>): WorkerRow => ({
   version: (r.version as string) ?? "",
   last_seen: iso(r.last_seen) ?? "",
   status: r.status === "offline" ? "offline" : "online",
+  poll_ms: r.poll_ms === null || r.poll_ms === undefined ? null : num(r.poll_ms),
   created_at: iso(r.created_at) ?? "",
 });
 
@@ -124,12 +131,18 @@ export async function listWorkers(db: Db): Promise<WorkerRow[]> {
 }
 
 /**
- * A heartbeat: touch last_seen, record the status the worker reports, and renew every live lease it holds.
- * Returns the worker and the leases as they stand after renewal; undefined for an unknown id.
+ * A heartbeat: touch last_seen, record the status the worker reports (and the poll interval it is on, when it says),
+ * and renew every live lease it holds. Returns the worker and the leases as they stand after renewal; undefined for
+ * an unknown id.
  */
-export async function heartbeatWorker(db: Db, id: string, opts: { status?: "online" | "offline"; leaseMs?: number; now?: number } = {}): Promise<{ worker: WorkerRow; leases: ClaimRow[] } | undefined> {
+export async function heartbeatWorker(db: Db, id: string, opts: { status?: "online" | "offline"; pollMs?: number; leaseMs?: number; now?: number } = {}): Promise<{ worker: WorkerRow; leases: ClaimRow[] } | undefined> {
   const now = opts.now ?? Date.now();
-  const r = await db.query(`UPDATE workers SET last_seen = $2::timestamptz, status = $3 WHERE id = $1 RETURNING ${W}`, [id, new Date(now).toISOString(), opts.status ?? "online"]);
+  const r = await db.query(`UPDATE workers SET last_seen = $2::timestamptz, status = $3, poll_ms = coalesce($4::integer, poll_ms) WHERE id = $1 RETURNING ${W}`, [
+    id,
+    new Date(now).toISOString(),
+    opts.status ?? "online",
+    opts.pollMs && Number.isFinite(opts.pollMs) ? Math.round(opts.pollMs) : null,
+  ]);
   if (!r[0]) return undefined;
   const leases = await db.query(`UPDATE claims SET lease_until = $2::timestamptz WHERE worker_id = $1 AND released_at IS NULL RETURNING ${C}`, [id, new Date(now + (opts.leaseMs ?? LEASE_MS)).toISOString()]);
   return { worker: toWorker(r[0]), leases: leases.map(toClaim) };
@@ -141,10 +154,52 @@ export async function markOffline(db: Db, olderThanMs: number = WORKER_OFFLINE_M
   return r.map(toWorker);
 }
 
-/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again). */
+/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again, so the queue version moves). */
 export async function expireLeases(db: Db, now: number = Date.now()): Promise<ClaimRow[]> {
   const r = await db.query(`UPDATE claims SET released_at = $1::timestamptz, outcome = 'expired' WHERE released_at IS NULL AND lease_until < $1::timestamptz RETURNING ${C}`, [new Date(now).toISOString()]);
+  if (r.length) await bumpQueueVersion(db);
   return r.map(toClaim);
+}
+
+/** State-changing kinds the doorbell looks at; the latest one per task decides whether it still looks queued. */
+const QUEUE_KINDS = ["issue.labeled", "run.started", "run.dispatched", "run.failed", "run.finished", "pr.opened", "pr.merged", "pr.closed", "issue.closed"];
+
+/**
+ * How many tasks look claimable right now, in one query: a worker lane (optionally only `lanes`), no live lease, and
+ * the latest state-changing event is none, `issue.labeled`, `pr.closed`, or a `run.started` whose lease has since
+ * ended (the worker vanished). It is the quick estimate the doorbell returns, not the fold `claimNext` runs: labels a
+ * task requires are not checked here, so a worker may see `queued > 0` and still get `claim: null`.
+ */
+export async function queuedCount(db: Db, opts: { lanes?: string[]; now?: number } = {}): Promise<number> {
+  const now = new Date(opts.now ?? Date.now()).toISOString();
+  const lanes = (opts.lanes ?? []).map((l) => l.trim()).filter(Boolean);
+  const params: unknown[] = [now, QUEUE_KINDS];
+  const laneFilter = lanes.length ? (params.push(lanes), `AND t.lane = ANY($3::text[])`) : `AND t.lane NOT LIKE '%-cloud'`;
+  const r = await db.query<{ n: unknown }>(
+    `SELECT count(*) AS n FROM tasks t
+     LEFT JOIN LATERAL (SELECT e.kind FROM events e WHERE e.repo = t.repo AND e.issue = t.issue AND e.kind = ANY($2::text[]) ORDER BY e.ts DESC, e.id DESC LIMIT 1) le ON true
+     WHERE t.lane IS NOT NULL ${laneFilter}
+       AND NOT EXISTS (SELECT 1 FROM claims c WHERE c.task_id = t.id AND c.released_at IS NULL AND c.lease_until > $1::timestamptz)
+       AND (le.kind IS NULL OR le.kind IN ('issue.labeled', 'pr.closed')
+            OR (le.kind = 'run.started' AND EXISTS (SELECT 1 FROM claims c WHERE c.task_id = t.id)))`,
+    params,
+  );
+  return num(r[0]?.n);
+}
+
+export interface Doorbell {
+  /** Moves on every write that can change what a claim returns; compare it between ticks. */
+  version: number;
+  /** Tasks that look claimable (for `lanes` when given). An estimate: labels are not checked. */
+  queued: number;
+  ts: string;
+}
+
+/** What an idle worker reads instead of claiming: the queue version and the queued estimate, two indexed reads. */
+export async function doorbell(db: Db, opts: { lanes?: string[]; now?: number } = {}): Promise<Doorbell> {
+  const now = opts.now ?? Date.now();
+  const [version, queued] = await Promise.all([getQueueVersion(db), queuedCount(db, { ...(opts.lanes ? { lanes: opts.lanes } : {}), now })]);
+  return { version, queued, ts: new Date(now).toISOString() };
 }
 
 export function workerState(w: Pick<WorkerRow, "last_seen" | "status">, now: number = Date.now()): WorkerStatus {
@@ -185,6 +240,7 @@ export async function liveClaim(db: Db, taskId: string, workerId?: string): Prom
 /** End a live claim with an outcome. Undefined when the worker holds no live claim on the task. */
 export async function releaseClaim(db: Db, taskId: string, workerId: string, outcome: Exclude<ClaimOutcome, "expired">, now: number = Date.now()): Promise<ClaimRow | undefined> {
   const r = await db.query(`UPDATE claims SET released_at = $3::timestamptz, outcome = $4 WHERE task_id = $1 AND worker_id = $2 AND released_at IS NULL RETURNING ${C}`, [taskId, workerId, new Date(now).toISOString(), outcome]);
+  if (r[0]) await bumpQueueVersion(db); // the task left the queue (or, for `released`, is back in it)
   return r[0] ? toClaim(r[0]) : undefined;
 }
 

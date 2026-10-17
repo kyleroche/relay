@@ -298,11 +298,24 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         operationId: "heartbeatWorker",
         tags: ["work"],
         summary: "Heartbeat: touch last_seen and renew this worker's leases",
-        description: "Called every 60 seconds by `relay work`. Every live claim the worker holds is extended to 30 minutes from now. `status: offline` records a clean shutdown (`worker.offline`).",
+        description:
+          "Sent by `relay work` every 60 seconds while it holds a lease and at most every 5 minutes while idle. Every live claim the worker holds is extended to 30 minutes from now. `interval_ms` records the poll interval the worker is on (shown on the workers page); `status: offline` records a clean shutdown (`worker.offline`).",
         security: [{ bearer: ["work:claim"] }],
         parameters: [idParam],
-        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { status: { type: "string", enum: ["online", "offline"] } } } } } },
+        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { status: { type: "string", enum: ["online", "offline"] }, interval_ms: { type: "integer", minimum: 1, description: "The worker's current poll interval in milliseconds." } } } } } },
         responses: { "200": response("The worker and its leases.", "#/components/schemas/Heartbeat"), "404": problemResponse("No such worker."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/work/doorbell": {
+      get: {
+        operationId: "workDoorbell",
+        tags: ["work"],
+        summary: "The queue version and how many tasks look queued",
+        description:
+          "What an idle worker reads instead of claiming (docs/WORKERS.md, \"The loop\"). `version` moves on every write that can change what a claim returns (a task opened, a lease released or expired); `queued` is how many tasks look claimable for `lanes` (every worker lane when omitted), an estimate that does not check required labels. Two indexed reads, nothing written. A worker claims only when `version` moved since its last claim or `queued` is above zero. Per-bearer response (`cache-control: private, max-age=0`).",
+        security: [{ bearer: ["work:claim"] }, { bearer: ["feed:read"] }],
+        parameters: [{ name: "lanes", in: "query", required: false, schema: { type: "string" }, description: "Comma-separated lanes to count for, e.g. `claude,codex`." }],
+        responses: { "200": response("The doorbell.", "#/components/schemas/Doorbell"), "501": notImplemented, ...commonErrors },
       },
     },
     "/work/claim": {
@@ -619,7 +632,17 @@ export const integrationSchemas: Record<string, unknown> = {
       version: { type: "string" },
       last_seen: { type: "string", format: "date-time" },
       status: { type: "string", enum: ["online", "offline"], description: "What the worker last reported." },
+      poll_ms: nullable("integer", { description: "The poll interval (ms) the worker reported with its last heartbeat; 15000 right after activity, up to 300000 when idle." }),
       created_at: { type: "string", format: "date-time" },
+    },
+  },
+  Doorbell: {
+    type: "object",
+    required: ["version", "queued", "ts"],
+    properties: {
+      version: { type: "integer", description: "Moves on every write that can change what a claim returns." },
+      queued: { type: "integer", description: "Tasks that look claimable for the requested lanes (labels not checked)." },
+      ts: { type: "string", format: "date-time" },
     },
   },
   Claim: {

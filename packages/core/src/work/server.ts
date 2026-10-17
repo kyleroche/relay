@@ -4,6 +4,7 @@
  *
  *   register   POST /api/v1/workers                       upsert by name; worker.registered on first sight, worker.online when it comes back
  *   heartbeat  POST /api/v1/workers/{id}/heartbeat        touch last_seen, renew the worker's leases; `offline` writes worker.offline
+ *   doorbell   GET  /api/v1/work/doorbell                 the queue version and a queued estimate; what an idle worker reads instead of claiming
  *   claim      POST /api/v1/work/claim                    the oldest queued task for the worker's lanes and labels, under a 30-minute lease
  *   start      POST /api/v1/work/{task}/start             run.started (the clone is ready and the lane is about to run)
  *   release    POST /api/v1/work/{task}/release           run.finished or run.failed plus the step.usage row; `released` just frees the lease
@@ -15,7 +16,7 @@ import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
 import { getProject } from "../db/projects.ts";
 import { getTask, type TaskRow } from "../db/tasks.ts";
-import { claimNext, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
+import { claimNext, doorbell, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
 
 export class WorkError extends Error {
@@ -33,6 +34,13 @@ export interface RegisterResult {
 
 export interface HeartbeatInput {
   status?: "online" | "offline";
+  /** The poll interval the worker is on (ms), for the workers page and `relay work status`. */
+  interval_ms?: number;
+}
+
+export interface DoorbellInput {
+  /** Count only tasks for these lanes (the worker's); every worker lane otherwise. */
+  lanes?: string[];
 }
 
 export interface HeartbeatResult {
@@ -120,7 +128,7 @@ export async function registerWorkerServer(db: Db, input: WorkerInput): Promise<
 }
 
 export async function heartbeatServer(db: Db, workerId: string, input: HeartbeatInput = {}): Promise<HeartbeatResult> {
-  const r = await heartbeatWorker(db, workerId, { ...(input.status ? { status: input.status } : {}) });
+  const r = await heartbeatWorker(db, workerId, { ...(input.status ? { status: input.status } : {}), ...(input.interval_ms ? { pollMs: input.interval_ms } : {}) });
   if (!r) throw new WorkError(`No worker ${workerId}; register first.`, 404);
   const events: EventRow[] = [];
   if (input.status === "offline") {
@@ -129,6 +137,9 @@ export async function heartbeatServer(db: Db, workerId: string, input: Heartbeat
   }
   return { ...r, events };
 }
+
+/** The doorbell: no worker row is touched, nothing is written; one cheap read for the idle loop (docs/WORKERS.md). */
+export const doorbellServer = (db: Db, input: DoorbellInput = {}): Promise<Doorbell> => doorbell(db, { ...(input.lanes?.length ? { lanes: input.lanes } : {}) });
 
 export async function claimServer(db: Db, input: ClaimInput, opts: { github?: GitHubClient | undefined } = {}): Promise<ClaimResult | null> {
   const worker = await getWorker(db, input.worker_id);

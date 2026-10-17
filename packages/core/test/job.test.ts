@@ -15,7 +15,7 @@ import { compileBrief } from "../src/brief/index.ts";
 import type { HttpFetch } from "../src/client/http.ts";
 import { httpWorkApi, localWorkApi, type WorkApi } from "../src/work/api.ts";
 import { cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, runJob, USAGE_MARKER, workDirFor, type GitHost, type LaneRunner, type PrRef } from "../src/work/job.ts";
-import { claimServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError } from "../src/work/server.ts";
+import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError } from "../src/work/server.ts";
 import { runWorker } from "../src/work/worker.ts";
 
 let db: Db;
@@ -245,6 +245,7 @@ function stubSite(): HttpFetch {
       if (path === "/api/v1/workers" && init.method === "POST") return json(201, await registerWorkerServer(db, body as never));
       if (path === "/api/v1/workers" && init.method === "GET") return json(200, { workers: await repo.workerViews(db) });
       if ((m = /^\/api\/v1\/workers\/([^/]+)\/heartbeat$/.exec(path))) return json(200, await heartbeatServer(db, m[1]!, body));
+      if (path === "/api/v1/work/doorbell") return json(200, await doorbellServer(db, { lanes: (u.searchParams.get("lanes") ?? "").split(",").filter(Boolean) }));
       if (path === "/api/v1/work/claim") return json(200, { claim: await claimServer(db, body as never) });
       if ((m = /^\/api\/v1\/work\/(.+)\/start$/.exec(path))) return json(200, await startServer(db, m[1]!, body as never));
       if ((m = /^\/api\/v1\/work\/(.+)\/release$/.exec(path))) return json(200, await releaseServer(db, m[1]!, body as never));
@@ -266,6 +267,9 @@ describe("runJob over the HTTP WorkApi against a stubbed site", () => {
     const { worker, created } = await api.register({ name: "remote", host: "remote.lan", lanes: ["claude"], version: "0.1.0" });
     expect(created).toBe(true);
     const task = await newTask("claude");
+    const bell = await api.doorbell({ lanes: ["claude"] });
+    expect(bell?.queued).toBeGreaterThanOrEqual(1);
+    expect(bell?.version).toBe(await repo.getQueueVersion(db));
     const claim = await api.claim({ worker_id: worker.id, lanes: ["claude"] });
     expect(claim?.task.id).toBe(task.id);
     const host = fakeHost();
@@ -284,6 +288,10 @@ describe("runJob over the HTTP WorkApi against a stubbed site", () => {
     // a bad token is a RelayHttpError with the status
     const bad = httpWorkApi({ site: "https://relay.example.test", token: "rly_wrong", fetch: stubSite() });
     await expect(bad.claim({ worker_id: worker.id })).rejects.toMatchObject({ status: 401 });
+    // a site that predates the doorbell answers 404: the api says null and the loop falls back to claiming
+    const older = stubSite();
+    const legacy = httpWorkApi({ site: "https://relay.example.test", token: "rly_test", fetch: (u, i) => (new URL(u).pathname.endsWith("/work/doorbell") ? Promise.resolve({ ok: false, status: 404, headers: { get: () => "application/json" }, text: async () => JSON.stringify({ title: "Not Found" }) }) : older(u, i)) });
+    expect(await legacy.doorbell()).toBeNull();
   });
 });
 
