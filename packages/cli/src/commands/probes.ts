@@ -3,7 +3,8 @@
  * only a derived status, never command output, so no token or account id can leak into a log.
  */
 import { execFile } from "node:child_process";
-import { sandboxPrerequisites } from "@relay/core";
+import { join } from "node:path";
+import { fmtMeterReadings, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites } from "@relay/core";
 import { onPath } from "./_common.ts";
 
 export type Status = "ok" | "warn" | "fail";
@@ -93,6 +94,34 @@ export async function probeTools(): Promise<Check[]> {
 export function sandboxCheck(platform: NodeJS.Platform = process.platform): Check {
   const r = sandboxPrerequisites(platform, (bin) => !!onPath(bin));
   return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
+}
+
+/** "4m", "3h", "2d": the age of a reading for the doctor line. */
+function fmtAge(ms: number): string {
+  const m = Math.round(ms / 60_000);
+  if (m < 60) return `${m}m`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+/**
+ * The plan meters relay's status line saved under `<home>/meters` (packages/core/src/meters.ts): the values and their
+ * age, stale past 48 hours (the worker stops sending them then), or what to do when there is no reading yet.
+ */
+export function metersCheck(home: string, now: number = Date.now()): Check {
+  const name = "meters";
+  const all = readMeterFiles(home, { now, maxAgeMs: Number.POSITIVE_INFINITY });
+  if (!all.length) return { status: "warn", name, detail: `no reading yet: run an interactive claude session once after relay setup (the status line writes ${join(home, "meters", "claude.json")})` };
+  const bySub = new Map<string, typeof all>();
+  for (const r of all) bySub.set(r.subscription, [...(bySub.get(r.subscription) ?? []), r]);
+  const parts: string[] = [];
+  let stale = false;
+  for (const [sub, rs] of bySub) {
+    const age = now - Date.parse(rs[0]!.captured_at);
+    if (age > METERS_MAX_AGE_MS) stale = true;
+    parts.push(`${sub}: ${fmtMeterReadings(rs)} (captured ${fmtAge(age)} ago${age > METERS_MAX_AGE_MS ? ", stale: not sent to the site" : ""})`);
+  }
+  return { status: stale ? "warn" : "ok", name, detail: parts.join("; ") };
 }
 
 /**

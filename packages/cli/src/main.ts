@@ -23,7 +23,7 @@ import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { openReady } from "./commands/_common.ts";
-import { lanesFromChecks, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { lanesFromChecks, metersCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
@@ -128,6 +128,7 @@ program
       checks.push({ status: siteMode ? "warn" : "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
     }
     checks.push({ status: cfg.gateway.apiKey ? "ok" : "warn", name: "gateway", detail: cfg.gateway.apiKey ? "AI_GATEWAY_API_KEY set (embeddings on)" : "AI_GATEWAY_API_KEY unset; retrieval uses full-text only" });
+    checks.push(metersCheck(cfg.home));
 
     for (const c of checks) console.log(`${c.status.padEnd(5)} ${c.name.padEnd(13)} ${c.detail}`);
     if (checks.some((c) => c.status === "fail")) process.exitCode = 1;

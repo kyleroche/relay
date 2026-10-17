@@ -37,6 +37,8 @@ interface SetupOpts {
   yes?: boolean;
   only?: string;
   remove?: boolean;
+  /** commander: `--no-statusline` sets false; absent means true. */
+  statusline?: boolean;
   site?: string | boolean;
   token?: string;
   invite?: string;
@@ -47,10 +49,11 @@ interface SetupOpts {
 export function registerSetup(program: Command): void {
   program
     .command("setup")
-    .description("Install session hooks and the relay MCP server into Claude Code, Codex and Grok Build configs (plan only without --yes); --site connects this machine to a hosted relay")
+    .description("Install session hooks, the relay MCP server and (Claude Code) the plan-meter status line into Claude Code, Codex and Grok Build configs (plan only without --yes); --site connects this machine to a hosted relay")
     .option("--yes", "write the planned files")
     .option("--only <cli>", "claude | codex | grok (installs even when the CLI is not detected)")
-    .option("--remove", "remove relay's hooks and MCP entries instead")
+    .option("--remove", "remove relay's hooks, status line and MCP entries instead (a status line relay replaced is restored)")
+    .option("--no-statusline", "do not install relay's Claude Code status line (it saves the plan meters Claude Code reports to ~/.harness/meters; the web app's header needs them)")
     .option("--site <url>", "site mode: the hosted relay the CLI and hooks talk to instead of a local database (stored in ~/.harness/config.json). Without --token or --invite, runs the device flow: approve the printed code at <site>/activate")
     .option("--invite <code>", "redeem an invite code from `relay invite create` for the token (no approval step)")
     .option("--token <token>", "paste a bearer token minted at <site>/tokens or with relay token create (stored in ~/.harness/credentials.json, mode 0600)")
@@ -72,7 +75,7 @@ export function registerSetup(program: Command): void {
       const siteCfg = readSiteConfig();
       if (siteCfg.site) console.log(`site mode: ${siteCfg.site}${siteCfg.token ? ` (token from ${siteCfg.tokenSource ?? "file"})` : " (no token; run relay setup --site <url>)"}\n`);
       const ctx = defaultHookContext(RELAY_ROOT);
-      const plans = planSetup(ctx, { ...(o.only ? { only: o.only as CliName } : {}), ...(o.remove ? { remove: true } : {}) });
+      const plans = planSetup(ctx, { ...(o.only ? { only: o.only as CliName } : {}), ...(o.remove ? { remove: true } : {}), statusline: o.statusline !== false });
       let pending = 0;
       for (const p of plans) {
         console.log(`\n${p.cli}${p.detected ? "" : " (not detected)"}`);

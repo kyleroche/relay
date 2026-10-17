@@ -26,6 +26,8 @@ export interface RuntimePaths {
   sessionStart: string;
   userPrompt: string;
   sessionEnd: string;
+  /** Claude Code's status-line command: saves the plan meters it is handed, then runs the user's own status line. */
+  statusLine: string;
   /** The stdio MCP entry the CLIs' configs point at. */
   mcpEntry: string;
   /** The caller workflows `relay link` copies into a repo. */
@@ -46,6 +48,7 @@ function packageAt(root: string): RuntimePaths {
     sessionStart: join(hooksDir, "session-start.mjs"),
     userPrompt: join(hooksDir, "user-prompt.mjs"),
     sessionEnd: join(hooksDir, "session-end.mjs"),
+    statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(dist, "relay-mcp.js"),
     templatesDir: join(root, "templates"),
     migrationsDir: join(dist, "migrations"),
@@ -62,6 +65,7 @@ function checkoutAt(root: string): RuntimePaths {
     sessionStart: join(hooksDir, "session-start.mjs"),
     userPrompt: join(hooksDir, "user-prompt.mjs"),
     sessionEnd: join(hooksDir, "session-end.mjs"),
+    statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(root, "packages", "mcp", "bin", "relay-mcp.mjs"),
     templatesDir: join(root, "packages", "cli", "templates"),
     migrationsDir: join(root, "packages", "core", "src", "db", "migrations"),

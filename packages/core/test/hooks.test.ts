@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { applyPlan, planSetup, spliceTomlBlock, TOML_BEGIN, TOML_END, type HookContext } from "../src/hooks/index.ts";
+import { applyPlan, planSetup, readPreviousStatusLine, spliceTomlBlock, statusLinePrevPath, TOML_BEGIN, TOML_END, type HookContext } from "../src/hooks/index.ts";
 import { readCachedBrief, writeCachedBrief, invalidateBriefCache, briefCachePath } from "../src/hooks/cache.ts";
 
 let tmp: string;
@@ -113,6 +113,77 @@ describe("hook installers", () => {
     expect(s.mcpServers.relay.command).toBe("/usr/local/bin/node");
     expect(plan!.notes.join("\n")).toContain("grok mcp add relay");
     expect(planSetup(ctx, { only: "grok" })[0]!.files.every((f) => f.action === "unchanged")).toBe(true);
+  });
+});
+
+describe("claude status line", () => {
+  const settingsPath = () => join(ctx.userHome, ".claude", "settings.json");
+  const prevPath = () => statusLinePrevPath(ctx);
+  const settings = () => JSON.parse(read(settingsPath())) as { statusLine?: { type: string; command: string; padding?: number }; hooks?: Record<string, unknown> };
+  const RELAY_CMD = "/usr/local/bin/node /opt/relay/packages/cli/hooks/statusline.mjs";
+
+  it("installs the statusLine entry on a fresh settings.json, idempotently, and explains it", () => {
+    mkdirSync(join(ctx.userHome, ".claude"));
+    const [plan] = planSetup(ctx, { only: "claude" });
+    expect(plan!.files.map((f) => [f.action, f.path])).toEqual([
+      ["create", settingsPath()],
+      ["create", join(ctx.userHome, ".claude.json")],
+    ]);
+    expect(JSON.parse(plan!.files[0]!.content).statusLine).toEqual({ type: "command", command: RELAY_CMD });
+    expect(plan!.notes.join("\n")).toMatch(/statusLine: Claude Code runs .*statusline\.mjs on every status refresh/);
+    expect(plan!.notes.join("\n")).toContain("meters/claude.json");
+    applyPlan(plan!);
+    expect(settings().statusLine).toEqual({ type: "command", command: RELAY_CMD });
+    expect(existsSync(prevPath())).toBe(false);
+    expect(planSetup(ctx, { only: "claude" })[0]!.files.every((f) => f.action === "unchanged")).toBe(true);
+  });
+
+  it("remembers a foreign status line in statusline.prev.json before replacing it, and --remove restores it", () => {
+    mkdirSync(join(ctx.userHome, ".claude"));
+    writeFileSync(settingsPath(), JSON.stringify({ statusLine: { type: "command", command: "~/.claude/my-statusline.sh", padding: 0 } }));
+    const [plan] = planSetup(ctx, { only: "claude" });
+    expect(plan!.files.map((f) => [f.action, f.path])).toEqual([
+      ["update", settingsPath()],
+      ["create", join(ctx.userHome, ".claude.json")],
+      ["create", prevPath()],
+    ]);
+    expect(plan!.notes.join("\n")).toMatch(/Your current status line is kept/);
+    applyPlan(plan!);
+    expect(settings().statusLine!.command).toBe(RELAY_CMD);
+    expect(JSON.parse(read(prevPath()))).toEqual({ type: "command", command: "~/.claude/my-statusline.sh", padding: 0 });
+    expect(readPreviousStatusLine(ctx)?.command).toBe("~/.claude/my-statusline.sh");
+    // a re-run changes nothing and does not touch the record
+    expect(planSetup(ctx, { only: "claude" })[0]!.files.map((f) => f.action)).toEqual(["unchanged", "unchanged"]);
+
+    const [removal] = planSetup(ctx, { only: "claude", remove: true });
+    expect(removal!.files.map((f) => [f.action, f.path])).toContainEqual(["delete", prevPath()]);
+    applyPlan(removal!);
+    expect(settings().statusLine).toEqual({ type: "command", command: "~/.claude/my-statusline.sh", padding: 0 });
+    expect(settings().hooks).toBeUndefined();
+    expect(existsSync(prevPath())).toBe(false);
+  });
+
+  it("--remove with no remembered status line drops relay's entry; --no-statusline leaves statusLine alone; a stale record is deleted", () => {
+    mkdirSync(join(ctx.userHome, ".claude"));
+    applyPlan(planSetup(ctx, { only: "claude" })[0]!);
+    applyPlan(planSetup(ctx, { only: "claude", remove: true })[0]!);
+    expect(settings().statusLine).toBeUndefined();
+
+    writeFileSync(settingsPath(), JSON.stringify({ statusLine: { type: "command", command: "echo mine" } }));
+    const [skip] = planSetup(ctx, { only: "claude", statusline: false });
+    expect(skip!.files).toHaveLength(2);
+    expect(JSON.parse(skip!.files[0]!.content).statusLine).toEqual({ type: "command", command: "echo mine" });
+    expect(skip!.notes.join("\n")).not.toContain("statusLine:");
+
+    // a record left behind (the user removed their own status line by hand) would make statusline.mjs run a ghost
+    writeFileSync(settingsPath(), JSON.stringify({ theme: "dark" }));
+    mkdirSync(ctx.relayHome, { recursive: true });
+    writeFileSync(prevPath(), JSON.stringify({ type: "command", command: "echo ghost" }));
+    const [plan] = planSetup(ctx, { only: "claude" });
+    expect(plan!.files.map((f) => [f.action, f.path])).toContainEqual(["delete", prevPath()]);
+    applyPlan(plan!);
+    expect(existsSync(prevPath())).toBe(false);
+    expect(settings().statusLine!.command).toBe(RELAY_CMD);
   });
 });
 

@@ -3,7 +3,7 @@
  * (read, merge, render) without writing; `applyPlan` writes it. Running plan twice yields `unchanged` for every
  * file, so `relay setup` is idempotent and can always print what it would do before it does it.
  */
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { runtimePaths } from "../runtime.ts";
@@ -34,7 +34,8 @@ export function defaultHookContext(repoRoot: string, overrides: Partial<HookCont
 
 export interface PlannedFile {
   path: string;
-  action: "create" | "update" | "unchanged";
+  /** `delete` removes the file (the remembered status line once nothing refers to it); its content is "". */
+  action: "create" | "update" | "unchanged" | "delete";
   content: string;
 }
 
@@ -46,10 +47,15 @@ export interface InstallPlan {
   notes: string[];
 }
 
+export interface PlanOptions {
+  /** Claude Code only: install relay's status line, which saves the plan meters Claude Code reports (default true). */
+  statusline?: boolean;
+}
+
 export interface Installer {
   cli: CliName;
   detect(ctx: HookContext): boolean;
-  plan(ctx: HookContext): InstallPlan;
+  plan(ctx: HookContext, opts?: PlanOptions): InstallPlan;
   /** Plan that removes relay's entries. */
   planRemove(ctx: HookContext): InstallPlan;
 }
@@ -60,10 +66,20 @@ export function planFile(path: string, content: string): PlannedFile {
   return { path, action: before === content ? "unchanged" : "update", content };
 }
 
+/** A removal, planned only when the file exists (so a re-run shows nothing to do). */
+export function planDelete(path: string): PlannedFile[] {
+  return existsSync(path) ? [{ path, action: "delete", content: "" }] : [];
+}
+
 export function applyPlan(plan: InstallPlan): string[] {
   const written: string[] = [];
   for (const f of plan.files) {
     if (f.action === "unchanged") continue;
+    if (f.action === "delete") {
+      rmSync(f.path, { force: true });
+      written.push(f.path);
+      continue;
+    }
     mkdirSync(dirname(f.path), { recursive: true });
     writeFileSync(f.path, f.content);
     written.push(f.path);
@@ -97,7 +113,7 @@ export const toJson = (v: unknown): string => JSON.stringify(v, null, 2) + "\n";
 /** Paths of the pieces hooks point at, all absolute: packages/cli/hooks and packages/mcp/bin in a checkout, dist/ in the package. */
 export function hookPaths(ctx: HookContext) {
   const r = runtimePaths(ctx.repoRoot);
-  return { hooksDir: r.hooksDir, sessionStart: r.sessionStart, userPrompt: r.userPrompt, sessionEnd: r.sessionEnd, mcpBin: r.mcpEntry };
+  return { hooksDir: r.hooksDir, sessionStart: r.sessionStart, userPrompt: r.userPrompt, sessionEnd: r.sessionEnd, statusLine: r.statusLine, mcpBin: r.mcpEntry };
 }
 
 const q = (s: string): string => (/[\s"'$`\\]/.test(s) ? `"${s.replace(/(["\\$`])/g, "\\$1")}"` : s);
@@ -107,5 +123,16 @@ export function hookCommand(ctx: HookContext, script: string, cli: CliName): str
   return `${q(ctx.node)} ${q(script)} --cli ${cli}`;
 }
 
+/** The status-line command: `<node> <statusline.mjs>`, no arguments (Claude Code passes everything on stdin). */
+export function statusLineCommand(ctx: HookContext): string {
+  return `${q(ctx.node)} ${q(hookPaths(ctx).statusLine)}`;
+}
+
+/** Where `relay setup` remembers the status line it replaced, so statusline.mjs can run it and pass its output through. */
+export const statusLinePrevPath = (ctx: Pick<HookContext, "relayHome">): string => join(ctx.relayHome, "statusline.prev.json");
+
 /** True for a hook command relay installed, in either layout, so installers can find and replace their own entries. */
 export const isRelayHookCommand = (command: string): boolean => /[\\/](?:packages[\\/]cli[\\/]hooks|dist[\\/]hooks)[\\/](?:session-start|user-prompt|session-end)\.mjs(?:\s|"|$)/.test(command);
+
+/** True for the status-line command relay installed, in either layout. */
+export const isRelayStatusLineCommand = (command: string): boolean => /[\\/](?:packages[\\/]cli[\\/]hooks|dist[\\/]hooks)[\\/]statusline\.mjs(?:\s|"|$)/.test(command);
