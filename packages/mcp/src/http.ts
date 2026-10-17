@@ -9,7 +9,9 @@
  * caller meant to authenticate and did not.
  *
  * Two ways to recognise a token: `token` (one shared secret, RELAY_MEMORY_TOKEN, granting every scope) and
- * `authorize` (the app's own lookup: RELAY_API_TOKENS or the `tokens` table, returning the scopes it carries).
+ * `authorize` (the app's own lookup: RELAY_API_TOKENS or the `tokens` table, returning the scopes it carries). The
+ * shared secret is attributed `token:shared`: `human:` is reserved for signed-in sessions, and the grant ceiling
+ * (`isHumanActor`) treats everything else as a credential that may never hand out `tokens:write`.
  */
 import { timingSafeEqual } from "node:crypto";
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
@@ -34,7 +36,7 @@ export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "s
   authorize?: (bearer: string) => Promise<Grant | undefined>;
   /** Grant the public read scopes (feed:read, memory:read) to callers without a token. Default false. */
   publicRead?: boolean;
-  /** Attribution for writes made with the shared token. */
+  /** Attribution for writes made with the shared token (default `token:shared`; never a `human:` actor). */
   actor?: string;
   /** RFC 9728 protected-resource metadata URL, added to the 401 challenge so clients can find the authorization server. */
   resourceMetadata?: string;
@@ -59,7 +61,7 @@ export function tokenMatches(presented: string | undefined, expected: string | u
 export async function resolveGrant(req: Request, opts: McpHandlerOptions): Promise<Grant | undefined> {
   const presented = bearerOf(req);
   if (!presented) return undefined;
-  if (tokenMatches(presented, opts.token)) return { scopes: ALL_SCOPES, actor: opts.actor ?? "human:web", name: "shared", expiresAt: null, source: "shared" };
+  if (tokenMatches(presented, opts.token)) return { scopes: ALL_SCOPES, actor: opts.actor ?? "token:shared", name: "shared", expiresAt: null, source: "shared" };
   if (opts.authorize) return opts.authorize(presented);
   return undefined;
 }
@@ -84,7 +86,7 @@ export function createMcpHandler(db: Db, opts: McpHandlerOptions): McpHandler {
       canWrite: false,
       scopes: grant?.scopes ?? [],
       publicRead: !!opts.publicRead,
-      actor: grant?.actor ?? (grant ? opts.actor ?? "human:web" : "anon:web"),
+      actor: grant?.actor ?? (grant ? opts.actor ?? "token:shared" : "anon:web"),
       ...(opts.embed ? { embed: opts.embed } : {}),
       ...(opts.site ? { site: opts.site } : {}),
       ...(opts.assets ? { assets: opts.assets } : {}),

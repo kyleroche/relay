@@ -492,6 +492,21 @@ describe("http handler", () => {
     expect(j3.result.content[0]!.text).toMatch(/recorded decision/);
   });
 
+  it("the shared token is a credential (token:shared), so it cannot approve a request for tokens:write", async () => {
+    const o = { issuer: "http://relay.test" };
+    const handler = createMcpHandler(db, { token: "s3cret", oauth: o });
+    const who = (await (await handler(rpc(call("relay_whoami", {}), "s3cret"))).json()) as Result;
+    expect(JSON.parse(who.result.content[0]!.text)).toMatchObject({ actor: "token:shared", name: "shared", source: "shared", authenticated: true });
+
+    const wantsApprover = await deviceAuthorization(db, { client_name: "would-be-approver", scope: "tokens:write feed:read" }, o);
+    const refused = (await (await handler(rpc(call("relay_access_approve", { user_code: wantsApprover.user_code }), "s3cret"))).json()) as Result;
+    expect(refused.result.isError).toBe(true);
+    expect(refused.result.content[0]!.text).toMatch(/never tokens:write/);
+    const plain = await deviceAuthorization(db, { client_name: "plain-reader", scope: "feed:read" }, o);
+    const ok = (await (await handler(rpc(call("relay_access_approve", { user_code: plain.user_code }), "s3cret"))).json()) as Result;
+    expect(ok.result.isError).toBeFalsy();
+  });
+
   it("authorize resolves scoped tokens from the tokens table", async () => {
     const { token } = await repo.createToken(db, { name: "feed-only", scopes: ["feed:read"], createdBy: "human:test" });
     const handler = createMcpHandler(db, {
