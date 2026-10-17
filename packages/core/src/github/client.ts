@@ -23,7 +23,11 @@ export interface GitHubClient {
   createIssue(repo: string, input: { title: string; body: string; labels?: string[] }): Promise<GitHubIssue>;
   addLabels(repo: string, issue: number, labels: string[]): Promise<void>;
   getIssue(repo: string, issue: number): Promise<GitHubIssue>;
+  /** Comment on an issue or pull request (the cloud-lane dispatch comment). */
+  createComment(repo: string, issue: number, body: string): Promise<{ id: number; html_url: string }>;
 }
+
+const toComment = (j: Record<string, unknown>): { id: number; html_url: string } => ({ id: Number(j.id ?? 0), html_url: String(j.html_url ?? "") });
 
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -72,6 +76,10 @@ export function githubFromToken(token: string, fetchImpl: GitHubFetch = (u, i) =
       assertRepo(repo);
       return toIssue(await call("GET", `/repos/${repo}/issues/${issue}`));
     },
+    async createComment(repo, issue, body) {
+      assertRepo(repo);
+      return toComment(await call("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
+    },
   };
 }
 
@@ -118,6 +126,10 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
     async getIssue(repo, issue) {
       assertRepo(repo);
       return toIssue(await api("GET", `/repos/${repo}/issues/${issue}`));
+    },
+    async createComment(repo, issue, body) {
+      assertRepo(repo);
+      return toComment(await api("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
     },
   };
 }

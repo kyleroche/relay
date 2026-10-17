@@ -11,9 +11,16 @@ import { createTask, findTaskByKey, taskView, type TaskView } from "../db/tasks.
 import type { GitHubClient } from "../github/client.ts";
 import { ulid } from "../util.ts";
 
-export const TASK_LANES = ["claude", "codex", "grok"] as const;
+/** Worker lanes execute on a machine that ran `relay work`; cloud lanes are dispatched by the site to the vendor's hosted tier. */
+export const WORKER_LANES = ["claude", "codex", "grok"] as const;
+export const CLOUD_LANES = ["claude-cloud", "codex-cloud"] as const;
+export const TASK_LANES = [...WORKER_LANES, ...CLOUD_LANES] as const;
+export type WorkerLane = (typeof WORKER_LANES)[number];
+export type CloudLane = (typeof CLOUD_LANES)[number];
 export type TaskLane = (typeof TASK_LANES)[number];
 export const isTaskLane = (s: string): s is TaskLane => (TASK_LANES as readonly string[]).includes(s);
+export const isWorkerLane = (s: string): s is WorkerLane => (WORKER_LANES as readonly string[]).includes(s);
+export const isCloudLane = (s: string): s is CloudLane => (CLOUD_LANES as readonly string[]).includes(s);
 export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
 export type TaskPriority = (typeof TASK_PRIORITIES)[number];
 export const isTaskPriority = (s: string): s is TaskPriority => (TASK_PRIORITIES as readonly string[]).includes(s);
@@ -80,7 +87,7 @@ export async function openTask(db: Db, github: GitHubClient | undefined, input: 
   // Some installations ignore labels on create (no triage permission for the token); apply them explicitly then.
   const missing = labels.filter((l) => !issue.labels.includes(l));
   if (missing.length) await github.addLabels(project.repo, issue.number, missing).catch(() => {});
-  const { task, created } = await createTask(db, { project: project.slug, repo: project.repo, issue: issue.number, idempotencyKey: key, createdBy: input.actor });
+  const { task, created } = await createTask(db, { project: project.slug, repo: project.repo, issue: issue.number, idempotencyKey: key, createdBy: input.actor, lane: input.lane });
   const events: EventRow[] = [];
   const base = { actor: input.actor, project: project.slug, repo: project.repo, issue: issue.number, lane: input.lane, url: issue.html_url };
   const opened = await writeEvent(db, { ...base, kind: "issue.opened", summary: input.title.trim(), payload: { labels, via: "relay_task_create" }, dedupe_key: `task:${task.id}:opened` });

@@ -7,3 +7,4 @@ export * from "./assets.ts";
 export * from "./tokens.ts";
 export * from "./tasks.ts";
 export * from "./webhooks.ts";
+export * from "./workers.ts";
