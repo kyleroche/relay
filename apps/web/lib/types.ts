@@ -1,5 +1,6 @@
 import type { TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
+import type { FlowSnapshot } from "./flow.ts";
 
 export type { TaskState, TaskView };
 
@@ -236,4 +237,6 @@ export interface DataSource {
   reviewAsset(id: string, review: AssetReview): Promise<Asset | null>;
   /** Copies the bytes to the public store and records the URL; null when unknown, throws when the store cannot publish. */
   publishAsset(id: string, by: string): Promise<Asset | null>;
+  /** The flow map's snapshot (lib/flow.ts): projects with work in motion, workers, and every task with its station. */
+  getFlow(): Promise<FlowSnapshot>;
 }

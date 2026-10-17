@@ -30,3 +30,4 @@ export const getAssets = (opts?: AssetListOptions) => source().getAssets(opts);
 export const getAsset = (id: string) => source().getAsset(id);
 export const reviewAsset = (id: string, review: AssetReview) => source().reviewAsset(id, review);
 export const publishAsset = (id: string, by: string) => source().publishAsset(id, by);
+export const getFlow = () => source().getFlow();

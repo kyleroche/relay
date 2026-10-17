@@ -32,6 +32,16 @@ The header is one row at `lg` and up (brand · nav · meters · avatar) and two 
 - Type: Geist Sans for prose, Geist Mono for ids, costs, tokens, timestamps, commands. Tabular figures only in columns.
 - Radius 6px. Spacing: feed rows 32px tall; detail pages use 24px gaps.
 
+## Visuals
+
+### Flow map (`/flow`, `components/flow/pipeline-map.tsx`)
+
+What it shows: everything in motion, as a transit map. Lines are lanes (claude, codex, grok in the series colours; a dashed fourth line for cloud lanes when a task rides one). Stations are where a task stands, left to right: **Queue · Claimed · Running · PR · Preview · Review · Merged**, with **Failed** as a siding under Running. Projects with work in motion are origin stops on the left with a branch into Queue; workers are depots above Running, tethered to the task they hold. Tasks are pills (`repo#n`, dwell time underneath). Merged pills leave at the right edge; nothing done or idle is drawn, so an empty map is three still lines, the depots, and one sentence.
+
+The motion rule: this is the deliberate exception to item 9 above, and the exception has its own rule: **motion means activity**. Particles run only on a segment that carries a task; a depot breathes only while it holds a claim; a pill travels only when its station changed between polls. An idle line never moves. `prefers-reduced-motion` keeps the positions and removes the travel, particles and breathing.
+
+The stations vocabulary is derived in `lib/flow.ts` and is the one to reuse elsewhere (feed strip, task pages): `queued → Queue`, `claimed → Claimed`, `running → Running`, `review → PR` (no preview ready), `→ Preview` (preview ready, nobody engaged), `→ Review` (a `pr.review` or a refused merge since the last push: a person or bot holds the decision), `done → Merged`, `failed → Failed`. `since` is when the task reached that station, not when it was opened.
+
 ## Rationale
 
 "Mission control, calm." A dashboard of gauges invites staring; a feed invites reading. The meters are small because most of the time they are fine, and they turn amber or red exactly when they are not. Light and dark both follow the OS and can be toggled; the accent is one hue so that status colors keep their meaning.

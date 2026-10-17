@@ -1,4 +1,5 @@
 /** DataSource over the in-memory dataset in ./mock.ts. */
+import { flowScene } from "./flow-mock.ts";
 import { appendEvent, dataset, MOCK_PROJECTS } from "./mock.ts";
 import type {
   DataSource,
@@ -268,5 +269,10 @@ export const mockSource: DataSource = {
     a.expires_at = null;
     appendEvent({ kind: "asset.published", actor: by, project: a.project, issue: a.issue, pr: a.pr, url: a.public_url, summary: `published: ${a.title}`, payload: { asset_id: a.id, public_url: a.public_url, version: a.version } });
     return a;
+  },
+
+  async getFlow() {
+    // the scripted scene (lib/flow-mock.ts) over the dataset's workers: one task moves every 8 s, by the clock
+    return flowScene(Date.now(), dataset().workers);
   },
 };
