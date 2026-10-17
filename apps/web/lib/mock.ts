@@ -832,6 +832,7 @@ function build(now: number): Dataset {
       status: "online",
       lanes: ["claude", "codex", "grok"],
       runsToday: runsToday(RUNNER),
+      pollMs: 15_000,
       current: inProgress(RUNNER),
     },
     {
@@ -843,6 +844,7 @@ function build(now: number): Dataset {
       status: "idle",
       lanes: ["claude", "codex"],
       runsToday: runsToday(RUNNER_ALT),
+      pollMs: 300_000,
       current: inProgress(RUNNER_ALT),
     },
     {
@@ -854,6 +856,7 @@ function build(now: number): Dataset {
       status: "offline",
       lanes: ["claude"],
       runsToday: 0,
+      pollMs: null,
       current: null,
     },
   ];

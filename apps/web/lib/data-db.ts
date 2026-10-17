@@ -218,6 +218,7 @@ export const dbSource: DataSource = {
       lanes: w.lanes.map(asLane).filter((l): l is Lane => l !== null),
       version: w.version,
       runsToday: runsToday(w.name),
+      pollMs: w.poll_ms,
       current: w.current ? { project: w.current.project, issue: w.current.issue, startedAt: w.current.claimed_at, taskId: w.current.task_id, leaseUntil: w.current.lease_until } : null,
     }));
     const known = new Set(workers.map((w) => `runner:${w.name}`));
@@ -241,6 +242,7 @@ export const dbSource: DataSource = {
         lanes,
         version: "",
         runsToday: runsToday(actor.slice("runner:".length)),
+        pollMs: null,
         current,
       });
     }

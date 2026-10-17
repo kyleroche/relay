@@ -15,10 +15,12 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 const STATUS: Record<WorkerStatus, { label: string; className: string; Icon: typeof Circle; hint: string }> = {
-  online: { label: "online", className: "text-ok", Icon: Circle, hint: "Heartbeat in the last 2 minutes." },
-  idle: { label: "idle", className: "text-muted-foreground", Icon: Pause, hint: "Last heartbeat under an hour ago; the service may be paused or the machine asleep." },
+  online: { label: "online", className: "text-ok", Icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
+  idle: { label: "idle", className: "text-muted-foreground", Icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
   offline: { label: "offline", className: "text-bad", Icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
 };
+
+const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
 
 export default async function WorkersPage() {
   const workers = await getWorkers();
@@ -29,8 +31,9 @@ export default async function WorkersPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Workers</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
           Machines you own that run <code className="mx-1 rounded bg-muted px-1 font-mono text-xs">relay work</code>. Each one registers the lanes its own
-          logins allow, heartbeats every minute, and claims the oldest queued task it can run under a 30-minute lease. Nothing here is configured from
-          the web: a machine becomes a worker with <code className="mx-1 rounded bg-muted px-1 font-mono text-xs">relay work --install --yes</code>.
+          logins allow, rings the queue&apos;s doorbell on a tick that stretches from 15 seconds to 5 minutes while nothing is queued, and claims the
+          oldest queued task it can run under a 30-minute lease. Nothing here is configured from the web: a machine becomes a worker with{" "}
+          <code className="mx-1 rounded bg-muted px-1 font-mono text-xs">relay work --install --yes</code>.
         </p>
       </section>
       {workers.length === 0 ? (
@@ -78,7 +81,10 @@ export default async function WorkersPage() {
                     <span className="ml-1 font-mono text-[11px] text-muted-foreground">since {fmtAgo(w.current.startedAt, now)}</span>
                   </p>
                 ) : (
-                  <p className="text-sm text-muted-foreground">{w.status === "offline" ? "unreachable" : "waiting for a task"}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {w.status === "offline" ? "unreachable" : "waiting for a task"}
+                    {w.status !== "offline" && w.pollMs ? <span className="ml-1 font-mono text-[11px]">(checks every {fmtInterval(w.pollMs)})</span> : null}
+                  </p>
                 )}
               </div>
               <ul className="flex flex-wrap gap-1" aria-label="Lanes and labels">
@@ -109,7 +115,8 @@ export default async function WorkersPage() {
         </ul>
         <p className="mt-3 text-sm text-muted-foreground">
           A claimed task is leased for 30 minutes and every heartbeat renews it; when a worker vanishes mid-run the lease runs out and the task is
-          queued again for the next worker. Lanes are the subscriptions the machine is logged in to; labels are extra capabilities a project can
+          queued again for the next worker. Between tasks a worker reads the doorbell (the queue version) instead of claiming, and a new task is
+          picked up within one tick: 15 seconds right after activity, at most 5 minutes after a long quiet spell. Lanes are the subscriptions the machine is logged in to; labels are extra capabilities a project can
           require with the <code className="rounded bg-muted px-1 font-mono text-xs">lane.labels</code> preference.
         </p>
       </section>

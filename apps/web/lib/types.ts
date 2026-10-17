@@ -136,6 +136,8 @@ export interface Worker {
   /** relay CLI version the worker runs; "" when unknown. */
   version: string;
   runsToday: number;
+  /** The poll interval (ms) the worker last reported; null for one that never said (an Actions runner, an older relay). */
+  pollMs: number | null;
   current: { project: string; issue: number; startedAt: string; taskId?: string; leaseUntil?: string } | null;
 }
 
