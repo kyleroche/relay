@@ -6,7 +6,7 @@ import { REPO_URL } from "@/lib/site";
 export const metadata: Metadata = { title: "Not found" };
 
 const PLACES: Array<{ href: string; label: string; detail: string }> = [
-  { href: "/", label: "What relay is", detail: "the overview: five rules, how a task flows, quick install" },
+  { href: "/", label: "Overview", detail: "what relay is: five rules, how a task flows, quick install" },
   { href: "/docs", label: "Docs", detail: "architecture, the API and MCP guide, versioning, agent readiness" },
   { href: "/docs/api", label: "API and MCP", detail: "the read API under /api/v1 and the MCP server at /mcp" },
   { href: "/openapi.json", label: "OpenAPI", detail: "the machine-readable description of /api/v1" },

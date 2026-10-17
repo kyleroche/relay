@@ -13,6 +13,16 @@
 9. Nothing animates for decoration. Motion only confirms a state change (new events, meter refresh).
 10. `/info` is the front door for newcomers and agents alike: it must read well on a phone in a chat preview.
 
+## Information architecture
+
+Three places, three jobs. Keep them that way when adding a page.
+
+- Primary nav (`components/shell/nav.tsx`): the objects a viewer looks at daily. Signed in: Feed (`/`), Tasks, Projects, Assets, Usage. Anonymous: Overview (`/`), Docs, with Sign in on the right. Five short labels fit one row at 375px; the nav wraps, never scrolls.
+- Avatar menu (`components/shell/viewer-menu.tsx`): the viewer and what they configure once. Login (with "demo" in mock mode), then Workers, Access (`/tokens`), GitHub App (`/setup/github`), the theme as System / Light / Dark, then Overview (`/info`), Docs, Sign out. Anonymous visitors have no avatar; their theme control is in the footer.
+- Footer (`components/shell/site-footer.tsx`): the public and reference pages, in this order: Overview · Docs · API · OpenAPI · llms.txt · About · Contact · Privacy · Source.
+
+The header is one row at `lg` and up (brand · nav · meters · avatar) and two rows below (brand · meter pill · avatar, then the nav), under 110px of chrome on a phone. The three plan meters show as bars at `lg` and collapse to one pill (the highest percentage, in its tone, the three windows in a tooltip) below; both link to `/usage`. The landing is "Overview" wherever it is named; its path stays `/info` for signed-in viewers and `/` for everyone else.
+
 ## Tokens
 
 - Surfaces: `--background` zinc-50 / zinc-950, `--card` one step off. Borders hairline, never shadows for separation.

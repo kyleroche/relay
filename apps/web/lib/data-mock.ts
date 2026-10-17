@@ -188,6 +188,11 @@ export const mockSource: DataSource = {
     return dataset().workers;
   },
 
+  /** Tasks need a database; the demo dataset has none (the tasks page says so). */
+  async getTasks() {
+    return [];
+  },
+
   async getModels() {
     return dataset().models;
   },

@@ -9,31 +9,29 @@ export interface NavItem {
   label: string;
 }
 
-/** The signed-in surface. */
+/**
+ * The signed-in primary nav: the objects a viewer looks at daily. Machine and access configuration (workers, tokens,
+ * the GitHub App), the theme and the reference pages live in the avatar menu; see DESIGN.md, "Information architecture".
+ */
 export const NAV: readonly NavItem[] = [
   { href: "/", label: "Feed" },
   { href: "/tasks", label: "Tasks" },
   { href: "/projects", label: "Projects" },
   { href: "/assets", label: "Assets" },
   { href: "/usage", label: "Usage" },
-  { href: "/workers", label: "Workers" },
-  { href: "/tokens", label: "Access" },
-  { href: "/setup/github", label: "GitHub" },
-  { href: "/info", label: "Info" },
-  { href: "/docs", label: "Docs" },
 ];
 
-/** What an anonymous visitor can open: the landing is at / for them, so no separate Info entry. */
+/** What an anonymous visitor can open: the landing is at / for them, so Overview points there. Sign in sits on the right. */
 export const PUBLIC_NAV: readonly NavItem[] = [
   { href: "/", label: "Overview" },
   { href: "/docs", label: "Docs" },
-  { href: "/about", label: "About" },
 ];
 
+/** Five short labels fit one row at 375px, so the nav wraps rather than scrolls. */
 export function Nav({ items = NAV, className }: { items?: readonly NavItem[]; className?: string }) {
   const pathname = usePathname();
   return (
-    <nav aria-label="Primary" className={cn("flex items-center gap-0.5 overflow-x-auto text-sm [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", className)}>
+    <nav aria-label="Primary" className={cn("flex flex-wrap items-center gap-0.5 text-sm", className)}>
       {items.map((item) => {
         const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
         return (
