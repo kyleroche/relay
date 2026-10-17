@@ -258,9 +258,9 @@ export async function decideDevice(db: Db, userCode: string, decision: { status:
   return getDeviceByUserCode(db, userCode);
 }
 
-/** Mark approved → redeemed and record the token, once; undefined if someone else got there first. */
-export async function redeemDevice(db: Db, deviceCodeHash: string, tokenId: string): Promise<boolean> {
-  const r = await db.query(`UPDATE oauth_device_codes SET status = 'redeemed', token_id = $2 WHERE device_code_hash = $1 AND status = 'approved' RETURNING device_code_hash`, [deviceCodeHash, tokenId]);
+/** Mark approved → redeemed and record the token, once and only while the code is live; false if someone else got there first or it expired. */
+export async function redeemDevice(db: Db, deviceCodeHash: string, tokenId: string, now: Date = new Date()): Promise<boolean> {
+  const r = await db.query(`UPDATE oauth_device_codes SET status = 'redeemed', token_id = $2 WHERE device_code_hash = $1 AND status = 'approved' AND expires_at > $3 RETURNING device_code_hash`, [deviceCodeHash, tokenId, now]);
   return r.length > 0;
 }
 

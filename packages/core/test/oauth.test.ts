@@ -2,12 +2,14 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
+import * as oauthDb from "../src/db/oauth.ts";
 import { findToken, TOKEN_SCOPES } from "../src/db/tokens.ts";
 import { getSetting, openValue, putSetting, sealValue } from "../src/db/settings.ts";
 import { newUserCode, normalizeUserCode, parseDuration, pkceChallenge, pkceVerifier, redirectUriMatches, validRedirectUri, verifyPkce } from "../src/oauth/codes.ts";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   authorizationServerMetadata,
+  CLIENT_NAME_PATTERN,
   createInvite,
   decideDeviceRequest,
   denyAuthorization,
@@ -24,6 +26,7 @@ import {
   listPendingAccess,
   listRecentAccess,
   lookupDeviceRequest,
+  MAX_PENDING_DEVICE_REQUESTS,
   clientOrigin,
   purgeAccess,
   removeClient,
@@ -185,7 +188,7 @@ describe("authorization code with PKCE", () => {
     expect("redirectError" in noPkce && new URL(noPkce.redirectError).searchParams.get("error")).toBe("invalid_request");
     const badScope = await validateAuthorizeRequest(db, { client_id: reg.client_id, redirect_uri: "https://other.example/cb", response_type: "code", code_challenge: pkceChallenge(pkceVerifier()), scope: "root:all" }, o);
     expect("redirectError" in badScope && new URL(badScope.redirectError).searchParams.get("error")).toBe("invalid_scope");
-    const badResource = await validateAuthorizeRequest(db, { client_id: reg.client_id, redirect_uri: "https://other.example/cb", response_type: "code", code_challenge: pkceChallenge(pkceVerifier()), resource: "https://elsewhere.example" }, o);
+    const badResource = await validateAuthorizeRequest(db, { client_id: reg.client_id, redirect_uri: "https://other.example/cb", response_type: "code", code_challenge: pkceChallenge(pkceVerifier()), scope: "feed:read", resource: "https://elsewhere.example" }, o);
     expect("redirectError" in badResource && new URL(badResource.redirectError).searchParams.get("error")).toBe("invalid_target");
     await fails(registerClient(db, { client_name: "x", redirect_uris: ["http://bot.example/cb"] }, o), "invalid_redirect_uri");
     await fails(registerClient(db, { redirect_uris: ["https://bot.example/cb"] }, o), "invalid_client_metadata");
@@ -215,7 +218,8 @@ describe("device flow", () => {
     expect(d.verification_uri_complete).toBe(`https://relay.test/activate?code=${d.user_code}`);
     expect(d.interval).toBe(5);
     const requested = events.find((e) => e.kind === "access.requested");
-    expect(requested?.summary).toContain(d.user_code);
+    expect(requested?.summary).toBe(`client "relay-cli@studio" asks for access: approve ${d.user_code} at https://relay.test/activate`);
+    expect(requested?.payload.scopes).toEqual(["feed:read", "memory:read", "memory:write"]);
     expect(requested?.payload.approve_api).toBe(`/api/v1/access/${d.user_code}/approve`);
     expect((await listPendingAccess(db, o)).map((p) => p.user_code)).toContain(d.user_code);
 
@@ -371,17 +375,22 @@ describe("revocation", () => {
 
 describe("sealed settings", () => {
   it("seal and open round-trip under one secret and fail under another", async () => {
-    const sealed = sealValue("-----BEGIN RSA PRIVATE KEY-----\nabc\n", "s3cret-s3cret-s3cret");
+    const secret = "s3cret-s3cret-s3cret-s3cret-s3cret-s3cret";
+    const other = "another-secret-value-of-thirty-two-chars";
+    const sealed = sealValue("-----BEGIN RSA PRIVATE KEY-----\nabc\n", secret);
     expect(sealed.startsWith("v1.")).toBe(true);
-    expect(openValue(sealed, "s3cret-s3cret-s3cret")).toBe("-----BEGIN RSA PRIVATE KEY-----\nabc\n");
-    expect(openValue(sealed, "another-secret-value")).toBeUndefined();
-    expect(openValue("v1.garbage", "s3cret-s3cret-s3cret")).toBeUndefined();
+    expect(openValue(sealed, secret)).toBe("-----BEGIN RSA PRIVATE KEY-----\nabc\n");
+    expect(openValue(sealed, other)).toBeUndefined();
+    expect(openValue("v1.garbage", secret)).toBeUndefined();
     await putSetting(db, "github_app.id", "12345");
-    await putSetting(db, "github_app.private_key", "pem", { secret: "s3cret-s3cret-s3cret" });
+    await putSetting(db, "github_app.private_key", "pem", { secret });
     expect(await getSetting(db, "github_app.id")).toBe("12345");
-    expect(await getSetting(db, "github_app.private_key", { secret: "s3cret-s3cret-s3cret" })).toBe("pem");
-    expect(await getSetting(db, "github_app.private_key", { secret: "wrong-secret-value" })).toBeUndefined();
+    expect(await getSetting(db, "github_app.private_key", { secret })).toBe("pem");
+    expect(await getSetting(db, "github_app.private_key", { secret: other })).toBeUndefined();
     expect(await getSetting(db, "github_app.private_key")).toBeUndefined();
+    // a short secret is refused with the way to make a good one, before anything is sealed
+    expect(() => sealValue("pem", "s".repeat(31))).toThrow(/at least 32 characters.*openssl rand -hex 32/);
+    expect(() => sealValue("pem", "s".repeat(32))).not.toThrow();
   });
 });
 
@@ -553,5 +562,75 @@ describe("the grant ceiling: a bot never grants more than it holds, and never to
     expect(ok.invite.scopes).toEqual(["tasks:read", "tasks:write"]);
     expect((await exchangeToken(cdb, { grant_type: GRANT_INVITE, invite: ok.code }, o)).token_name).toBe("oauth:within");
     expect((await createInvite(cdb, { name: "by-a-person", scopes: ["tokens:write"], createdBy: "human:kyle" }, o)).invite.scopes).toEqual(["tokens:write"]);
+  });
+});
+
+describe("hardening: scopes are explicit, client names are plain, approvals and pending requests are bounded", () => {
+  // Its own database: the pending-request cap counts site-wide.
+  let hdb: Db;
+  beforeAll(async () => {
+    hdb = await openDb({ file: ":memory:" });
+    await migrate(hdb);
+  });
+  afterAll(async () => {
+    await hdb.close();
+  });
+
+  it("an empty scope is invalid_scope on the device and authorize endpoints; registration still defaults to the catalogue", async () => {
+    await fails(deviceAuthorization(hdb, { client_name: "no-scope" }, o), "invalid_scope");
+    await fails(deviceAuthorization(hdb, { client_name: "blank-scope", scope: "   " }, o), "invalid_scope");
+    expect((await listClients(hdb, o)).map((c) => c.name)).not.toContain("no-scope"); // refused before the client row exists
+    const reg = await registerClient(hdb, { client_name: "Defaulted", redirect_uris: ["https://d.example/cb"] }, o);
+    expect(reg.scope.split(" ").sort()).toEqual([...TOKEN_SCOPES].sort());
+    const empty = await validateAuthorizeRequest(hdb, { client_id: reg.client_id, redirect_uri: "https://d.example/cb", response_type: "code", code_challenge: pkceChallenge(pkceVerifier()) }, o);
+    expect("redirectError" in empty && new URL(empty.redirectError).searchParams.get("error")).toBe("invalid_scope");
+  });
+
+  it("client_name on the device endpoint and on invite redemption is 1-40 plain characters", async () => {
+    const e = await fails(deviceAuthorization(hdb, { client_name: "x".repeat(41), scope: "feed:read" }, o), "invalid_request");
+    expect(e.description).toMatch(/client_name must be 1 to 40 characters/);
+    await fails(deviceAuthorization(hdb, { client_name: "bad<script>", scope: "feed:read" }, o), "invalid_request");
+    await fails(deviceAuthorization(hdb, { client_name: "new\nline", scope: "feed:read" }, o), "invalid_request");
+    const ok = await deviceAuthorization(hdb, { client_name: "relay-cli@studio.local:2 +ok", scope: "feed:read" }, o);
+    expect(ok.user_code).toMatch(/^RLAY-/);
+    expect(CLIENT_NAME_PATTERN.test("relay-cli@my-mac")).toBe(true);
+
+    const inv = await createInvite(hdb, { name: "redeemer", scopes: ["feed:read"], uses: 1, createdBy: "human:kyle" }, o);
+    const bad = await fails(exchangeToken(hdb, { grant_type: GRANT_INVITE, invite: inv.code, client_name: "y".repeat(41) }, o), "invalid_request");
+    expect(bad.description).toMatch(/client_name must be 1 to 40 characters/);
+    expect((await listInvites(hdb, { now: new Date(clock) })).find((i) => i.id === inv.invite.id)?.uses_left).toBe(1); // a refused request costs no use
+    expect((await exchangeToken(hdb, { grant_type: GRANT_INVITE, invite: inv.code, client_name: "fine name" }, o)).token_name).toBe("oauth:redeemer");
+  });
+
+  it("an approved code that the client never collects expires like a pending one, at the server and in the row", async () => {
+    const d = await deviceAuthorization(hdb, { client_name: "slow-poller", scope: "feed:read" }, o);
+    await decideDeviceRequest(hdb, d.user_code, "approve", "human:kyle", o);
+    tick(DEVICE_CODE_TTL_SECONDS + 1);
+    await fails(exchangeToken(hdb, { grant_type: GRANT_DEVICE_CODE, device_code: d.device_code, client_id: d.client_id }, o), "expired_token");
+    expect((await listClients(hdb, o)).find((c) => c.client_id === d.client_id)?.live_tokens).toBe(0);
+    // the query itself refuses as well, whatever the caller believed about the clock
+    const row = await oauthDb.getDeviceByCode(hdb, d.device_code);
+    expect(row?.status).toBe("approved");
+    expect(await oauthDb.redeemDevice(hdb, row!.device_code_hash, "tok_x", new Date(clock))).toBe(false);
+    expect((await oauthDb.getDeviceByCode(hdb, d.device_code))?.status).toBe("approved");
+  });
+
+  it("refuses new device requests while 20 are pending, and takes them again once some are decided", async () => {
+    const pendingNow = (await listPendingAccess(hdb, o)).length;
+    const made: string[] = [];
+    for (let i = pendingNow; i < MAX_PENDING_DEVICE_REQUESTS; i++) made.push((await deviceAuthorization(hdb, { client_name: `flood-${i}`, scope: "feed:read" }, o)).user_code);
+    const e = await fails(deviceAuthorization(hdb, { client_name: "one-too-many", scope: "feed:read" }, o), "slow_down");
+    expect(e.status).toBe(429);
+    expect((await listClients(hdb, o)).map((c) => c.name)).not.toContain("one-too-many");
+    await decideDeviceRequest(hdb, made[0]!, "deny", "human:kyle", o);
+    expect((await deviceAuthorization(hdb, { client_name: "after-a-decision", scope: "feed:read" }, o)).user_code).toMatch(/^RLAY-/);
+  });
+
+  it("the ceiling has words for minting a token by hand", () => {
+    const e = grantCeilingError("token:ci", ["feed:read", "tokens:write"], ["feed:read"], o, "mint");
+    expect(e?.status).toBe(403);
+    expect(e?.description).toContain("a bot can mint tokens only for scopes it holds itself, and never tokens:write; ask a person to create this one at https://relay.test/tokens");
+    expect(grantCeilingError("token:ci", ["feed:read"], ["feed:read"], o, "mint")).toBeUndefined();
+    expect(grantCeilingError("human:kyle", ["tokens:write"], undefined, o, "mint")).toBeUndefined();
   });
 });

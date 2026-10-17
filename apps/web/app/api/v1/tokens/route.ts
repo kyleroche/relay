@@ -1,7 +1,8 @@
-import { isTokenScope, repo, TOKEN_SCOPES } from "@relay/core";
+import { grantCeilingError, isTokenScope, repo, TOKEN_SCOPES } from "@relay/core";
 import { api, callerGrant, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { needsDb, readJson, str } from "@/lib/integrations";
+import { oauthOptions } from "@/lib/oauth";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,9 @@ export const GET = api(
 
 /**
  * operationId: createToken. Body: { name, scopes: string[] }. Mints a bearer token for this site and returns the
- * plaintext once, with the row. A signed-in viewer (the /tokens page) or a token carrying tokens:write may call it.
+ * plaintext once, with the row. A signed-in viewer (the /tokens page) or a token carrying tokens:write may call it; a
+ * token may mint only scopes it holds itself and never tokens:write (403, `grantCeilingError`), the same ceiling as
+ * approvals and invites, so one approved bot cannot mint its way to every scope.
  */
 export const POST = api(
   async (req) => {
@@ -37,7 +40,10 @@ export const POST = api(
     if (!scopes.length) return problem(400, "Bad Request", `scopes is required; one or more of ${TOKEN_SCOPES.join(", ")}.`, instance, { parameter: "scopes" });
     if (bad.length) return problem(400, "Bad Request", `Unknown scope(s): ${bad.join(", ")}. Valid: ${TOKEN_SCOPES.join(", ")}.`, instance, { parameter: "scopes" });
     const grant = await callerGrant(req);
-    const { token, row } = await repo.createToken(await getDb(), { name, scopes, createdBy: grant?.actor ?? "token:unknown" });
+    const actor = grant?.actor ?? "token:unknown";
+    const ceiling = grantCeilingError(actor, scopes, grant?.scopes ?? [], oauthOptions(), "mint");
+    if (ceiling) return problem(403, "Forbidden", ceiling.description, instance, { error: ceiling.code, scopes: grant?.scopes ?? [] });
+    const { token, row } = await repo.createToken(await getDb(), { name, scopes, createdBy: actor });
     return json({ ...row, token }, { status: 201, headers: { "cache-control": "no-store" } });
   },
   { scope: "tokens:write" },

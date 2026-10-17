@@ -52,7 +52,7 @@ export class OAuthError extends Error {
   constructor(
     readonly code: OAuthErrorCode,
     readonly description: string,
-    readonly status: 400 | 401 | 403 | 500 = 400,
+    readonly status: 400 | 401 | 403 | 429 | 500 = 400,
   ) {
     super(`${code}: ${description}`);
     this.name = "OAuthError";
@@ -114,10 +114,15 @@ export function protectedResourceMetadata(issuer: string): Record<string, unknow
 
 // ---------- scopes ----------
 
-/** Validate requested scopes against the catalogue and, when a client registered a ceiling, against it. */
-export function resolveScopes(raw: string | string[] | null | undefined, client?: Pick<q.OAuthClientRow, "scopes"> | null, fallback: readonly string[] = TOKEN_SCOPES): TokenScope[] {
+/**
+ * Validate requested scopes against the catalogue and, when a client registered a ceiling, against it. An empty
+ * request is `invalid_scope` unless the caller names a `fallback` (registration defaults to the whole catalogue as a
+ * ceiling; a refresh defaults to the grant's own scopes): a grant must say what it is for, never get everything.
+ */
+export function resolveScopes(raw: string | string[] | null | undefined, client?: Pick<q.OAuthClientRow, "scopes"> | null, fallback?: readonly string[]): TokenScope[] {
   const requested = parseScopeParam(raw);
-  const list = requested.length ? requested : [...fallback];
+  if (!requested.length && !fallback) throw new OAuthError("invalid_scope", `scope is required: one or more of ${TOKEN_SCOPES.join(", ")}, space-separated.`);
+  const list = requested.length ? requested : [...fallback!];
   const bad = list.filter((s) => !isTokenScope(s));
   if (bad.length) throw new OAuthError("invalid_scope", `Unknown scope(s): ${bad.join(", ")}. Valid: ${TOKEN_SCOPES.join(", ")}.`);
   if (client?.scopes.length) {
@@ -191,7 +196,7 @@ export async function registerClient(db: Db, body: ClientRegistrationRequest, o:
   if (badUri.length) throw new OAuthError("invalid_redirect_uri", `Redirect URIs must be https, loopback http, or a private-use scheme: ${badUri.join(", ")}.`);
   const method = str(body.token_endpoint_auth_method) ?? "none";
   if (method !== "none" && method !== "client_secret_post") throw new OAuthError("invalid_client_metadata", "token_endpoint_auth_method must be none or client_secret_post.");
-  const scopes = resolveScopes(str(body.scope), null);
+  const scopes = resolveScopes(str(body.scope), null, TOKEN_SCOPES);
   const secret = method === "client_secret_post" ? opaqueSecret("rcs_") : undefined;
   const clientId = "rc_" + randomBytes(12).toString("base64url");
   const row = await q.insertClient(db, {
@@ -438,7 +443,8 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     if (!d) throw new OAuthError("invalid_grant", "Unknown device_code.");
     const presentedClient = str(p.client_id);
     if (presentedClient && presentedClient !== d.client_id) throw new OAuthError("invalid_grant", "The device code belongs to another client.");
-    if (isPast(o, d.expires_at) && d.status === "pending") throw new OAuthError("expired_token", "The device code expired; start again.");
+    // An approval does not outlive the code: an approved request the client never collected expires like a pending one.
+    if ((d.status === "pending" || d.status === "approved") && isPast(o, d.expires_at)) throw new OAuthError("expired_token", "The device code expired; start again.");
     const now = new Date(nowMs(o));
     const tooSoon = d.last_polled_at && (now.getTime() - new Date(d.last_polled_at).getTime()) / 1000 < d.interval_seconds;
     await q.touchDevicePoll(db, d.device_code_hash, now);
@@ -451,7 +457,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     const client = (await q.getClient(db, d.client_id))!;
     const actor = d.actor ?? "human:unknown";
     const { response, row: tok } = await mint(db, o, { tokenName: tokenNameFor(client.name), scopes: d.scopes as TokenScope[], actor, clientId: client.client_id });
-    if (!(await q.redeemDevice(db, d.device_code_hash, tok.id))) {
+    if (!(await q.redeemDevice(db, d.device_code_hash, tok.id, now))) {
       await revokeTokenById(db, tok.id);
       throw new OAuthError("invalid_grant", "The device code was already redeemed.");
     }
@@ -464,6 +470,9 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     if (!code) throw new OAuthError("invalid_request", "invite is required.");
     const invite = await q.getInviteByCode(db, code);
     if (!invite) throw new OAuthError("invalid_grant", "Unknown invite code.");
+    // Validate the optional client_name before spending the invite: a bad request must not cost a use.
+    const redeemerName = str(p.client_name);
+    if (redeemerName !== undefined) checkClientName(redeemerName, "invalid_request");
     const spent = await q.consumeInvite(db, code, new Date(nowMs(o)));
     if (!spent) {
       const why = invite.revoked_at ? "was revoked" : isPast(o, invite.expires_at) ? "expired" : "has no uses left";
@@ -471,7 +480,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     }
     // The invite names the token; a client registered for the call is optional and only labels the lineage.
     const client = str(p.client_id) ? await authenticateClient(db, p, false) : undefined;
-    const clientId = client?.client_id ?? (await ensureInviteClient(db, str(p.client_name) ?? invite.name)).client_id;
+    const clientId = client?.client_id ?? (await ensureInviteClient(db, redeemerName ?? invite.name)).client_id;
     const actor = `invite:${invite.id}`;
     const { response, row: tok } = await mint(db, o, { tokenName: tokenNameFor(invite.name), scopes: invite.scopes as TokenScope[], actor, clientId });
     await emit(db, o, { kind: "access.granted", actor: invite.created_by, summary: `${invite.name} redeemed invite ${invite.id} (${scopeString(invite.scopes)}; ${spent.uses_left} use(s) left)`, payload: { via: "invite", invite_id: invite.id, token_id: tok.id, scopes: invite.scopes, uses_left: spent.uses_left } });
@@ -506,19 +515,43 @@ export interface DeviceAuthorizationResponse {
   client_id: string;
 }
 
+/**
+ * What a client may call itself when it registers on the fly (`POST /oauth/device` with `client_name`, an invite
+ * redemption's `client_name`): short and plain, because the name is read aloud on /activate, lands in feed summaries
+ * and becomes the token's name (`oauth:<name>`).
+ */
+export const CLIENT_NAME_PATTERN = /^[\w .@:+-]{1,40}$/;
+export const CLIENT_NAME_RULE = "client_name must be 1 to 40 characters: letters, digits, space, and . _ @ : + -";
+
+function checkClientName(name: string | undefined, code: OAuthErrorCode): string {
+  if (!name) throw new OAuthError(code, "client_name is required.");
+  if (!CLIENT_NAME_PATTERN.test(name)) throw new OAuthError(code, `${CLIENT_NAME_RULE}.`);
+  return name;
+}
+
+/** Device requests waiting for a decision, site-wide, before new ones are refused: anonymous callers cannot flood /activate. */
+export const MAX_PENDING_DEVICE_REQUESTS = 20;
+
 export async function deviceAuthorization(db: Db, p: DeviceAuthorizationParams, o: OAuthServerOptions): Promise<DeviceAuthorizationResponse> {
+  const now = new Date(nowMs(o));
   let client: q.OAuthClientRow | undefined;
+  let scopes: TokenScope[];
   if (str(p.client_id)) {
     client = await q.getClient(db, str(p.client_id)!);
     if (!client) throw new OAuthError("invalid_client", "Unknown client_id.", 401);
     if (!client.grant_types.includes(GRANT_DEVICE_CODE)) throw new OAuthError("unauthorized_client", "This client is not registered for the device_code grant.");
+    scopes = resolveScopes(p.scope, client);
   } else {
+    // Everything is validated before the client row exists, so a refused request leaves nothing behind.
     const name = str(p.client_name);
     if (!name) throw new OAuthError("invalid_request", "client_id or client_name is required.");
-    if (name.length > 80) throw new OAuthError("invalid_request", "client_name must be at most 80 characters.");
-    client = await q.insertClient(db, { client_id: "rc_" + randomBytes(12).toString("base64url"), name, redirect_uris: [], grant_types: [GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN], token_endpoint_auth_method: "none", scopes: [], created_by: "anon:device" });
+    checkClientName(name, "invalid_request");
+    scopes = resolveScopes(p.scope, null);
   }
-  const scopes = resolveScopes(p.scope, client);
+  if ((await q.listPendingDevices(db, now)).length >= MAX_PENDING_DEVICE_REQUESTS) {
+    throw new OAuthError("slow_down", `${MAX_PENDING_DEVICE_REQUESTS} access requests are already waiting for a decision; try again after some are decided or expire.`, 429);
+  }
+  client ??= await q.insertClient(db, { client_id: "rc_" + randomBytes(12).toString("base64url"), name: str(p.client_name)!, redirect_uris: [], grant_types: [GRANT_DEVICE_CODE, GRANT_REFRESH_TOKEN], token_endpoint_auth_method: "none", scopes: [], created_by: "anon:device" });
   let userCode = newUserCode();
   for (let i = 0; i < 5 && (await q.userCodeTaken(db, userCode)); i++) userCode = newUserCode();
   const deviceCode = opaqueSecret("rdc_");
@@ -526,10 +559,12 @@ export async function deviceAuthorization(db: Db, p: DeviceAuthorizationParams, 
   const row = await q.insertDeviceCode(db, { device_code: deviceCode, user_code: userCode, client_id: client.client_id, scopes, interval_seconds: DEVICE_POLL_INTERVAL_SECONDS, expires_at: expiresAt });
   const verification_uri = `${o.issuer}/activate`;
   const verification_uri_complete = `${verification_uri}?code=${encodeURIComponent(userCode)}`;
+  // The summary is a fixed sentence with the (pattern-checked) name quoted; the scopes travel in the payload only, so
+  // a client cannot write its own feed line.
   await emit(db, o, {
     kind: "access.requested",
     actor: `bot:${client.name}`,
-    summary: `${client.name} asks for access (${scopeString(scopes)}): approve ${userCode} at ${verification_uri}`,
+    summary: `client "${client.name}" asks for access: approve ${userCode} at ${verification_uri}`,
     payload: { user_code: userCode, client_id: client.client_id, client_name: client.name, scopes, verification_uri, verification_uri_complete, expires_at: expiresAt.toISOString(), approve_api: `/api/v1/access/${encodeURIComponent(userCode)}/approve` },
     dedupe_key: `access:${userCode}:requested`,
   });
@@ -556,7 +591,7 @@ export const isHumanActor = (actor: string): boolean => actor.startsWith("human:
  * scopes it holds itself (`held`), never `tokens:write`: a bot that could approve a wider request, or mint another
  * approver, would turn one approved token into every token. Returns the refusal to throw, or undefined when allowed.
  */
-export function grantCeilingError(actor: string, requested: readonly string[], held: readonly string[] | undefined, o: OAuthServerOptions, what: "approve" | "invite" = "approve"): OAuthError | undefined {
+export function grantCeilingError(actor: string, requested: readonly string[], held: readonly string[] | undefined, o: OAuthServerOptions, what: "approve" | "invite" | "mint" = "approve"): OAuthError | undefined {
   if (isHumanActor(actor)) return undefined;
   const have = new Set(held ?? []);
   const over = requested.filter((s) => s === APPROVER_SCOPE || !have.has(s));
@@ -565,7 +600,9 @@ export function grantCeilingError(actor: string, requested: readonly string[], h
   const text =
     what === "approve"
       ? `a bot can approve only scopes it holds itself, and never tokens:write; ask a person to approve this one at ${site}/activate`
-      : `a bot can mint invites only for scopes it holds itself, and never tokens:write; ask a person to create this one at ${site}/tokens`;
+      : what === "invite"
+        ? `a bot can mint invites only for scopes it holds itself, and never tokens:write; ask a person to create this one at ${site}/tokens`
+        : `a bot can mint tokens only for scopes it holds itself, and never tokens:write; ask a person to create this one at ${site}/tokens`;
   return new OAuthError("invalid_scope", `${text} (over the ceiling: ${over.join(", ")}).`, 403);
 }
 
