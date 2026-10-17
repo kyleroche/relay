@@ -66,7 +66,7 @@ export const LICENSE = "Apache-2.0. Read AGENTS.md first if you want to contribu
 export const ACCESS_INTRO = "No person hands you a token. Register and ask, a person approves once, then retry:";
 export const ACCESS_STEPS: string[] = [
   `POST ${SITE_URL}/oauth/device with client_name=<your name> and scope=<space-separated scopes> (tasks:read tasks:write events:write webhooks:write for a task bot). The reply has device_code, user_code (RLAY-XXXX) and verification_uri.`,
-  `Tell the person "approve RLAY-XXXX at ${SITE_URL}/activate" (or a bot holding tokens:write calls POST ${SITE_URL}/api/v1/access/RLAY-XXXX/approve). Poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, device_code and client_id every 5 s until it returns access_token (24 h) and refresh_token (90 d).`,
+  `Tell the person "approve RLAY-XXXX at ${SITE_URL}/activate" (or a bot holding tokens:write approves it with the relay_access_approve MCP tool or POST ${SITE_URL}/api/v1/access/RLAY-XXXX/approve, for scopes it holds itself). Poll POST ${SITE_URL}/oauth/token with grant_type=urn:ietf:params:oauth:grant-type:device_code, device_code and client_id every 5 s until it returns access_token (24 h) and refresh_token (90 d).`,
   `Call ${SITE_URL}/mcp or ${SITE_URL}/api/v1/* with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before it expires. relay_whoami or GET ${SITE_URL}/api/v1/whoami confirm who you are.`,
 ];
 /** What a person pastes into an agent (bot or a coding agent on a machine with logins) so it connects by itself. The Access page shows this instead of a token form. */

@@ -27,7 +27,7 @@ export function serverCard() {
     name: "relay",
     version: APP_VERSION,
     description:
-      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory, asset, task (relay_task_*) and external-event (relay_event_log) tools. The same tools the stdio server (relay-mcp) exposes to the CLIs.",
+      "relay's tools over Streamable HTTP: two always-public tools (what this deployment is, how relay works), feed and project reads, token-gated memory, asset, task (relay_task_*), external-event (relay_event_log), webhook (relay_webhook_*) and, for a tokens:write bot, access and invite tools (relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke: approve other agents' device codes and mint invites without the Access page; a bot grants only scopes it holds and never tokens:write). The same tools the stdio server (relay-mcp) exposes to the CLIs.",
     url: `${SITE_URL}/mcp`,
     transport: "streamable-http",
     stateless: true,
@@ -43,7 +43,7 @@ export function serverCard() {
       token_issuance: "OAuth 2.1 at this site (register at /oauth/register, authorization code with PKCE S256, or the device flow approved at /activate), an invite code from relay invite create, or relay token create / the /tokens page (the hash is stored, the token shown once)",
       how_to_get_access: [
         `POST ${SITE_URL}/oauth/device with client_name and scope (registers you); note device_code, user_code, verification_uri`,
-        `ask the person to approve user_code at ${SITE_URL}/activate (or a tokens:write bot posts to ${SITE_URL}/api/v1/access/{user_code}/approve); poll POST ${SITE_URL}/oauth/token grant_type=urn:ietf:params:oauth:grant-type:device_code until access_token arrives`,
+        `ask the person to approve user_code at ${SITE_URL}/activate (or a tokens:write bot posts to ${SITE_URL}/api/v1/access/{user_code}/approve or calls the relay_access_approve tool on ${SITE_URL}/mcp; a bot can approve only scopes it holds itself, never tokens:write); poll POST ${SITE_URL}/oauth/token grant_type=urn:ietf:params:oauth:grant-type:device_code until access_token arrives`,
         `retry /mcp with Authorization: Bearer <access_token>; refresh with grant_type=refresh_token before 24 h; relay_whoami tells you what you are`,
         `no browser anywhere: redeem an invite code with grant_type=urn:relay:invite; a browser client uses POST /oauth/register then GET /oauth/authorize (PKCE S256)`,
       ],

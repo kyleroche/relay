@@ -1,25 +1,34 @@
 /**
  * The relay MCP server: one tool set for every transport. Memory tools over the shared Postgres memory, public read
- * tools over the feed and projects, and asset tools over the asset library. One factory serves stdio and HTTP; the
- * granted scopes decide what runs (stdio: everything; HTTP: the bearer token's scopes, plus the read scopes when the
- * deployment allows public read). Every result is plain text capped at RESULT_TOKENS so a tool call can never blow
- * up a session's context.
+ * tools over the feed and projects, asset tools over the asset library, task, webhook and external-event tools for
+ * bots, and the access and invite tools (tokens:write) that let one trusted bot approve other agents' device codes
+ * and mint invites without anyone opening the Access page. One factory serves stdio and HTTP; the granted scopes
+ * decide what runs (stdio: everything; HTTP: the bearer token's scopes, plus the read scopes when the deployment
+ * allows public read). Every result is plain text capped at RESULT_TOKENS so a tool call can never blow up a
+ * session's context.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   approxTokens,
   compileBrief,
+  createInvite,
+  decideDeviceRequest,
   EXTERNAL_KIND,
   finalizeFromKey,
+  GRANT_INVITE,
   invalidateBriefCache,
   isTaskState,
+  listRecentAccess,
   matchingDecisions,
   mergedPreferences,
+  OAuthError,
   openTask,
+  parseDuration,
   renderDecision,
   renderPreference,
   repo,
+  revokeInvite,
   safeFilename,
   sniffMime,
   TASK_LANES,
@@ -29,11 +38,13 @@ import {
   TOKEN_SCOPES,
   ulid,
   uploadKeyFor,
+  type AccessRequestView,
   type AssetRow,
   type AssetStore,
   type CompileBriefOptions,
   type Db,
   type GitHubClient,
+  type OAuthServerOptions,
   type TokenScope,
 } from "@relay/core";
 
@@ -69,6 +80,10 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
   { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
   { name: "relay_webhook_unsubscribe", scope: "webhooks:write", description: "Remove an outbound webhook by id." },
+  { name: "relay_access_list", scope: "tokens:write", description: "Device requests waiting for a decision (user_code, client_name, scopes, requested and expiry times) and approvals the device has not polled yet. For the bot that approves other agents." },
+  { name: "relay_access_approve", scope: "tokens:write", description: "Approve (default) or deny a pending device request by its user code: the same decision the Access page makes. The device receives its token on its next poll; the decision is attributed to this token. A bot can approve only scopes it holds itself, and never tokens:write; wider requests are for a person at /activate." },
+  { name: "relay_invite_create", scope: "tokens:write", description: "Mint an invite code for an agent or machine trusted in advance: a name, scopes, optional expiry (24h default) and uses (1 default). The code is returned once; redeeming it needs no approval. A bot can invite only to scopes it holds itself, and never tokens:write." },
+  { name: "relay_invite_revoke", scope: "tokens:write", description: "Revoke a live invite by id or name; an unredeemed code stops working at once." },
 ];
 
 /** Description lookup by tool name, so new tools do not depend on their position in TOOL_SCOPES. */
@@ -116,6 +131,12 @@ export interface RelayServerOptions {
   authorizationServer?: string;
   /** One paragraph on how to get access, appended to every scope refusal an anonymous caller gets. */
   accessHint?: string;
+  /**
+   * The authorization server this database belongs to, for the access and invite tools: `issuer` is the site whose
+   * `relay setup --site <issuer> --invite <code>` line relay_invite_create prints (unset locally: the line keeps a
+   * placeholder); `now` is the clock (tests). Feed rows these tools write go through `afterEvent` like every other.
+   */
+  oauth?: { issuer?: string; now?: () => number };
 }
 
 export interface ConnectionIdentity {
@@ -629,6 +650,107 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     if (g) return g;
     const removed = await repo.deleteWebhook(db, id);
     return removed ? json({ removed: id }) : fail(`relay: no webhook ${id}`);
+  });
+
+  // ---------- access and invites (tokens:write): the chief-of-staff bot approving other agents ----------
+
+  const oauth: OAuthServerOptions = { issuer: opts.oauth?.issuer ?? "relay", ...(opts.oauth?.now ? { now: opts.oauth.now } : {}), onEvent: (row) => emit(row) };
+  const site = opts.oauth?.issuer?.replace(/\/+$/, "");
+  const accessView = (r: AccessRequestView) => ({ user_code: r.user_code, client_name: r.client_name, scopes: r.scopes, state: r.state, requested_at: r.created_at, expires_at: r.expires_at });
+  const oauthFail = (e: unknown, tool: string) => {
+    if (!(e instanceof OAuthError)) return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
+    const next =
+      e.status === 403
+        ? ""
+        : tool === "relay_access_approve"
+          ? e.code === "expired_token" || /already|Unknown code/.test(e.description)
+            ? " Call relay_access_list to see what is waiting; if the code is not there, ask the device to request a fresh one (it starts the device flow again and shows a new RLAY-XXXX) and approve that."
+            : " Codes look like RLAY-XXXX; relay_access_list shows the pending ones."
+          : "";
+    return fail(`relay: ${e.description}${next}`);
+  };
+
+  server.registerTool("relay_access_list", { title: "Pending access requests", description: toolDescription("relay_access_list"), inputSchema: {} }, async () => {
+    const g = gate("tokens:write", "relay_access_list");
+    if (g) return g;
+    const rows = await listRecentAccess(db, oauth);
+    const pending = rows.filter((r) => r.state === "pending").map(accessView);
+    const approved = rows.filter((r) => r.state === "approved").map(accessView);
+    return json({
+      pending,
+      approved_awaiting_poll: approved,
+      count: pending.length,
+      ...(pending.length ? { next: "relay_access_approve({ user_code }) approves one; { decision: \"deny\" } refuses it." } : {}),
+    });
+  });
+
+  server.registerTool(
+    "relay_access_approve",
+    {
+      title: "Approve an access request",
+      description: toolDescription("relay_access_approve"),
+      inputSchema: {
+        user_code: z.string().min(4).max(20).describe("the code the device showed, RLAY-XXXX (case and dashes do not matter)"),
+        decision: z.enum(["approve", "deny"]).optional().describe("approve (default) or deny"),
+      },
+    },
+    async ({ user_code, decision }) => {
+      const g = gate("tokens:write", "relay_access_approve");
+      if (g) return g;
+      try {
+        const row = await decideDeviceRequest(db, user_code, decision ?? "approve", externalActor(actor), oauth, [...granted]);
+        return json({
+          user_code: row.user_code,
+          status: row.status,
+          client_name: row.client_name,
+          scopes: row.scopes,
+          decided_by: row.actor,
+          ...(row.status === "approved" ? { next: `${row.client_name} receives its token (oauth:${row.client_name}) on its next poll of /oauth/token; nothing else to do.` } : {}),
+        });
+      } catch (e) {
+        return oauthFail(e, "relay_access_approve");
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_invite_create",
+    {
+      title: "Mint an invite code",
+      description: toolDescription("relay_invite_create"),
+      inputSchema: {
+        name: z.string().min(1).max(80).describe("who it is for; the token it yields is named oauth:<name>"),
+        scopes: z.array(z.enum(TOKEN_SCOPES as unknown as [string, ...string[]])).min(1).describe("exactly the scopes the token will carry"),
+        expires_in: z.union([z.string().min(1), z.number().int().positive()]).optional().describe("a duration like 1h, 24h, 7d, or seconds; default 24h"),
+        uses: z.number().int().min(1).max(1000).optional().describe("how many times the code may be redeemed; default 1"),
+      },
+    },
+    async ({ name, scopes, expires_in, uses }) => {
+      const g = gate("tokens:write", "relay_invite_create");
+      if (g) return g;
+      const ttl = expires_in === undefined ? undefined : parseDuration(expires_in);
+      if (expires_in !== undefined && !ttl) return fail("relay: expires_in must be a duration like 24h, 7d, or a number of seconds.");
+      try {
+        const r = await createInvite(db, { name, scopes, ...(ttl ? { expiresInSeconds: ttl } : {}), ...(uses ? { uses } : {}), createdBy: externalActor(actor), creatorScopes: [...granted] }, oauth);
+        const where = site ?? "<site>";
+        return json({
+          invite: r.invite,
+          code: r.code,
+          setup: `relay setup --site ${where} --invite ${r.code}`,
+          redeem: `POST ${where}/oauth/token with grant_type=${GRANT_INVITE} invite=${r.code} client_name=<who is redeeming>`,
+          note: "The code is shown once. Hand it to the agent or machine it is for; whoever redeems it gets a token named oauth:" + r.invite.name + " with exactly these scopes and no approval step.",
+        });
+      } catch (e) {
+        return oauthFail(e, "relay_invite_create");
+      }
+    },
+  );
+
+  server.registerTool("relay_invite_revoke", { title: "Revoke an invite", description: toolDescription("relay_invite_revoke"), inputSchema: { id_or_name: z.string().min(1).describe("the invite's id or the name it was created for") } }, async ({ id_or_name }) => {
+    const g = gate("tokens:write", "relay_invite_revoke");
+    if (g) return g;
+    const row = await revokeInvite(db, id_or_name.trim(), externalActor(actor), oauth);
+    return row ? json({ revoked: row }) : fail(`relay: no live invite matches '${id_or_name}'; it may be spent, expired or already revoked.`);
   });
 
   server.registerTool(

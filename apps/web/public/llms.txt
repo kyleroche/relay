@@ -27,7 +27,7 @@
 Do not ask the person for a token. Request access yourself and they approve it once:
 
 1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write` → `device_code`, `user_code`, `verification_uri`
-2. Tell the person to approve `<user_code>` at https://relay.kyro.house/activate, and poll `POST https://relay.kyro.house/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`, `client_id` every 5 seconds until it returns `access_token` and `refresh_token`
+2. Tell the person to approve `<user_code>` at https://relay.kyro.house/activate (a bot they trust with `tokens:write` can approve it for them with the `relay_access_approve` MCP tool, for scopes it holds itself), and poll `POST https://relay.kyro.house/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`, `client_id` every 5 seconds until it returns `access_token` and `refresh_token`
 3. Call /mcp or /api/v1 with `Authorization: Bearer <access_token>`; `relay_whoami` confirms who you are; refresh with `grant_type=refresh_token` before 24 hours
 
 Alternatives: an invite code from the operator (`grant_type=urn:relay:invite`), or OAuth 2.1 with PKCE and the browser consent page for MCP clients. Every 401 repeats these steps. Metadata: [authorization server](https://relay.kyro.house/.well-known/oauth-authorization-server), [protected resource](https://relay.kyro.house/.well-known/oauth-protected-resource); guide: [/docs/api#access](https://relay.kyro.house/docs/api#access)

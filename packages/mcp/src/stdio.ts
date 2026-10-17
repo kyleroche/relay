@@ -21,6 +21,8 @@ export async function main(): Promise<void> {
     assets: { store: openAssetStore() },
     ...(embed ? { embed } : {}),
     ...(github ? { github } : {}),
+    // Invites minted here live in this database; the setup line names the site only when this machine has one configured.
+    ...(h.cfg.site ? { oauth: { issuer: h.cfg.site } } : {}),
     afterEvent: (row) => dispatchEvent(h.db, row).then(() => undefined),
   });
   const transport = new StdioServerTransport();

@@ -17,7 +17,7 @@ refresh tokens 90 days and rotate on use; `docs/SECURITY.md` ("Access for agents
 | You are | One step | Who approves |
 |---|---|---|
 | an MCP client with a browser (Claude Code, a desktop app) | point it at `<site>/mcp`; the 401 names the authorization server, the client registers itself and opens the consent page | the signed-in person clicks Approve |
-| a headless bot or a CLI (Grok Bot, Woodhouse, a runner) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` posts to `/api/v1/access/<code>/approve` from the chat where the code was relayed |
+| a headless bot or a CLI (Grok Bot, Woodhouse, a runner) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` approves it from the chat where the code was relayed (`relay_access_approve` over MCP, or `POST /api/v1/access/<code>/approve`), for scopes the bot holds itself |
 | a machine the operator sets up (`relay setup --site <site>`) | the CLI runs the device flow for you and stores the token with its refresh token | same as above; `--invite <code>` skips it |
 | anything the operator trusts in advance | `relay invite create --for <name> --scopes <a,b>`; the holder runs `relay setup --site <site> --invite <code>` or posts grant `urn:relay:invite` | nobody: the invite is the approval, once |
 | a GitHub organization | install the relay GitHub App once (`<site>/setup/github`) | the GitHub org owner, on GitHub |
@@ -71,13 +71,23 @@ curl -s -X POST https://relay.kyro.house/oauth/token \
 
 `{"error":"authorization_pending"}` until the decision; `slow_down` when polling faster than `interval`;
 `access_denied` after a Deny; `expired_token` after 15 minutes; then the token response above. The person approves on
-`/activate` (type or confirm the code, see the requester and scopes, Approve), or anyone holding a token with
-`tokens:write` approves programmatically:
+`/activate` (type or confirm the code, see the requester and scopes, Approve), or a bot holding a token with
+`tokens:write` approves programmatically, over MCP or REST:
+
+```text
+relay_access_list()                                   → {pending: [{user_code: "RLAY-4F7Q", client_name: "grok-bot", scopes: [...], expires_at}], approved_awaiting_poll: []}
+relay_access_approve({user_code: "RLAY-4F7Q"})        → {user_code, status: "approved", client_name, scopes, decided_by: "bot:oauth:woodhouse"}
+relay_access_approve({user_code, decision: "deny"})   → {status: "denied"}
+```
 
 ```bash
 curl -s -X POST https://relay.kyro.house/api/v1/access/RLAY-4F7Q/approve -H "Authorization: Bearer $RELAY_TOKEN"
 # {"decision":"deny"} in the body denies; GET /api/v1/access lists what is waiting
 ```
+
+The ceiling: a bot can approve only scopes it holds itself, and never `tokens:write`; a request wider than that is
+refused (`403`, or an MCP tool error) with "ask a person to approve this one at `<site>/activate`". Only a signed-in
+person is unrestricted, so one approved bot can never grow into every token. A deny is always allowed.
 
 Every request is also an `access.requested` row in the feed with `user_code`, `client_name`, `scopes` and the
 approve path in its payload, so a webhook on `access.requested` lets Woodhouse say "grok-bot wants access (tasks,
@@ -119,8 +129,12 @@ curl -s -X POST https://relay.kyro.house/oauth/token -d grant_type=urn:relay:inv
 ```
 
 and receives a token named `oauth:woodhouse` with exactly the invite's scopes, plus a refresh token. `relay invite ls`
-and `relay invite revoke <id|name>` manage them; `POST /api/v1/invites` is the REST form (`tokens:write`). Giving
-Woodhouse `tokens:write` is what lets it approve other devices' codes from chat.
+and `relay invite revoke <id|name>` manage them; `POST /api/v1/invites` is the REST form and
+`relay_invite_create({name, scopes, expires_in?, uses?})` / `relay_invite_revoke({id_or_name})` the MCP form (all
+`tokens:write`; the create answers with the code once and the `relay setup --site <site> --invite <code>` line). Giving
+Woodhouse `tokens:write` is what lets it approve other devices' codes and mint invites from chat, within its own
+scopes: a bot never invites to a scope it does not hold, and never to `tokens:write`. The person creates that invite
+(the one above) once, on the Access page or with the CLI.
 
 ### GitHub: one app install
 
@@ -145,7 +159,7 @@ When the app is installed on a repository, relay writes `project.github_connecte
 | `tasks:read` | read task state (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`) |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
 | `webhooks:write` | subscribe itself to events (`relay_webhook_subscribe`, `POST /api/v1/webhooks`) |
-| `tokens:write` | approve other devices' codes and mint invites (`POST /api/v1/access/<code>/approve`, `/api/v1/invites`) |
+| `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write` |
 | `feed:read` | optional: read the whole feed, the projects and the workers |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
 | `work:claim` | not for a bot: the scope a machine's `relay work` token carries to register, heartbeat, claim and report (`docs/WORKERS.md`) |
@@ -170,6 +184,10 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 | `relay_event_log(kind, project?, summary, url?, cost_equiv?, source?)` | `POST /api/v1/events` | `events:write` | one `external.*` row in the feed, actor `bot:<token name>` |
 | `relay_webhook_subscribe(url, events[], bearer?, project?)` | `POST /api/v1/webhooks` | `webhooks:write` | register an outbound webhook; the signing secret is returned once |
 | `relay_webhook_unsubscribe(id)` | `DELETE /api/v1/webhooks/{id}` | `webhooks:write` | remove it |
+| `relay_access_list()` | `GET /api/v1/access` | `tokens:write` | device requests waiting for a decision (`user_code`, `client_name`, `scopes`, `requested_at`, `expires_at`) and approvals the device has not polled yet |
+| `relay_access_approve(user_code, decision?)` | `POST /api/v1/access/{user_code}/approve` | `tokens:write` | approve (default) or deny one; the device's next poll gets its token; attributed to `bot:<token name>`. Only scopes the bot holds, never `tokens:write`; otherwise "ask a person to approve this one at `<site>/activate`" |
+| `relay_invite_create(name, scopes[], expires_in?, uses?)` | `POST /api/v1/invites` | `tokens:write` | mint an invite: returns the row, the code (once) and the `relay setup --site <site> --invite <code>` line; the same ceiling |
+| `relay_invite_revoke(id_or_name)` | `DELETE /api/v1/invites/{id}` | `tokens:write` | stop an unredeemed invite |
 
 `task_id` is `<owner>/<repo>#<n>`, the issue the task is. `lane` is `claude`, `codex` or `grok`; `priority` is
 `low`, `normal`, `high` or `urgent`. `idempotency_key` makes a retried create safe: the same key returns the first
@@ -245,9 +263,13 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
    "relay needs your approval: open relay.kyro.house/activate and approve RLAY-4F7Q, or just say yes." It starts
    polling `POST <site>/oauth/token` every 5 seconds.
 2. **Approve.** The user opens `/activate` (already signed in with GitHub), sees "grok-bot asks for access" with the
-   four scopes explained, clicks Approve; or says "yes" and Woodhouse, which holds a `tokens:write` token from an
-   invite, posts `POST <site>/api/v1/access/RLAY-4F7Q/approve`. The feed shows `access.requested` then
-   `access.granted`.
+   four scopes explained, clicks Approve; or says "yes, let grok-bot in" and Woodhouse, the chief-of-staff bot that
+   holds a `tokens:write` token from an invite the person created once, calls `relay_access_list()` on `<site>/mcp`,
+   finds `RLAY-4F7Q` for `grok-bot` with those four scopes, and calls `relay_access_approve({user_code: "RLAY-4F7Q"})`
+   (or posts `POST <site>/api/v1/access/RLAY-4F7Q/approve`). That works because Woodhouse holds those four scopes
+   itself; had grok-bot asked for `memory:write` or `tokens:write`, Woodhouse would be told to hand it to a person at
+   `/activate`. The feed shows `access.requested`, then `access.granted` by `bot:oauth:woodhouse`. No one opens the
+   Access page.
 3. **Receive.** The next poll returns `{access_token: "rly_…", refresh_token: "rrt_…", expires_in: 86400,
    token_name: "oauth:grok-bot"}`. The bot stores both in its secret store and schedules a refresh before 24 hours.
 4. **Connect.** It points its MCP client at `<site>/mcp` with `Authorization: Bearer rly_…` (or calls `<site>/api/v1`).

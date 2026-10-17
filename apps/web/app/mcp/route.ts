@@ -8,6 +8,7 @@ import { getDb, getMemoryDb } from "@/lib/db";
 import { dispatchOne } from "@/lib/dispatch";
 import { siteGitHub } from "@/lib/integrations";
 import { infoDocument, methodologyText } from "@/lib/info-doc";
+import { ISSUER } from "@/lib/oauth";
 import { sanitizeEvent } from "@/lib/sanitize";
 
 export const dynamic = "force-dynamic";
@@ -32,6 +33,8 @@ async function handler(req: Request): Promise<Response> {
     resourceMetadata: RESOURCE_METADATA_URL,
     authorizationServer: AUTHORIZATION_SERVER_URL,
     accessHint: ACCESS_HOWTO,
+    // relay_access_* and relay_invite_* decide and mint against this site's authorization server; their feed rows fan out through afterEvent.
+    oauth: { issuer: ISSUER },
     ...(dataMode() === "db" ? { github: await siteGitHub(), afterEvent: dispatchOne } : {}),
     site: {
       info: infoDocument,

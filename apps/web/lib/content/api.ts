@@ -50,7 +50,7 @@ Scopes are named and granted per token:
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
 | \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
-| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode) |
+| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode); /api/v1/access and /api/v1/invites; relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke. A token (not a signed-in person) may approve or invite only to scopes it holds itself, and never tokens:write (403) |
 
 The operator can also mint tokens by hand, under "Mint a token by hand" on the [Access page](/tokens) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
 
@@ -222,6 +222,8 @@ curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN
 | \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
 | \`relay_whoami\` | public | this connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
 | \`relay_webhook_subscribe\`, \`relay_webhook_unsubscribe\` | \`webhooks:write\` | register an outbound webhook (the signing secret is returned once) and remove one |
+| \`relay_access_list\`, \`relay_access_approve\` | \`tokens:write\` | pending device requests (and approvals awaiting the poll); approve or deny one by its \`RLAY-XXXX\` code, the same decision the Access page makes: how a chief-of-staff bot lets other agents in. A bot can approve only scopes it holds itself, never \`tokens:write\` |
+| \`relay_invite_create\`, \`relay_invite_revoke\` | \`tokens:write\` | mint an invite code (returned once, with the \`relay setup --site … --invite\` line) for an agent trusted in advance; revoke one by id or name. The same ceiling applies |
 
 Anyone can connect: \`initialize\` and \`tools/list\` need no token, and \`relay_get_info\` and \`relay_get_methodology\` always answer anonymously. With public read enabled (\`RELAY_PUBLIC_READ=1\`, the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token too. Every other call without the right scope returns an MCP tool error (\`isError: true\`) naming the missing scope, not an HTTP error; only a bearer token the server does not recognise gets HTTP \`401\`. Every response carries the same \`RateLimit\` headers as the API.
 
