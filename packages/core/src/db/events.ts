@@ -1,5 +1,6 @@
 /** The append-only event feed. Every model call, webhook, and runner step is a row; the ledger is a view over it. */
 import { type Db, iso, num } from "./client.ts";
+import { refreshTaskForEvent } from "./task-state.ts";
 
 export interface EventInput {
   kind: string;
@@ -87,7 +88,11 @@ export const toEvent = (r: Record<string, unknown>): EventRow => ({
   dedupe_key: (r.dedupe_key as string | null) ?? null,
 });
 
-/** Append one event. With a dedupe_key that already exists nothing is written and undefined is returned. */
+/**
+ * Append one event. With a dedupe_key that already exists nothing is written and undefined is returned. A row that
+ * names a task (repo + issue, or a `preview.*` row for a task's PR or branch) refreshes that task's state cache
+ * (db/task-state.ts) before returning, so a list or the flow map read after this call sees the new state.
+ */
 export async function writeEvent(db: Db, e: EventInput): Promise<EventRow | undefined> {
   const ts = e.ts instanceof Date ? e.ts.toISOString() : e.ts ?? null;
   const r = await db.query(
@@ -101,7 +106,10 @@ export async function writeEvent(db: Db, e: EventInput): Promise<EventRow | unde
       e.summary, e.url ?? null, JSON.stringify(e.payload ?? {}), e.dedupe_key ?? null,
     ],
   );
-  return r[0] ? toEvent(r[0]) : undefined;
+  if (!r[0]) return undefined;
+  const row = toEvent(r[0]);
+  await refreshTaskForEvent(db, row);
+  return row;
 }
 
 export interface ListEventsOpts {

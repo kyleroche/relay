@@ -10,6 +10,7 @@ import { type Db, iso, num } from "./client.ts";
 import { sanitizeMeters, type MeterReading } from "../meters.ts";
 import { listPreferences, type PreferenceRow } from "./memory.ts";
 import { bumpQueueVersion, getQueueVersion } from "./queue.ts";
+import { refreshTaskState } from "./task-state.ts";
 import { taskClaims, taskEvents, deriveTaskStatus, toTask, TASK_COLS, type TaskRow } from "./tasks.ts";
 import { ulid } from "../util.ts";
 
@@ -160,10 +161,13 @@ export async function markOffline(db: Db, olderThanMs: number = WORKER_OFFLINE_M
   return r.map(toWorker);
 }
 
-/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again, so the queue version moves). */
+/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again, so the queue version moves and their state cache is rewritten). */
 export async function expireLeases(db: Db, now: number = Date.now()): Promise<ClaimRow[]> {
   const r = await db.query(`UPDATE claims SET released_at = $1::timestamptz, outcome = 'expired' WHERE released_at IS NULL AND lease_until < $1::timestamptz RETURNING ${C}`, [new Date(now).toISOString()]);
-  if (r.length) await bumpQueueVersion(db);
+  if (r.length) {
+    for (const c of r) await refreshTaskState(db, c.task_id as string, now);
+    await bumpQueueVersion(db);
+  }
   return r.map(toClaim);
 }
 
@@ -247,7 +251,10 @@ export async function liveClaim(db: Db, taskId: string, workerId?: string): Prom
 /** End a live claim with an outcome. Undefined when the worker holds no live claim on the task. */
 export async function releaseClaim(db: Db, taskId: string, workerId: string, outcome: Exclude<ClaimOutcome, "expired">, now: number = Date.now()): Promise<ClaimRow | undefined> {
   const r = await db.query(`UPDATE claims SET released_at = $3::timestamptz, outcome = $4 WHERE task_id = $1 AND worker_id = $2 AND released_at IS NULL RETURNING ${C}`, [taskId, workerId, new Date(now).toISOString(), outcome]);
-  if (r[0]) await bumpQueueVersion(db); // the task left the queue (or, for `released`, is back in it)
+  if (r[0]) {
+    await refreshTaskState(db, taskId, now); // `claimed` ends: the cache says what the feed says now
+    await bumpQueueVersion(db); // the task left the queue (or, for `released`, is back in it)
+  }
   return r[0] ? toClaim(r[0]) : undefined;
 }
 
@@ -312,7 +319,10 @@ export async function claimNext(db: Db, req: ClaimRequest): Promise<Claimed | un
     const [events, claims] = await Promise.all([taskEvents(db, task), taskClaims(db, task.id)]);
     if (deriveTaskStatus(task, events, claims, now).state !== "queued") continue;
     const claim = await takeClaim(db, task.id, req.workerId, now + (req.leaseMs ?? LEASE_MS), now);
-    if (claim) return { claim, task: { ...task, lane } };
+    if (claim) {
+      await refreshTaskState(db, task.id, now); // the cache learns `claimed` and the worker's name
+      return { claim, task: { ...task, lane } };
+    }
   }
   return undefined;
 }
