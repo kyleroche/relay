@@ -2,10 +2,30 @@
 # Entry point of the relay worker image. The container starts as root only to hand the volume at /home/relay to the
 # `relay` user (a fresh volume is an empty ext4 owned by root); then it drops to that user for whatever it was asked
 # to run: `relay work` by default, `bash` for `relay work container shell`, `relay setup --site` at install.
+#
+# Login callback forwarders: `container create --publish 127.0.0.1:<port>:<port>` delivers the Mac browser's redirect
+# to the container's eth0 address, but the login servers the CLIs start (`fx login codex` hands off to Codex's own
+# listener on 1455; fx's own callback is 3000) bind the container's loopback only, so the redirect would be dropped.
+# One socat per port listens on eth0 and forwards to 127.0.0.1, as the relay user, in the background; while no login
+# runs the forwarder just waits (a connection then fails, as it would have anyway). RELAY_LOGIN_PORTS lists the ports
+# (default: packages/core/src/work/container.ts LOGIN_CALLBACK_PORTS); empty turns the forwarders off.
 set -eu
 home=/home/relay
 uid="$(id -u relay)"
 gid="$(id -g relay)"
 if [ "$(stat -c %u "$home")" != "$uid" ]; then chown "$uid:$gid" "$home"; fi
 [ -d "$home/.harness" ] || install -d -o "$uid" -g "$gid" "$home/.harness"
+
+ports="${RELAY_LOGIN_PORTS-3000 1455}"
+if [ -n "$ports" ] && command -v socat >/dev/null 2>&1; then
+  # the image has no `ip`; hostname -I prints every address, the first is eth0's
+  addr="$(hostname -I 2>/dev/null | cut -d" " -f1)"
+  if [ -n "$addr" ]; then
+    for port in $ports; do
+      setpriv --reuid="$uid" --regid="$gid" --init-groups \
+        socat "TCP-LISTEN:$port,bind=$addr,reuseaddr,fork" "TCP:127.0.0.1:$port" >/dev/null 2>&1 &
+    done
+  fi
+fi
+
 exec setpriv --reuid="$uid" --regid="$gid" --init-groups env HOME="$home" USER=relay LOGNAME=relay "$@"

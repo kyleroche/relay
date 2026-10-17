@@ -19,6 +19,8 @@ const suffix = `${process.pid}`;
 const name = `relay-test-${suffix}`;
 const volume = `relay-test-home-${suffix}`;
 const image = "relay-worker-test";
+/** Host ports for the published login callbacks: 2xxxx, so the test runs beside a live relay-work holding 3000 and 1455. */
+const PORT_OFFSET = 20_000;
 const cli = resolve(import.meta.dirname, "..");
 const root = resolve(cli, "..", "..");
 
@@ -42,8 +44,9 @@ describe.skipIf(!enabled)("relay-worker image under Apple container (RELAY_TEST_
     execFileSync("npm", ["pack", "--ignore-scripts", "--pack-destination", ctx], { cwd: cli, stdio: "inherit" });
     expect(readdirSync(ctx).some((f) => f.endsWith(".tgz"))).toBe(true);
     plan = containerPlan({ bin: bin!, image, context: ctx, site: "https://relay.example.com", workerName: "test-container", host: "test" });
-    // substitute the test's container and volume names into the create words
-    create = plan.create.map((w) => (w === "relay-work" ? name : w === "relay-work-home:/home/relay" ? `${volume}:/home/relay` : w));
+    // substitute the test's container and volume names into the create words, and move the published login ports off
+    // the loopback ports a live relay-work on this Mac already holds (host 2xxxx → the container's own port)
+    create = plan.create.map((w) => (w === "relay-work" ? name : w === "relay-work-home:/home/relay" ? `${volume}:/home/relay` : w.replace(/^127\.0\.0\.1:(\d+):(\d+)$/, (_, h: string, c: string) => `127.0.0.1:${PORT_OFFSET + Number(h)}:${c}`)));
     // the container must stay up for exec: sleep instead of `relay work` (still through the image's entry point)
     const i = create.indexOf("relay");
     create = [...create.slice(0, i), "sleep", "infinity"];
@@ -75,6 +78,15 @@ describe.skipIf(!enabled)("relay-worker image under Apple container (RELAY_TEST_
     // the entry point handed the volume to the relay user
     const who = exec(["sh", "-c", "id -un; stat -c %U /home/relay; echo $RELAY_HOME; echo $RELAY_ISOLATION"]);
     expect(who.out.trim().split("\n")).toEqual(["relay", "relay", "/home/relay/.harness", "container"]);
+    // and started the login-callback forwarders (eth0 → loopback) for the ports the plan publishes, as the relay user
+    const socat = exec(["sh", "-c", "pgrep -u relay -a socat || ps -o args= -C socat"]);
+    expect(socat.out, socat.out).toContain("TCP-LISTEN:3000,");
+    expect(socat.out).toContain("TCP-LISTEN:1455,");
+    expect(socat.out).toContain("TCP:127.0.0.1:1455");
+    // from the Mac, the published port reaches the forwarder: the connection is accepted (and closed, since no login
+    // server listens inside yet: curl's "empty reply" 52 or "recv failure" 56), never refused (7) as it was without it
+    const probe = run(["curl", "-s", "-o", "/dev/null", "--max-time", "10", `http://127.0.0.1:${PORT_OFFSET + 1455}/`], { timeoutMs: 20_000 });
+    expect(probe.code, `curl exit ${probe.code}: ${probe.out}`).not.toBe(7);
 
     const version = exec(["relay", "--version"]);
     expect(version.code, version.out).toBe(0);
