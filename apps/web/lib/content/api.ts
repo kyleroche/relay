@@ -61,7 +61,7 @@ pnpm relay token revoke oauth:grok-bot
 pnpm relay invite create --for woodhouse --scopes tasks:read,tasks:write,events:write --expires 24h --uses 1
 \`\`\`
 
-Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope; neither has an expiry. The bearer and \`oauth2\` schemes and their scopes are described in [\`/openapi.json\`](/openapi.json) (\`securitySchemes\`) and in the [MCP server card](/.well-known/mcp/server-card.json). A request without a usable token gets \`401\` with \`WWW-Authenticate: Bearer realm="relay", scope="<scope>", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"\`.
+Only the SHA-256 of a token is stored (\`tokens\` table). A deployment without a database can set \`RELAY_API_TOKENS\` instead (\`token:scope,scope;token2:scope\`), and \`RELAY_MEMORY_TOKEN\` is one shared secret that grants every scope (attributed \`token:shared\`: a credential, so it cannot approve or mint \`tokens:write\`); neither has an expiry. The bearer and \`oauth2\` schemes and their scopes are described in [\`/openapi.json\`](/openapi.json) (\`securitySchemes\`) and in the [MCP server card](/.well-known/mcp/server-card.json). A request without a usable token gets \`401\` with \`WWW-Authenticate: Bearer realm="relay", scope="<scope>", resource_metadata="${SITE_URL}/.well-known/oauth-protected-resource"\`.
 
 ### OAuth endpoints
 

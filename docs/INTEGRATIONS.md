@@ -61,8 +61,9 @@ curl -s -X POST https://relay.kyro.house/oauth/device \
  "verification_uri_complete": "https://relay.kyro.house/activate?code=RLAY-4F7Q", "expires_in": 900, "interval": 5, "client_id": "rc_…"}
 ```
 
-`client_name` registers a public client on the fly; a client that already has an id sends `client_id` instead. The
-bot tells the person "approve RLAY-4F7Q at relay.kyro.house/activate" and polls:
+`client_name` registers a public client on the fly (1 to 40 characters: letters, digits, space, `. _ @ : + -`; it
+becomes the token's name `oauth:<client_name>`); a client that already has an id sends `client_id` instead. `scope` is
+required: an empty request is `invalid_scope`, never every scope. The bot tells the person "approve RLAY-4F7Q at relay.kyro.house/activate" and polls:
 
 ```bash
 curl -s -X POST https://relay.kyro.house/oauth/token \
@@ -225,7 +226,9 @@ relay_webhook_subscribe({url: "https://bot.example/relay", events: ["run.finishe
 → {webhook: {id, url, events, …}, secret: "whsec_…"}      # the secret is shown once
 ```
 
-(or `relay webhook add --url … --events … --bearer …` from a machine, or `POST /api/v1/webhooks`.) Event filters are
+(or `relay webhook add --url … --events … --bearer …` from a machine, or `POST /api/v1/webhooks`.) The URL must be a
+public `https` endpoint: loopback, link-local, private-network (RFC 1918) and `.internal`/`.local` targets are refused,
+and plain `http` is accepted for `localhost` outside production only. Event filters are
 exact kinds, a prefix ending in `.` (`run.`), or `*`. `project` limits a hook to one project. `relay webhook test <id>`
 sends a signed `test.ping`.
 

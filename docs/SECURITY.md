@@ -13,9 +13,11 @@ change to relay would weaken any rule here, it needs a decision in `docs/ARCHITE
 - No login, token, `auth.json`, cookie, or config directory is ever copied between machines, pasted into a chat,
   stored as a GitHub secret, or checked into a repository. `.env.example` lists names only.
 - The runner workflow never reads `secrets.*`, never passes `GITHUB_TOKEN` into a step, and does not use
-  `actions/checkout` (which would wire the token into git). `run-lane.sh` unsets `GH_TOKEN`, `GITHUB_TOKEN`,
-  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY` and `XAI_API_KEY` so a stray key can never make a
-  lane run outside the subscription or act as someone other than the machine's operator.
+  `actions/checkout` (which would wire the token into git). `run-lane.sh` and the worker's `cleanEnv`
+  (`packages/core/src/work/job.ts`) unset `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
+  `OPENAI_API_KEY` and `XAI_API_KEY` so a stray key can never make a lane run outside the subscription or act as
+  someone other than the machine's operator, and `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` so the lane never sees
+  the worker's own site credential or its `~/.harness`.
 - API keys for pay-per-token overflow lanes (`AI_GATEWAY_API_KEY`) live in Vercel's environment for the web app and
   nowhere else; runners do not have them.
 
@@ -28,7 +30,11 @@ data, never as instructions:
 
 - **Who can start a lane.** `relay-run.yml` refuses to run unless `github.event.sender.login` (the person who added
   the label, or who opened the PR being reviewed) is listed in the `RELAY_ALLOWED_SENDERS` variable. Opening an
-  issue does nothing; labelling it needs triage permission and an allowlisted login.
+  issue does nothing; labelling it needs triage permission and an allowlisted login. The web app applies the same
+  gate when an `agent:<lane>` label arrives by webhook and would become a task for a worker (`senderMayOpenTasks`,
+  `apps/web/lib/webhooks/usage.ts`): the label's sender must be in `RELAY_ALLOWED_SENDERS` (the environment, else
+  the repo's Actions variable), and when neither is set nobody may open a task that way. `relay task create` and
+  the API need a `tasks:write` token instead.
 - **How text reaches the shell.** Issue and PR title and body are passed only through `env:`. No `${{ }}` with
   user-controlled content appears inside a `run:` script, so a title like `"; rm -rf ~` is a string, not a command.
 - **How text reaches the model.** `run-lane.sh` writes the issue into the brief between `<<<ISSUE` and `ISSUE>>>`
@@ -36,20 +42,52 @@ data, never as instructions:
   credentials are to be ignored and reported, and what the actual deliverable is. The repo's own `relay.md` rules
   come first in the brief, the issue after.
 - **What the model can do anyway.** Even a fooled model is boxed by the CLI's permission model: Claude Code runs
-  with `--permission-mode acceptEdits` and an allowlist of `Read, Edit, Write, Glob, Grep, Bash(pnpm *), Bash(npm
-  *), Bash(git *)`; Codex runs with `--sandbox workspace-write`; Grok with `--permission-mode acceptEdits`; fx with
-  `--auto` under its own permission rules. Reviews are read-only (`plan` modes, `--sandbox read-only`). Subagents
-  and planners are disabled (`-c agents.enabled=false`, `--no-subagents --no-plan`, MCP servers off) so the lane is
-  one process the runner can account for.
-- **What the model cannot reach.** The lane runs in a fresh clone under `$RUNNER_TEMP` as the dedicated `relay` OS
-  user. That user has no SSH keys, no browser profile, no sudo, and no access to your home directory. The worktree
-  is deleted after the job.
-- **What happens to the output.** The lane cannot merge. It pushes a `relay/<lane>-<issue>` branch and opens a PR
-  that a human approves; a second lane on a different model reviews it first. Branch protection on the default
-  branch should require that review and a passing CI run.
+  with `--permission-mode acceptEdits`, an allowlist of named commands (`Read, Edit, Write, Glob, Grep`, `Bash(git
+  status|diff|log|add|commit|checkout|restore *)`, `Bash(pnpm install|test|typecheck|build *)`, `Bash(pnpm -r *)`,
+  `Bash(npm test*)`) and a refusal list (`--disallowedTools`) for `git push`, `git -c`, `git config`, `git remote`,
+  `pnpm dlx`, `pnpm exec`, `npm exec`, `npx`, `curl` and `wget` (`CODE_TOOLS` and `CODE_DISALLOWED_TOOLS` in
+  `packages/core/src/work/job.ts`, the same lists in `run-lane.sh`); Codex runs with `--sandbox workspace-write`;
+  Grok with `--permission-mode acceptEdits`; fx with `--auto` under its own permission rules. Reviews are read-only
+  (`plan` modes, `--sandbox read-only`). Subagents and planners are disabled (`-c agents.enabled=false`,
+  `--no-subagents --no-plan`, MCP servers off) so the lane is one process the runner can account for. **The Claude
+  allowlist is a permission policy, not a sandbox**: it decides which tool calls the CLI accepts without asking, and
+  anything the allowed commands can do (a `package.json` script run by `pnpm test`, a git hook in the clone) runs
+  with the full rights of the OS user the lane runs as. Only the OS gives isolation: see "Workers" below.
+- **What the model cannot reach.** On a GitHub Actions runner the lane runs in a fresh clone under `$RUNNER_TEMP` as
+  the dedicated `relay` OS user. That user has no SSH keys, no browser profile, no sudo, and no access to your home
+  directory. The worktree is deleted after the job. On a worker (`relay work`) the lane runs as the worker's own OS
+  user; "Workers" below says what that means and how to set the machine up.
+- **What happens to the output.** The lane cannot merge. The lane itself cannot push (`git push` is on the refusal
+  list); the worker or runner pushes a `relay/<lane>-<issue>` branch with `--force-with-lease` and opens a PR that a
+  human approves; a second lane on a different model reviews it first. **Branch protection on the default branch is
+  required**, not optional: the account that pushes is the operator's own `gh` login, so without protection a fooled
+  lane that found another way to run `git push` could land on `main`. Require the review and a passing CI run, and
+  forbid force pushes.
 
 The usage comment the runner posts is parsed only when the comment author is in `RELAY_ALLOWED_SENDERS`; anyone
 else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded from the ledger (`docs/FEED.md`).
+
+## Workers (`relay work`)
+
+A worker is the operator's own machine running the vendor CLIs under the operator's own logins (`docs/WORKERS.md`).
+State the facts plainly:
+
+- The Claude lane's permission allowlist (`CODE_TOOLS`) **is not a sandbox**. It limits which tool calls Claude Code
+  accepts; it does not limit what `pnpm test` or a repository's own scripts do once they run. Codex's `--sandbox
+  workspace-write` is a sandbox for that lane only; Grok and fx have no OS sandbox of their own.
+- **The lane runs as the worker's OS user.** Whatever that user can read or do, a fooled lane can: its home directory,
+  its keychain logins, its SSH keys, its other repositories. `cleanEnv` strips the API keys and the worker's
+  `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is
+  deleted after the job, but the environment is the only boundary relay itself puts there.
+- **A dedicated OS user or a container for `relay work` is the recommended setup.** Create a user that holds the
+  vendor logins and the `gh` login and nothing else (no SSH keys, no sudo, no browser profile, no access to your home
+  directory) and run the worker service as that user, or run the worker in a container whose only credentials are
+  those logins. A worker on your daily-use account works and is how `relay setup` gets you started; it is the least
+  safe arrangement and should be temporary.
+- **Branch protection on the default branch is required.** The worker pushes with the operator's `gh` login; only the
+  repository's rules keep a `relay/<lane>-<issue>` branch from becoming `main` without a review.
+- Set `RELAY_ALLOWED_SENDERS`: it is what keeps a label added by anyone with triage on a linked repo from becoming a
+  job on your machine.
 
 ## Runner isolation
 
@@ -64,7 +102,10 @@ else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded fr
   brief and the CLI's JSON output are written to a `mktemp -d` directory that is removed on exit.
 - The web app receives only webhooks (verified with `GITHUB_WEBHOOK_SECRET`, the GitHub App's own secret, and
   `VERCEL_WEBHOOK_SECRET`) and API and MCP calls carrying a scoped bearer token. It can never reach a runner; runners
-  call it, not the reverse.
+  call it, not the reverse. The one place it makes outbound calls to an address a caller chose, outbound webhooks,
+  refuses loopback, link-local, private-network and `.internal`/`.local` targets and requires `https`
+  (`validateWebhookUrl`; plain `http` to `localhost` is for development only), so a `webhooks:write` token cannot aim
+  the site at its own network.
 - The web app's GitHub credential is an App, not a person's token: installation tokens are minted per repository, last
   an hour and live only in memory; the private key sits in `GITHUB_APP_PRIVATE_KEY` or, when the manifest flow created
   the app, sealed in the database under `RELAY_SESSION_SECRET` (`docs/HOSTING.md`).
@@ -163,6 +204,20 @@ In mock mode (`RELAY_DATA=mock`, or no `DATABASE_URL` with `RELAY_DATA` unset) t
 runs as the fake viewer `human:demo`, the header says "demo mode", and `RELAY_REVIEWER` may rename that actor. The
 fake session never reaches `/api/v1`: anonymous API callers in mock mode get only what `RELAY_PUBLIC_READ` allows.
 
+### Response headers
+
+`apps/web/next.config.ts` sets on every response: `Referrer-Policy: strict-origin-when-cross-origin`,
+`X-Content-Type-Options: nosniff` and `Strict-Transport-Security: max-age=63072000; includeSubDomains`; and on every
+route except the asset viewers under `/api/assets/` (which the app frames itself and which carry their own `sandbox`
+CSP): `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`, so no other site can frame the
+app. Writes that a browser makes, the consent decision (`POST /oauth/authorize/decision`), the `/activate` form and
+every server action on the Access page, are refused when the browser marks the request `Sec-Fetch-Site: cross-site`
+(`apps/web/lib/fetch-site.ts`), a second line behind the `SameSite=Lax` cookie. A `500` from `/api/v1/*` carries a
+`correlation_id` and a fixed detail; the message goes to the server log only.
+
+`RELAY_SESSION_SECRET` must be at least 32 characters (`openssl rand -hex 32` gives 64); shorter values are refused
+with that hint when signing a session or sealing a setting, so a weak secret cannot be configured by accident.
+
 ## Access for agents
 
 Tokens are never copied between people, machines or chats. The web app runs an OAuth 2.1 authorization server
@@ -190,12 +245,13 @@ Three kinds of actor decide a device request or mint an invite, and the server t
 | Actor | Where | May grant |
 |---|---|---|
 | a signed-in person (`human:<login>`) | the Access page, `/activate`, the operator's own CLI | anything, including `tokens:write` |
-| a credential with `tokens:write` (`bot:oauth:woodhouse`, `token:ci`) | `relay_access_approve`, `relay_invite_create` over `/mcp`; `POST /api/v1/access/{code}/approve`, `POST /api/v1/invites` | only scopes it holds itself, and never `tokens:write` |
+| a credential with `tokens:write` (`bot:oauth:woodhouse`, `token:ci`, the shared `RELAY_MEMORY_TOKEN` as `token:shared`) | `relay_access_approve`, `relay_invite_create` over `/mcp`; `POST /api/v1/access/{code}/approve`, `POST /api/v1/invites`, `POST /api/v1/tokens` | only scopes it holds itself, and never `tokens:write` |
 | anything else | nothing: the scope gate refuses before the decision | nothing |
 
 The ceiling is `grantCeilingError` in `packages/core/src/oauth/server.ts`, checked by `decideDeviceRequest` (approve
-only; a deny is always allowed) and `createInvite` from the scopes the caller's grant carries, which the API routes and
-the MCP server pass explicitly. A refusal is `403` / an MCP tool error reading "a bot can approve only scopes it holds
+only; a deny is always allowed), `createInvite` and the by-hand mint at `POST /api/v1/tokens` from the scopes the
+caller's grant carries, which the API routes and the MCP server pass explicitly. `human:` actors are only ever
+sessions: the shared `RELAY_MEMORY_TOKEN` is `token:shared` over `/mcp` and `/api/v1`, a credential like any other. A refusal is `403` / an MCP tool error reading "a bot can approve only scopes it holds
 itself, and never tokens:write; ask a person to approve this one at `<site>/activate`" and changes nothing: the code
 stays pending for a person. So a chief-of-staff bot lets other agents in without anyone clicking, but an approved bot
 can never widen itself, and `tokens:write` (the scope that makes an approver) is only ever handed out by a person.
@@ -214,8 +270,21 @@ depends on it (`removeClient` refuses otherwise).
 PKCE `S256` is mandatory and `plain` is refused; `code_challenge_methods_supported` says only `S256`. Redirect URIs are
 registered at `POST /oauth/register` and must be `https`, loopback `http` (any port, RFC 8252) or a private-use scheme;
 an authorization request whose client or redirect URI does not match is answered on the page, never by redirecting
-to the URI the attacker supplied. Scopes requested may only narrow on refresh. A `resource` indicator must name this
-site. The device flow registers a public client per machine (`client_name`), so the consent page can say who asks.
+to the URI the attacker supplied. A `resource` indicator must name this site.
+
+Scopes: a request must say what it is for. An authorization request or a device request without `scope` is
+`invalid_scope`, never "everything"; only `POST /oauth/register` defaults (to the whole catalogue as the client's
+ceiling) and a refresh without `scope` keeps the grant's own scopes. Scopes may only narrow on refresh.
+
+Client names: the device flow registers a public client per machine from `client_name`, and an invite redemption may
+name its client the same way. That name is read aloud on `/activate`, becomes the token's name (`oauth:<name>`) and
+appears in feed rows, so it is 1 to 40 characters from letters, digits, space and `. _ @ : + -`
+(`CLIENT_NAME_PATTERN`); anything else is `invalid_request` before a client row exists. The `access.requested` summary
+is a fixed sentence, `client "<name>" asks for access: approve RLAY-XXXX at <site>/activate`; the requested scopes are
+in the payload only, so a client cannot write its own feed line. At most 20 device requests may be pending site-wide
+(`MAX_PENDING_DEVICE_REQUESTS`); the 21st is `slow_down` (429) until some are decided or expire. An approval does not
+outlive its code: a device code approved but never collected within its 15 minutes is `expired_token` at the token
+endpoint, and the row refuses redemption past `expires_at` as well.
 
 ### What the consent page shows
 
@@ -240,7 +309,10 @@ and a webhook can relay it.
   once; its refresh token keeps working until it is also revoked, so revoke the refresh token too when the holder is
   not trusted: `POST /oauth/revoke` with `token=<refresh or access token>` (RFC 7009) does both at once.
 - `relay invite revoke <id|name>`, Revoke under Invites on the Access page, or `DELETE /api/v1/invites/{id}` stops an
-  unredeemed code.
+  unredeemed code. Revoking by name (an invite's name, or `relay token revoke oauth:<client>`) is within `tokens:write`
+  by design: a holder of that scope may revoke any token or invite, including every token sharing a client name.
+  Revocation is the lesser power next to minting, and the scope that can mint is the one that should be able to undo
+  it; the audit row (`access.revoked`, `access.invite_revoked`) names who did it.
 - Rotating `RELAY_SESSION_SECRET` signs every browser session out and makes the sealed GitHub App key unreadable;
   it does not touch tokens, which live in the database by hash.
 - A reused refresh token revokes its lineage automatically; the holder sees `invalid_grant` and must be approved again.

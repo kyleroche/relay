@@ -173,7 +173,8 @@ deflate), so a bundle is never unpacked to disk.
     nothing was uploaded to the key.
   - `GET /api/v1/assets/{id}` (`assets:read`): metadata, `versions`, `task_url`, and signed `url`, `thumb_url`,
     `bundle_url` (absolute, expire after an hour).
-  - `PUT /api/v1/assets/{id}/review` (`assets:review`): `{ decision, note?, by? }`; a rejection needs a note.
+  - `PUT /api/v1/assets/{id}/review` (`assets:review`): `{ decision, note? }`; a rejection needs a note. The reviewer,
+    like the creator on upload and finalize, is always the caller (token name or signed-in login), never a body field.
   - `POST /api/v1/assets/{id}/publish` (`assets:write`): `store.publish` + `publishAsset`; `501` without a public store.
   - Local store only: `GET /api/assets/stream?key&exp&sig` streams a verified signed URL (range requests supported);
     `PUT /api/assets/upload?key&exp&sig` is the presigned upload target (200 MB cap).

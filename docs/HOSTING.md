@@ -49,10 +49,10 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | opening tasks, asset comments, reopening rejected issues, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
 | `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
 | `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | the fallback when no app is configured: asset comments, reopening rejected issues, opening tasks |
-| `RELAY_ALLOWED_SENDERS` | optional, comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone) |
+| `RELAY_ALLOWED_SENDERS` | comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone), and who may open a task for a worker by labelling an issue (else the repo variable; with neither, nobody) |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
-| `RELAY_SESSION_SECRET` | `openssl rand -hex 32` | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
+| `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
 | `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
 | `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
 | `RELAY_PLAN_METERS` | optional JSON | plan meters for the header until a vendor route exists: `[{"id","label","subscription","percentUsed","resetsAt"}]` |

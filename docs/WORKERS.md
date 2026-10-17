@@ -28,15 +28,17 @@ embedded PGlite file), which is how the tests run and how a single laptop can se
 
 | Lane | Served when | The lane runs |
 |---|---|---|
-| `claude` | `claude auth status` reports logged in | `claude -p --permission-mode acceptEdits --allowedTools Read,Edit,Write,Glob,Grep,Bash(pnpm *),Bash(npm *),Bash(git *) --max-turns 40`, no MCP servers, no user settings |
+| `claude` | `claude auth status` reports logged in | `claude -p --permission-mode acceptEdits --allowedTools <CODE_TOOLS> --disallowedTools <CODE_DISALLOWED_TOOLS> --max-turns 40`, no MCP servers, no user settings ("What a job may run" below) |
 | `codex` | `codex login status` is logged in, or `fx status` lists a Codex login | `codex exec --json --sandbox workspace-write -c agents.enabled=false` (or `fx ask --auto` when only fx is installed) |
 | `grok` | the `grok` CLI is on PATH, or `fx status` lists a Grok login | `grok -p --output-format json --no-subagents --no-plan --permission-mode acceptEdits` (or fx) |
 
 `gh` must be logged in for any lane: the clone, the push and the PR run as that account (`gh auth login`, then
 `gh auth setup-git`). Force the set with `--lanes claude,codex`; a machine without a lane's login must not serve it.
 Models come from `RELAY_MODEL_CLAUDE` (`opus` by default), `RELAY_MODEL_CODEX`, `RELAY_MODEL_GROK`. No lane ever runs
-with permission checks bypassed, and the job's environment drops any `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`XAI_API_KEY`, `GH_TOKEN` or `GITHUB_TOKEN` so the run cannot slip onto a key instead of the subscription.
+with permission checks bypassed, and the job's environment (`cleanEnv`) drops any `ANTHROPIC_API_KEY`,
+`OPENAI_API_KEY`, `XAI_API_KEY`, `GH_TOKEN` or `GITHUB_TOKEN` so the run cannot slip onto a key instead of the
+subscription, and the worker's own `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` so the lane never sees the site
+credential or `~/.harness`.
 
 **Labels** are extra capabilities a worker advertises (`--labels gpu,xcode`). A project can require them with a
 preference: `relay prefer lane.labels gpu --scope project --scope-id <slug>` (or `--scope lane --scope-id claude`,
@@ -83,6 +85,28 @@ Every step is a REST call under `/api/v1` with the bearer token; the same functi
 The usage block in the PR comment is marked `"source": "relay-work"`; the GitHub webhook shows it to humans but does
 not count it again, because the release already wrote the `step.usage` row. One worker runs one job at a time by
 default; `--jobs 2` allows two, and the lane adapters still serialize per vendor login.
+
+### What a job may run
+
+The Claude lane gets an allowlist of named commands and a refusal list (`CODE_TOOLS`, `CODE_DISALLOWED_TOOLS` in
+`packages/core/src/work/job.ts`; `scripts/runner/run-lane.sh` carries the same lists for Actions runners):
+
+| Allowed without asking | Refused outright |
+|---|---|
+| `Read`, `Edit`, `Write`, `Glob`, `Grep` | `git push`, `git -c`, `git config`, `git remote` |
+| `git status`, `git diff`, `git log`, `git add`, `git commit`, `git checkout`, `git restore` | `pnpm dlx`, `pnpm exec`, `npm exec`, `npx` |
+| `pnpm install`, `pnpm test`, `pnpm typecheck`, `pnpm build`, `pnpm -r …`, `npm test` | `curl`, `wget` |
+
+Anything else Claude Code would ask about, and in `-p` mode a question is a refusal. The worker, not the lane, commits,
+pushes (`--force-with-lease`, its own branch only) and opens the PR. Codex runs under its own `--sandbox
+workspace-write`; Grok and fx run under their permission modes with no OS sandbox.
+
+This allowlist is a permission policy, **not a sandbox**: `pnpm test` runs whatever the repository's `package.json`
+says, with the rights of the OS user the worker runs as, which is the user that holds your logins. Three things
+follow (`docs/SECURITY.md`, "Workers"): run `relay work` as a dedicated OS user or in a container that holds the
+vendor and `gh` logins and nothing else (no SSH keys, no sudo, no access to your home directory); turn on branch
+protection on every linked repository's default branch, since the worker pushes as your `gh` account; and set
+`RELAY_ALLOWED_SENDERS` so that only the logins you name can turn a label into a job on your machine.
 
 ## Run it as a service
 

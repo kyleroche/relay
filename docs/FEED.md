@@ -117,7 +117,9 @@ How the GitHub webhook handler parses it, on `issue_comment` (created or edited)
 Only comments by logins in the repo's `RELAY_ALLOWED_SENDERS` variable (which includes the runner's gh account) are
 trusted for usage; the handler reads that variable through the GitHub API (with `GITHUB_TOKEN`) once per hour and
 caches it, or takes the comma-separated `RELAY_ALLOWED_SENDERS` environment variable when set. With neither
-configured every sender is trusted. A usage block posted by anyone else is recorded as `payload.untrusted = true`
+configured every sender is trusted for usage; the opposite holds for an `agent:<lane>` label that would open a task
+for a worker (`issue.labeled`): only an allowlisted sender may, and with no allowlist nobody may
+(`senderMayOpenTasks`). A usage block posted by anyone else is recorded as `payload.untrusted = true`
 with its usage columns zeroed (the reported numbers stay in `payload.reported`), so the `ledger` view, which is a
 plain `kind = 'step.usage'` filter, never counts it.
 
