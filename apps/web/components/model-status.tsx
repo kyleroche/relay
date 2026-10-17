@@ -1,20 +1,15 @@
-import { Check, Clock, TriangleAlert } from "lucide-react";
+import { Check, Clock, TriangleAlert, type LucideIcon } from "lucide-react";
+import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import type { ModelStatus } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
-const META: Record<ModelStatus, { label: string; className: string; Icon: typeof Check }> = {
-  ready: { label: "onboarded", className: "text-ok", Icon: Check },
-  stale: { label: "stale", className: "text-warn", Icon: TriangleAlert },
-  pending: { label: "not onboarded", className: "text-muted-foreground", Icon: Clock },
+/** A model's onboarding status mapped to {icon, tone, label, hint}; the rendering is components/ui/status-badge.tsx. */
+const META: Record<ModelStatus, { label: string; tone: StatusTone; icon: LucideIcon; hint: string }> = {
+  ready: { label: "onboarded", tone: "ok", icon: Check, hint: "Official vendor guidance is ingested and current." },
+  stale: { label: "stale", tone: "warn", icon: TriangleAlert, hint: "The vendor docs changed since the last ingest; run relay onboard again." },
+  pending: { label: "not onboarded", tone: "muted", icon: Clock, hint: "No vendor guidance ingested yet." },
 };
 
-/** Status always ships with an icon and a label, never color alone. */
 export function ModelStatusBadge({ status }: { status: ModelStatus }) {
   const m = META[status];
-  return (
-    <span className={cn("inline-flex shrink-0 items-center gap-1 text-[11px]", m.className)}>
-      <m.Icon className="size-3" aria-hidden="true" />
-      {m.label}
-    </span>
-  );
+  return <StatusBadge icon={m.icon} tone={m.tone} label={m.label} title={m.hint} />;
 }

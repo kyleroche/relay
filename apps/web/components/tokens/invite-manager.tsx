@@ -3,11 +3,14 @@
 import { Check, Copy, Ticket, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { createInviteAction, revokeInviteAction, type TokenActionResult } from "@/app/tokens/actions";
-import { Scopes, Tag } from "@/components/tokens/bits";
+import { createInviteAction, revokeInviteAction, type TokenActionResult } from "@/app/access/actions";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
+import { Disclosure } from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
+import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
+import { ScopeList } from "@/components/ui/scope-list";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 
@@ -17,9 +20,8 @@ export interface InviteView {
   scopes: string[];
   uses_left: number;
   max_uses: number;
-  /** Relative, made on the server: "in 23 h" */
-  expires: string;
-  created: string;
+  expires_at: string;
+  created_at: string;
   created_by: string;
   /** Revoked, expired or used up: shown greyed, no Revoke button. */
   spent: boolean;
@@ -110,7 +112,7 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
         {result?.ok && result.code && (
           <div role="status" className="mx-4 mb-4 rounded-md border border-primary/40 bg-primary/5 p-3 text-xs">
             <p className="font-medium">
-              Invite for <code className="font-mono">{result.name}</code> created. Send this line now; the code will not be shown again.
+              Invite for <span className="font-medium">{result.name}</span> created. Send this line now; the code will not be shown again.
             </p>
             <div className="mt-2 flex items-center gap-2">
               <code className="min-w-0 flex-1 select-all break-all rounded bg-background px-2 py-1.5 font-mono">{cliLine}</code>
@@ -130,10 +132,9 @@ export function InviteCreate({ scopes, canWrite, siteUrl }: { scopes: ScopeOptio
 }
 
 /** Invites that exist: live ones with Revoke, the spent ones under a toggle. Renders nothing when there are none. */
-export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWrite: boolean }) {
+export function InviteList({ invites, canWrite, now }: { invites: InviteView[]; canWrite: boolean; now: number }) {
   const router = useRouter();
   const [result, setResult] = useState<TokenActionResult | null>(null);
-  const [showSpent, setShowSpent] = useState(false);
   const [pending, start] = useTransition();
   const live = invites.filter((i) => !i.spent);
   const spent = invites.filter((i) => i.spent);
@@ -156,15 +157,29 @@ export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWr
           <span className="font-medium" title={i.id}>
             {i.name}
           </span>
-          {i.why && <Tag>{i.why}</Tag>}
-          <Scopes scopes={i.scopes} />
+          {i.why && <Pill>{i.why}</Pill>}
+          <ScopeList scopes={i.scopes} />
         </p>
-        <p className="mt-0.5 text-xs text-muted-foreground">
-          {i.spent ? `created ${i.created}` : `${i.uses_left} of ${i.max_uses} use${i.max_uses === 1 ? "" : "s"} left · expires ${i.expires} · created ${i.created}`}
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+          {!i.spent && (
+            <>
+              <span>
+                {i.uses_left} of {i.max_uses} use{i.max_uses === 1 ? "" : "s"} left
+              </span>
+              <span>·</span>
+              <span>
+                expires <RelTime iso={i.expires_at} now={now} />
+              </span>
+              <span>·</span>
+            </>
+          )}
+          <span>
+            created <RelTime iso={i.created_at} now={now} />
+          </span>
         </p>
       </div>
       {!i.spent && (
-        <Button size="sm" variant="ghost" onClick={() => revoke(i.id)} disabled={!canWrite || pending} aria-label={`Revoke invite for ${i.name}`}>
+        <Button size="sm" variant="ghost" className="hover:text-destructive" onClick={() => revoke(i.id)} disabled={!canWrite || pending} aria-label={`Revoke invite for ${i.name}`}>
           <Trash2 className="size-3.5" /> Revoke
         </Button>
       )}
@@ -186,18 +201,13 @@ export function InviteList({ invites, canWrite }: { invites: InviteView[]; canWr
         </ul>
       )}
       {spent.length > 0 && (
-        <div className={live.length > 0 ? "mt-2" : ""}>
-          <button type="button" onClick={() => setShowSpent((v) => !v)} className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground" aria-expanded={showSpent}>
-            {showSpent ? "Hide" : "Show"} {spent.length} used, expired or revoked
-          </button>
-          {showSpent && (
-            <ul className="mt-2 divide-y rounded-lg border">
-              {spent.map((i) => (
-                <Row key={i.id} i={i} />
-              ))}
-            </ul>
-          )}
-        </div>
+        <Disclosure label={`${spent.length} used, expired or revoked`} className={live.length > 0 ? "mt-2" : ""}>
+          <ul className="divide-y rounded-lg border">
+            {spent.map((i) => (
+              <Row key={i.id} i={i} />
+            ))}
+          </ul>
+        </Disclosure>
       )}
     </div>
   );

@@ -49,7 +49,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
           <SheetHeader>
             <SheetTitle>Requeue</SheetTitle>
             <SheetDescription>
-              The task is <span className="font-mono">{state}</span>
+              The task is {state}
               {lane ? (
                 <>
                   {" "}
@@ -98,7 +98,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
                 maxLength={2000}
                 disabled={pending}
                 placeholder="The cloud lane is not wired; run it on a worker."
-                className="min-h-16 rounded-md border bg-background px-3 py-2 font-mono text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                className="min-h-16 rounded-md border bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
                 aria-label="Reason"
               />
             </label>

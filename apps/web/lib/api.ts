@@ -28,7 +28,7 @@ export function accessSteps(): Record<string, unknown> {
     token_lifetime: { access_seconds: 86_400, refresh_seconds: 90 * 86_400, refresh: `POST ${SITE_URL}/oauth/token grant_type=refresh_token` },
     whoami: `GET ${SITE_URL}/api/v1/whoami or the relay_whoami tool`,
     docs: `${SITE_URL}/docs/api#access`,
-    fallback_for_humans: `${SITE_URL}/tokens`,
+    fallback_for_humans: `${SITE_URL}/access`,
   };
 }
 

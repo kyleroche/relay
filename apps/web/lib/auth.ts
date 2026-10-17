@@ -7,7 +7,7 @@
  *                                   when no entry carries scopes). Minted by hand; useful without a database.
  *   3. the `tokens` table           when the app runs in db mode: `relay token create` rows, matched by SHA-256.
  *
- * Tokens are minted by `relay token create`, the /tokens page, and the authorization server (/oauth/*, whose access
+ * Tokens are minted by `relay token create`, the /access page, and the authorization server (/oauth/*, whose access
  * tokens are rows in the same table named `oauth:<client>` with an expiry). The web app only checks them here.
  */
 import { timingSafeEqual } from "node:crypto";

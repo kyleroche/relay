@@ -220,7 +220,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Session required | |
 |---|---|
-| `/tasks`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/tokens` (the Access page) | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/tasks`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/access` (the Access page; `/tokens` redirects to it) | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
 | `/activate`, `/setup/*` | approving a device code; the GitHub App setup |
 | `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |
@@ -262,7 +262,7 @@ covered by `packages/core/test/oauth.test.ts`; the routes under `apps/web/app/oa
 | authorization code (`rac_…`) | `oauth_codes`, SHA-256, bound to the client, redirect URI and PKCE challenge | 10 minutes, one use | a second exchange fails and the code stays spent (a wrong `code_verifier` also spends it) |
 | device code (`rdc_…`) | `oauth_device_codes`, SHA-256, with the `RLAY-XXXX` user code | 15 minutes, one redemption | polling faster than `interval` answers `slow_down` |
 | invite code (`rin_…`) | `invites`, SHA-256, with `uses_left` | what `--expires` says (default 24 h), `--uses` redemptions (default 1) | spent atomically; revocable by id or name |
-| operator token (`relay token create`, "Mint a token by hand" on `/tokens`) | the same `tokens` table, no expiry | until revoked | none |
+| operator token (`relay token create`, "Mint a token by hand" on `/access`) | the same `tokens` table, no expiry | until revoked | none |
 
 ### Who may approve, and how much
 
@@ -283,7 +283,7 @@ stays pending for a person. So a chief-of-staff bot lets other agents in without
 can never widen itself, and `tokens:write` (the scope that makes an approver) is only ever handed out by a person.
 Every decision is an `access.granted` or `access.denied` row naming the actor.
 
-The Access page (`/tokens`) shows all of this to the operator: device requests with Approve and Deny (pending,
+The Access page (`/access`) shows all of this to the operator: device requests with Approve and Deny (pending,
 approved and waiting for the client to poll `/oauth/token`, and the last day's decisions), every token with how it was
 issued (OAuth client, invite, by hand) and whether it renews, invites, registered clients, and the by-hand form folded
 away at the bottom. Retention: a daily cron (`GET /api/cron/access-expire`, `CRON_SECRET`, 04:30 UTC in
@@ -317,7 +317,7 @@ endpoint, and the row refuses redemption past `expires_at` as well.
 `/oauth/authorize` (and `/activate` for device codes) renders, for the signed-in person: the client's registered name
 (`relay-cli@studio`, `Grok Bot`), each requested scope with the one-line description from `TOKEN_SCOPE_DESCRIPTIONS`,
 where the browser returns afterwards (the redirect URI's host) and, when present, the `resource`, plus the two facts
-that matter: the token lasts 24 hours and renews itself for 90 days, and it can be revoked on `/tokens` (Access). Approve and
+that matter: the token lasts 24 hours and renews itself for 90 days, and it can be revoked on `/access` (Access). Approve and
 Deny are plain form posts; the session cookie is `SameSite=Lax`, so a cross-site form cannot approve on the person's
 behalf, and the decision route re-validates the client and redirect URI against the registration before issuing
 anything the hidden fields could not have changed. A request that was not started by the person should be denied,

@@ -18,7 +18,7 @@
 Three places, three jobs. Keep them that way when adding a page.
 
 - Primary nav (`components/shell/nav.tsx`): the objects a viewer looks at daily. Signed in: Feed (`/`), Tasks, Projects, Assets, Usage. Anonymous: Overview (`/`), Docs, with Sign in on the right. Five short labels fit one row at 375px; the nav wraps, never scrolls.
-- Avatar menu (`components/shell/viewer-menu.tsx`): the viewer and what they configure once. Login (with "demo" in mock mode), then Workers, Access (`/tokens`), GitHub App (`/setup/github`), the theme as System / Light / Dark, then Overview (`/info`), Docs, Sign out. Anonymous visitors have no avatar; their theme control is in the footer.
+- Avatar menu (`components/shell/viewer-menu.tsx`): the viewer and what they configure once. Login (with "demo" in mock mode), then Workers, Access (`/access`), GitHub App (`/setup/github`), the theme as System / Light / Dark, then Overview (`/info`), Docs, Sign out. Anonymous visitors have no avatar; their theme control is in the footer.
 - Footer (`components/shell/site-footer.tsx`): the public and reference pages, in this order: Overview · Docs · API · OpenAPI · llms.txt · About · Contact · Privacy · Source.
 
 The header is one row at `lg` and up (brand · nav · meters · avatar) and two rows below (brand · meter pill · avatar, then the nav), under 110px of chrome on a phone. The three plan meters show as bars at `lg` and collapse to one pill (the highest percentage, in its tone, the three windows in a tooltip) below; both link to `/usage`. The landing is "Overview" wherever it is named; its path stays `/info` for signed-in viewers and `/` for everyone else.
@@ -41,6 +41,25 @@ What it shows: everything in motion, as a transit map. Lines are lanes (claude, 
 The motion rule: this is the deliberate exception to item 9 above, and the exception has its own rule: **motion means activity**. Particles run only on a segment that carries a task; a depot breathes only while it holds a claim; a pill travels only when its station changed between polls. An idle line never moves. `prefers-reduced-motion` keeps the positions and removes the travel, particles and breathing.
 
 The stations vocabulary is derived in `lib/flow.ts` and is the one to reuse elsewhere (feed strip, task pages): `queued → Queue`, `claimed → Claimed`, `running → Running`, `review → PR` (no preview ready), `→ Preview` (preview ready, nobody engaged), `→ Review` (a `pr.review` or a refused merge since the last push: a person or bot holds the decision), `done → Merged`, `failed → Failed`. `since` is when the task reached that station, not when it was opened.
+
+## Component idioms
+
+One way to do each small thing, so the app reads as one hand. Reuse these before writing a span with classes; they live in `components/ui`.
+
+- **Pill** (`pill.tsx`): the one small label. Hairline border in its tone (`muted`, `primary`, `ok`, `warn`, `bad`), `sm` or `md`, `mono` for identifiers (lanes, codes, tags), sans for words (`demo`, `revoked`). `asChild` makes it a link or list item. Never a filled chip.
+- **StatusBadge** (`status-badge.tsx`): icon + word + tone, hint in `title`, built on Pill. A domain maps its value to `{icon, tone, label, hint}` in a thin wrapper (`components/assets/status-badge.tsx`, `components/tasks/state-badge.tsx`, `components/model-status.tsx`, the worker map on `/workers`) and renders this; status is never color alone.
+- **SectionHeading** (`section-heading.tsx`): every heading under an h1 is `text-sm font-medium`, with an optional mono `count` and an `action` slot on the right (a link, an `sm` button, a key hint). h1 is `text-2xl` on app pages and `text-3xl` on the landing and docs articles. No uppercase eyebrows.
+- **EmptyState** (`empty-state.tsx`): a dashed box with a title, one line saying where the things come from, and the `command` that fills the list with a copy button. Every empty list uses it, including the small ones on Access.
+- **Breadcrumb** (`breadcrumb.tsx`): the trail above a detail page's h1, `Parent / current`, `mono` for ids; extra items (a source link) go in `children` on the same line.
+- **Kbd** (`kbd.tsx`): a key as the keyboard shows it. Inside a filled button, pass a class that drops the background.
+- **Collapsible** / **Disclosure** (`collapsible.tsx`): Radix Collapsible; `Disclosure` is the "Show 3 revoked or expired" text trigger with its content folded under it. **ToggleGroup** (`toggle-group.tsx`) is the bordered strip of mutually exclusive choices (the usage window); the meters are not toggles.
+- **PromptCard**: the Access page's "Connect an agent" card is the reference. A bordered card: heading, one line of what to do with it, the prompt as muted small text, a CopyButton top-right, and under a hairline the fallback actions ("Other ways in") as `outline sm` buttons that open sheets. A page that wants the viewer to hand something to an agent copies this shape instead of a form (brief item 7).
+- **Sheet for forms**: anything a person types (a note, an invite, a token by hand, a requeue) is a `Sheet` opened from an explicit button, with its own title, one line of consequence, the fields, one primary button and the outcome inside the sheet. Nothing is a form inline on the page.
+- **Buttons**: the primary decision is `default` (Approve, Create, Send); the opposing decision is `outline` (Deny, Reject, Request changes); a row-level revoke or remove is `ghost` with `hover:text-destructive`; nothing else is red. Irreversible actions (merge, asset approve) take two steps: the first click or key arms the button and changes its label, the second confirms, blur or Escape disarms. One size per context: `sm` in rows and section-heading actions, `default` on detail pages and in sheets; `lg` is unused.
+- **Times**: `lib/format.ts` only (`fmtAgo`, `fmtUntil`, `fmtDate`, `clockIn` in the viewer zone from `lib/tz.ts`); `RelTime` (`rel-time.tsx`) renders a relative time against the page's `now` with the ISO instant in `title` and `dateTime`. No `toLocaleString`, no UTC suffixes, no hand-rolled relative formatter.
+- **Actors**: an actor string (`human:kyle`, `bot:woodhouse`, `runner:studio`, `agent:claude`) is always `ActorChip` (`components/feed/actor-chip.tsx`): the shape says the kind, the name is sans. Never print the raw string.
+- **Scopes**: `ScopeList` (`scope-list.tsx`): code chips in a row where they are only names (Access rows), one per line with the description where the reader decides (activate, authorize); `ScopeCode` is the chip on its own (the scope picker).
+- **Mono**: Geist Mono for ids, `#n`, versions, costs, sizes, times, scopes, event kinds, mimes, hostnames and commands. Sans for people and client names, token and invite names, state words, kinds, and every sentence, including notes a person writes.
 
 ## Rationale
 

@@ -5,8 +5,12 @@ import { notFound } from "next/navigation";
 import { fmtDims, fmtSize, Thumb } from "@/components/assets/asset-card";
 import { AssetViewer } from "@/components/assets/asset-viewer";
 import { ReviewControls } from "@/components/assets/review-controls";
-import { StatusBadge } from "@/components/assets/status-badge";
+import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
+import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { getAsset } from "@/lib/data";
 import { fmtAgo, fmtDate } from "@/lib/format";
 import { cn } from "@/lib/utils";
@@ -35,21 +39,13 @@ export default async function AssetPage({ params }: Props) {
   return (
     <>
       <section className="py-6 sm:py-8">
-        <p className="text-xs text-muted-foreground">
-          <Link href="/assets" className="hover:text-foreground">Assets</Link>
-          {asset.project && (
-            <>
-              {" / "}
-              <Link href={`/assets?project=${asset.project}`} className="hover:text-foreground">{asset.project}</Link>
-            </>
-          )}
-        </p>
+        <Breadcrumb items={[{ label: "Assets", href: "/assets" }, ...(asset.project ? [{ label: asset.project, href: `/assets?project=${asset.project}` }] : [])]} />
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
               {asset.title}
               <span className="font-mono text-base font-normal text-muted-foreground">v{asset.version}</span>
-              <StatusBadge status={asset.status} />
+              <AssetStatusBadge status={asset.status} />
             </h1>
             {asset.description && <p className="mt-2 max-w-2xl text-sm text-muted-foreground">{asset.description}</p>}
           </div>
@@ -66,9 +62,9 @@ export default async function AssetPage({ params }: Props) {
           <AssetViewer asset={asset} />
           {versions.length > 1 && (
             <section aria-labelledby="versions-h">
-              <h2 id="versions-h" className="mb-2 text-xs font-medium text-muted-foreground">
-                Versions <span className="font-mono tabular-nums">{versions.length}</span>
-              </h2>
+              <SectionHeading id="versions-h" count={versions.length} className="mb-2">
+                Versions
+              </SectionHeading>
               <ol className="flex gap-2 overflow-x-auto pb-1">
                 {versions.map((v) => {
                   const current = v.id === asset.id;
@@ -82,9 +78,9 @@ export default async function AssetPage({ params }: Props) {
                         <Thumb asset={{ thumb_url: v.thumb_url, kind: asset.kind, title: asset.title, url: null }} className="aspect-[16/10] rounded-sm" />
                         <span className="flex items-center justify-between font-mono text-[11px]">
                           <span>v{v.version}</span>
-                          <span className="text-muted-foreground">{fmtAgo(v.created_at, now)}</span>
+                          <RelTime iso={v.created_at} now={now} className="text-muted-foreground" />
                         </span>
-                        <StatusBadge status={v.status} className="w-fit" />
+                        <AssetStatusBadge status={v.status} className="w-fit" />
                       </Link>
                     </li>
                   );
@@ -98,17 +94,26 @@ export default async function AssetPage({ params }: Props) {
           <ReviewControls asset={asset} />
           {asset.review_note && (
             <div className={cn("rounded-md border p-3 text-sm", asset.status === "rejected" ? "border-bad/40 bg-bad/5" : "bg-card")}>
-              <p className="text-[11px] text-muted-foreground">
-                {asset.status === "rejected" ? "Rejected" : "Reviewed"} by {asset.reviewed_by} {asset.reviewed_at ? fmtAgo(asset.reviewed_at, now) : ""}
+              <p className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+                {asset.status === "rejected" ? "Rejected" : "Reviewed"} by {asset.reviewed_by && <ActorChip actor={asset.reviewed_by} />}
+                {asset.reviewed_at && (
+                  <time dateTime={asset.reviewed_at} title={asset.reviewed_at}>
+                    {fmtAgo(asset.reviewed_at, now)}
+                  </time>
+                )}
               </p>
               <p className="mt-1">{asset.review_note}</p>
               {asset.status === "rejected" && <p className="mt-2 text-[11px] text-muted-foreground">Recorded as a project decision; the next attempt reads it in its brief.</p>}
             </div>
           )}
           {!asset.review_note && asset.reviewed_by && (
-            <p className="text-xs text-muted-foreground">
-              {asset.status === "approved" || asset.status === "published" ? "Approved" : "Reviewed"} by {asset.reviewed_by}
-              {asset.reviewed_at ? ` ${fmtAgo(asset.reviewed_at, now)}` : ""}.
+            <p className="flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+              {asset.status === "approved" || asset.status === "published" ? "Approved" : "Reviewed"} by <ActorChip actor={asset.reviewed_by} />
+              {asset.reviewed_at && (
+                <time dateTime={asset.reviewed_at} title={asset.reviewed_at}>
+                  {fmtAgo(asset.reviewed_at, now)}
+                </time>
+              )}
             </p>
           )}
           <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm">
@@ -130,8 +135,8 @@ export default async function AssetPage({ params }: Props) {
               </>
             )}
             <dt className="text-[11px] text-muted-foreground">Kind</dt>
-            <dd className="font-mono text-xs">
-              {asset.kind} · {asset.mime}
+            <dd className="text-xs">
+              {asset.kind} · <span className="font-mono">{asset.mime}</span>
             </dd>
             <dt className="text-[11px] text-muted-foreground">Size</dt>
             <dd className="font-mono text-xs">
@@ -147,7 +152,9 @@ export default async function AssetPage({ params }: Props) {
             {expires && (
               <>
                 <dt className="text-[11px] text-muted-foreground">Expires</dt>
-                <dd className="font-mono text-xs">{expires}</dd>
+                <dd className="font-mono text-xs" title={asset.expires_at ?? undefined}>
+                  {expires}
+                </dd>
               </>
             )}
             {asset.public_url && (
@@ -164,9 +171,9 @@ export default async function AssetPage({ params }: Props) {
           {asset.tags.length > 0 && (
             <ul className="flex flex-wrap gap-1" aria-label="Tags">
               {asset.tags.map((t) => (
-                <li key={t} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                  {t}
-                </li>
+                <Pill key={t} asChild mono>
+                  <li>{t}</li>
+                </Pill>
               ))}
             </ul>
           )}

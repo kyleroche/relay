@@ -3,7 +3,11 @@ import Link from "next/link";
 import { listApprovedAwaitingPoll, listPendingAccess, lookupDeviceRequest, normalizeUserCode, scopeDescriptions, type AccessRequestView, type DeviceCodeRow } from "@relay/core";
 import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
+import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Input } from "@/components/ui/input";
+import { RelTime } from "@/components/ui/rel-time";
+import { ScopeList } from "@/components/ui/scope-list";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { oauthOptions } from "@/lib/oauth";
@@ -37,21 +41,16 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
   const pending: DeviceCodeRow[] = db ? await listPendingAccess(await getDb(), oauthOptions()) : [];
   const awaiting: AccessRequestView[] = db ? await listApprovedAwaitingPoll(await getDb(), oauthOptions()) : [];
   const normalized = normalizeUserCode(typed);
-  const utc = (iso: string): string => `${iso.slice(11, 16)} UTC`;
+  const now = Date.now();
 
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-xs uppercase tracking-wide text-muted-foreground">Activate</p>
-          <Link href="/tokens" className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
-            Back to Access
-          </Link>
-        </div>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">Approve a device</h1>
+        <Breadcrumb items={[{ label: "Access", href: "/access" }, { label: "Approve a device" }]} />
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">Approve a device</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           A CLI or bot that ran <code className="rounded bg-muted px-1 font-mono">relay setup --site</code> shows a code like <code className="rounded bg-muted px-1 font-mono">RLAY-4F7Q</code>. Enter it here, check what it asks for, and approve. The token it receives lasts 24 hours and renews for 90 days; revoke it on{" "}
-          <Link href="/tokens" className="underline underline-offset-4">
+          <Link href="/access" className="underline underline-offset-4">
             Access
           </Link>
           .
@@ -62,7 +61,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {done && (
         <p role="status" className={`rounded-md border p-3 text-sm ${done === "approved" ? "border-primary/40 bg-primary/5" : "border-warn/40 bg-warn/5"}`}>
-          {done === "approved" ? <>Approved. <span className="font-mono">{one(sp.client)}</span> will receive its token on its next poll; you can close this page.</> : <>Denied. <span className="font-mono">{one(sp.client)}</span> will be told so.</>}
+          {done === "approved" ? <>Approved. <span className="font-medium">{one(sp.client)}</span> will receive its token on its next poll; you can close this page.</> : <>Denied. <span className="font-medium">{one(sp.client)}</span> will be told so.</>}
         </p>
       )}
       {error && (
@@ -73,21 +72,12 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {request && !done ? (
         <div className="rounded-lg border p-4">
-          <h2 className="text-sm font-medium">
-            <span className="font-mono">{request.client_name}</span> asks for access
-          </h2>
+          <SectionHeading>{request.client_name} asks for access</SectionHeading>
           <p className="mt-1 text-xs text-muted-foreground">
-            Code <span className="font-mono">{request.user_code}</span>, requested {new Date(request.created_at).toLocaleString("en-GB", { timeZone: "UTC", hour12: false })} UTC
+            Code <span className="font-mono">{request.user_code}</span>, requested <RelTime iso={request.created_at} now={now} />
             {request.expired ? ", expired" : request.status !== "pending" ? `, already ${request.status}` : ""}.
           </p>
-          <ul className="mt-3 flex flex-col gap-1.5 text-sm">
-            {scopeDescriptions(request.scopes).map((s) => (
-              <li key={s.scope} className="flex items-start gap-2">
-                <code className="shrink-0 rounded bg-muted px-1 font-mono text-xs leading-5">{s.scope}</code>
-                <span className="text-muted-foreground">{s.description}</span>
-              </li>
-            ))}
-          </ul>
+          <ScopeList scopes={scopeDescriptions(request.scopes)} className="mt-3" />
           {request.status === "pending" && !request.expired ? (
             <form action={activateAction} className="mt-4 flex flex-col gap-3 sm:flex-row">
               <input type="hidden" name="code" value={request.user_code} />
@@ -121,14 +111,14 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {pending.length > 0 && (
         <section aria-labelledby="pending-h">
-          <h2 id="pending-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Waiting for a decision <span className="font-mono tabular-nums">{pending.length}</span>
-          </h2>
+          <SectionHeading id="pending-h" count={pending.length} className="mb-2">
+            Waiting for a decision
+          </SectionHeading>
           <ul className="divide-y rounded-lg border text-sm">
             {pending.map((p) => (
               <li key={p.user_code} className="flex items-center justify-between gap-3 px-3 py-2">
                 <span className="min-w-0 truncate">
-                  <span className="font-mono">{p.user_code}</span> <span className="text-muted-foreground">from</span> <span className="font-mono">{p.client_name}</span>
+                  <span className="font-mono">{p.user_code}</span> <span className="text-muted-foreground">from</span> <span className="font-medium">{p.client_name}</span>
                 </span>
                 <Link href={`/activate?code=${encodeURIComponent(p.user_code)}`} className="shrink-0 underline underline-offset-4">
                   Review
@@ -141,22 +131,24 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
 
       {awaiting.length > 0 && (
         <section aria-labelledby="awaiting-h">
-          <h2 id="awaiting-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Approved, waiting for the device to poll <span className="font-mono tabular-nums">{awaiting.length}</span>
-          </h2>
+          <SectionHeading id="awaiting-h" count={awaiting.length} className="mb-2">
+            Approved, waiting for the device to poll
+          </SectionHeading>
           <ul className="divide-y rounded-lg border text-sm">
             {awaiting.map((a) => (
               <li key={a.user_code} className="flex flex-col gap-1 px-3 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                 <span className="min-w-0 break-all">
-                  <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-mono">{a.client_name}</span>
+                  <span className="font-mono">{a.user_code}</span> <span className="text-muted-foreground">for</span> <span className="font-medium">{a.client_name}</span>
                 </span>
-                <span className="shrink-0 text-xs text-muted-foreground">token on its next poll; code expires {utc(a.expires_at)}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  token on its next poll; code expires <RelTime iso={a.expires_at} now={now} />
+                </span>
               </li>
             ))}
           </ul>
           <p className="mt-2 text-xs text-muted-foreground">
             The token is minted when the device next calls <code className="font-mono">/oauth/token</code>; it will then appear under Grants on{" "}
-            <Link href="/tokens" className="underline underline-offset-4">
+            <Link href="/access" className="underline underline-offset-4">
               Access
             </Link>
             .

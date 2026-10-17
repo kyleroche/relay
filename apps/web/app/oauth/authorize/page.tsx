@@ -4,6 +4,8 @@ import { redirect } from "next/navigation";
 import { OAuthError, scopeDescriptions, validateAuthorizeRequest, type AuthorizeRequest } from "@relay/core";
 import { DemoNotice } from "@/components/demo-notice";
 import { Button } from "@/components/ui/button";
+import { ScopeList } from "@/components/ui/scope-list";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
 import { oauthOptions } from "@/lib/oauth";
@@ -60,13 +62,10 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <p className="text-xs uppercase tracking-wide text-muted-foreground">Authorize</p>
-        <h1 className="mt-1 text-2xl font-semibold tracking-tight">
-          <span className="font-mono">{request.client.name}</span> wants access to relay
-        </h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{request.client.name} wants access to relay</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           Signed in as <span className="font-medium text-foreground">{session.login}</span>. Approving mints a token named <code className="rounded bg-muted px-1 font-mono">oauth:{request.client.name}</code> that lasts 24 hours and renews itself for 90 days; every write it makes is attributed to it in the feed. Revoke it any time on{" "}
-          <Link href="/tokens" className="underline underline-offset-4">
+          <Link href="/access" className="underline underline-offset-4">
             Access
           </Link>
           .
@@ -74,15 +73,8 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
       </div>
 
       <div className="rounded-lg border p-4">
-        <h2 className="text-xs font-medium text-muted-foreground">It asks to</h2>
-        <ul className="mt-2 flex flex-col gap-1.5 text-sm">
-          {scopeDescriptions(request.scopes).map((s) => (
-            <li key={s.scope} className="flex items-start gap-2">
-              <code className="shrink-0 rounded bg-muted px-1 font-mono text-xs leading-5">{s.scope}</code>
-              <span className="text-muted-foreground">{s.description}</span>
-            </li>
-          ))}
-        </ul>
+        <SectionHeading>It asks to</SectionHeading>
+        <ScopeList scopes={scopeDescriptions(request.scopes)} className="mt-2" />
         <p className="mt-3 text-xs text-muted-foreground">
           After you decide, the browser returns to <span className="font-mono">{redirectHost}</span>
           {request.resource ? <> for <span className="font-mono">{request.resource}</span></> : null}.
@@ -97,10 +89,10 @@ export default async function AuthorizePage({ searchParams }: { searchParams: Pr
         <input type="hidden" name="code_challenge" value={request.code_challenge} />
         <input type="hidden" name="code_challenge_method" value={request.code_challenge_method} />
         {request.resource ? <input type="hidden" name="resource" value={request.resource} /> : null}
-        <Button type="submit" name="decision" value="approve" size="lg" className="flex-1">
+        <Button type="submit" name="decision" value="approve" className="flex-1">
           Approve
         </Button>
-        <Button type="submit" name="decision" value="deny" size="lg" variant="outline" className="flex-1">
+        <Button type="submit" name="decision" value="deny" variant="outline" className="flex-1">
           Deny
         </Button>
       </form>

@@ -40,7 +40,7 @@ export function serverCard() {
       public_when_public_read: MCP_TOOLS.filter((t) => t.scope !== null && PUBLIC_READ.has(t.scope)).map((t) => t.name),
       required_for: MCP_TOOLS.filter((t) => t.scope !== null && !PUBLIC_READ.has(t.scope)).map((t) => t.name),
       scopes: SCOPES,
-      token_issuance: "OAuth 2.1 at this site (register at /oauth/register, authorization code with PKCE S256, or the device flow approved at /activate), an invite code from relay invite create, or relay token create / the /tokens page (the hash is stored, the token shown once)",
+      token_issuance: "OAuth 2.1 at this site (register at /oauth/register, authorization code with PKCE S256, or the device flow approved at /activate), an invite code from relay invite create, or relay token create / the /access page (the hash is stored, the token shown once)",
       how_to_get_access: [
         `POST ${SITE_URL}/oauth/device with client_name and scope (registers you); note device_code, user_code, verification_uri`,
         `ask the person to approve user_code at ${SITE_URL}/activate (or a tokens:write bot posts to ${SITE_URL}/api/v1/access/{user_code}/approve or calls the relay_access_approve tool on ${SITE_URL}/mcp; a bot can approve only scopes it holds itself, never tokens:write); poll POST ${SITE_URL}/oauth/token grant_type=urn:ietf:params:oauth:grant-type:device_code until access_token arrives`,

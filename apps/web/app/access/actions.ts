@@ -52,7 +52,7 @@ export async function createTokenAction(name: string, scopes: string[]): Promise
   if (!chosen.length) return { ok: false, message: `Pick at least one scope (${TOKEN_SCOPES.join(", ")}).` };
   const by = g.by;
   const { token, row } = await repo.createToken(await getDb(), { name: trimmed, scopes: chosen, createdBy: by });
-  revalidatePath("/tokens");
+  revalidatePath("/access");
   return { ok: true, token, name: row.name };
 }
 
@@ -61,7 +61,7 @@ export async function revokeTokenAction(id: string): Promise<TokenActionResult> 
   if (g.refused) return g.refused;
   const row = await repo.revokeToken(await getDb(), id);
   if (!row) return { ok: false, message: "That token is already revoked." };
-  revalidatePath("/tokens");
+  revalidatePath("/access");
   return { ok: true, name: row.name };
 }
 
@@ -72,7 +72,7 @@ export async function decideAccessAction(code: string, decision: "approve" | "de
   const by = g.by;
   try {
     const row = await decideDeviceRequest(await getDb(), code, decision, by, oauthOptions());
-    revalidatePath("/tokens");
+    revalidatePath("/access");
     revalidatePath("/activate");
     return { ok: true, name: row.client_name };
   } catch (e) {
@@ -101,7 +101,7 @@ export async function createInviteAction(input: InviteInput): Promise<TokenActio
   const by = g.by;
   try {
     const r = await createInvite(await getDb(), { name, scopes, ...(expires ? { expiresInSeconds: expires } : {}), uses: Number.isInteger(input.uses) && input.uses > 0 ? input.uses : 1, createdBy: by }, oauthOptions());
-    revalidatePath("/tokens");
+    revalidatePath("/access");
     return { ok: true, code: r.code, name: r.invite.name };
   } catch (e) {
     return { ok: false, message: describe(e) };
@@ -114,7 +114,7 @@ export async function revokeInviteAction(id: string): Promise<TokenActionResult>
   const by = g.by;
   const row = await revokeInvite(await getDb(), id, by, oauthOptions());
   if (!row) return { ok: false, message: "That invite is already revoked." };
-  revalidatePath("/tokens");
+  revalidatePath("/access");
   return { ok: true, name: row.name };
 }
 
@@ -125,7 +125,7 @@ export async function removeClientAction(clientId: string): Promise<TokenActionR
   const by = g.by;
   try {
     const row = await removeClient(await getDb(), clientId, by, oauthOptions());
-    revalidatePath("/tokens");
+    revalidatePath("/access");
     return { ok: true, name: row.name };
   } catch (e) {
     return { ok: false, message: describe(e) };

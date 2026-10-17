@@ -7,6 +7,7 @@ import { GrantList, MintByHand, type TokenOrigin, type TokenRowView } from "@/co
 import { CopyButton } from "@/components/copy-button";
 import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
+import { SectionHeading } from "@/components/ui/section-heading";
 import { CONNECT_AGENT_PROMPT } from "@/lib/content/info";
 import { dataMode, SITE_URL } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -21,19 +22,6 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-/**
- * Relative time, made once on the server so the markup matches on hydration: "just now", "5 min ago", "2 h ago",
- * "3 d ago", or "in 23 h" for the future. The page is dynamic, so it is fresh on every load.
- */
-function rel(iso: string, now: number): string {
-  const ms = new Date(iso).getTime() - now;
-  const abs = Math.abs(ms);
-  const unit = abs < 60_000 ? null : abs < 3_600_000 ? [Math.round(abs / 60_000), "min"] : abs < 86_400_000 ? [Math.round(abs / 3_600_000), "h"] : [Math.round(abs / 86_400_000), "d"];
-  if (!unit) return ms <= 0 ? "just now" : "in under a minute";
-  return ms <= 0 ? `${unit[0]} ${unit[1]} ago` : `in ${unit[0]} ${unit[1]}`;
-}
-const actorName = (a: string | null): string | null => (a === null ? null : a.replace(/^human:/, ""));
-
 interface Loaded {
   requests: RequestView[];
   tokens: TokenRowView[];
@@ -41,10 +29,10 @@ interface Loaded {
   clients: ClientView[];
 }
 
-async function load(): Promise<Loaded> {
+/** Rows as the components render them: ISO times (RelTime formats them against the page's `now`), raw actors (ActorChip). */
+async function load(now: number): Promise<Loaded> {
   const db = await getDb();
   const o = oauthOptions();
-  const now = Date.now();
   const [recent, tokens, invites, clients] = await Promise.all([listRecentAccess(db, o), repo.listTokens(db, { includeRevoked: true }), listInvites(db, { includeSpent: true }), listClients(db, o)]);
   const clientName = new Map(clients.map((c) => [c.client_id, c.name]));
   const origin = (t: repo.TokenRow): TokenOrigin => (t.client_id ? { kind: "oauth", client: clientName.get(t.client_id) ?? t.client_id } : t.created_by.startsWith("invite:") ? { kind: "invite" } : { kind: "hand" });
@@ -54,10 +42,10 @@ async function load(): Promise<Loaded> {
       client_name: r.client_name,
       scopes: r.scopes,
       state: r.state,
-      requested: rel(r.created_at, now),
-      expires: rel(r.expires_at, now),
-      decided: r.decided_at ? rel(r.decided_at, now) : null,
-      decided_by: actorName(r.actor),
+      created_at: r.created_at,
+      expires_at: r.expires_at,
+      decided_at: r.decided_at,
+      decided_by: r.actor,
       token_name: r.token_name,
     })),
     tokens: tokens.map((t) => ({
@@ -65,33 +53,34 @@ async function load(): Promise<Loaded> {
       name: t.name,
       scopes: t.scopes,
       created_by: t.created_by,
-      created: rel(t.created_at, now),
-      last_used: t.last_used_at ? rel(t.last_used_at, now) : null,
+      created_at: t.created_at,
+      last_used_at: t.last_used_at,
       revoked: !!t.revoked_at,
       expired: !!t.expires_at && new Date(t.expires_at).getTime() <= now,
-      expires: t.expires_at ? rel(t.expires_at, now) : null,
+      expires_at: t.expires_at,
       origin: origin(t),
     })),
     invites: invites.map((i) => {
       const why = i.revoked_at ? "revoked" : new Date(i.expires_at).getTime() <= now ? "expired" : i.uses_left <= 0 ? "used up" : null;
-      return { id: i.id, name: i.name, scopes: i.scopes, uses_left: i.uses_left, max_uses: i.max_uses, expires: rel(i.expires_at, now), created: rel(i.created_at, now), created_by: i.created_by, spent: why !== null, why };
+      return { id: i.id, name: i.name, scopes: i.scopes, uses_left: i.uses_left, max_uses: i.max_uses, expires_at: i.expires_at, created_at: i.created_at, created_by: i.created_by, spent: why !== null, why };
     }),
-    clients: clients.map((c) => ({ client_id: c.client_id, name: c.name, origin: clientOrigin(c), confidential: c.has_secret, created: rel(c.created_at, now), live_tokens: c.live_tokens, pending_codes: c.pending_codes, live_refresh_tokens: c.live_refresh_tokens })),
+    clients: clients.map((c) => ({ client_id: c.client_id, name: c.name, origin: clientOrigin(c), confidential: c.has_secret, created_at: c.created_at, live_tokens: c.live_tokens, pending_codes: c.pending_codes, live_refresh_tokens: c.live_refresh_tokens })),
   };
 }
 
 const EMPTY: Loaded = { requests: [], tokens: [], invites: [], clients: [] };
 
 /**
- * /tokens, the Access page: what is asking (device requests, with Approve and Deny), what exists (every token and how it
+ * /access, the Access page: what is asking (device requests, with Approve and Deny), what exists (every token and how it
  * was issued), invites when any exist, and the registered clients folded away. The prompt to hand an agent sits at
  * the top; the forms (invite, token by hand) open only from a button beside it. /activate stays the focused approval
  * page a device points a person at.
  */
 export default async function AccessPage() {
-  await requireSession("/tokens");
+  await requireSession("/access");
   const db = dataMode() === "db";
-  const data = db ? await load() : EMPTY;
+  const now = Date.now();
+  const data = db ? await load(now) : EMPTY;
   const scopes = TOKEN_SCOPES.map((name) => ({ name, description: TOKEN_SCOPE_DESCRIPTIONS[name] }));
   const waiting = data.requests.filter((r) => r.state === "pending" || r.state === "approved").length;
   const live = data.tokens.filter((t) => !t.revoked && !t.expired).length;
@@ -108,9 +97,7 @@ export default async function AccessPage() {
         <section aria-labelledby="connect-h" className="relative rounded-lg border bg-card p-4">
           <CopyButton text={CONNECT_AGENT_PROMPT} className="absolute right-2 top-2" />
           <div className="pr-10">
-            <h2 id="connect-h" className="text-sm font-medium">
-              Connect an agent
-            </h2>
+            <SectionHeading id="connect-h">Connect an agent</SectionHeading>
             <p className="mt-0.5 text-xs text-muted-foreground">Paste this into the bot or coding agent that should use this relay. It asks for access itself; the code shows up under Requests.</p>
           </div>
           <p className="mt-3 max-w-3xl text-xs leading-5 text-muted-foreground">{CONNECT_AGENT_PROMPT}</p>
@@ -122,29 +109,29 @@ export default async function AccessPage() {
         </section>
 
         <section aria-labelledby="requests-h">
-          <h2 id="requests-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Requests{waiting > 0 && <span className="ml-1 font-mono tabular-nums text-foreground">{waiting}</span>}
-          </h2>
-          <AccessRequests requests={data.requests} canWrite={db} />
+          <SectionHeading id="requests-h" count={waiting > 0 ? waiting : null} className="mb-2">
+            Requests
+          </SectionHeading>
+          <AccessRequests requests={data.requests} canWrite={db} now={now} />
         </section>
 
         <section aria-labelledby="grants-h">
-          <h2 id="grants-h" className="mb-2 text-xs font-medium text-muted-foreground">
-            Grants{live > 0 && <span className="ml-1 font-mono tabular-nums text-foreground">{live}</span>}
-          </h2>
-          <GrantList tokens={data.tokens} canWrite={db} />
+          <SectionHeading id="grants-h" count={live > 0 ? live : null} className="mb-2">
+            Grants
+          </SectionHeading>
+          <GrantList tokens={data.tokens} canWrite={db} now={now} />
         </section>
 
         {data.invites.length > 0 && (
           <section aria-labelledby="invites-h">
-            <h2 id="invites-h" className="mb-2 text-xs font-medium text-muted-foreground">
+            <SectionHeading id="invites-h" className="mb-2">
               Invites
-            </h2>
-            <InviteList invites={data.invites} canWrite={db} />
+            </SectionHeading>
+            <InviteList invites={data.invites} canWrite={db} now={now} />
           </section>
         )}
 
-        <ClientList clients={data.clients} canWrite={db} />
+        <ClientList clients={data.clients} canWrite={db} now={now} />
       </div>
     </>
   );

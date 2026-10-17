@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
-import { Circle, Pause, Power } from "lucide-react";
+import { Circle, Pause, Power, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
+import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
 import { getWorkers } from "@/lib/data";
-import { fmtAgo } from "@/lib/format";
 import type { WorkerStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -15,10 +18,11 @@ export const metadata: Metadata = {
 
 export const dynamic = "force-dynamic";
 
-const STATUS: Record<WorkerStatus, { label: string; className: string; Icon: typeof Circle; hint: string }> = {
-  online: { label: "online", className: "text-ok", Icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
-  idle: { label: "idle", className: "text-muted-foreground", Icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
-  offline: { label: "offline", className: "text-bad", Icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
+/** A worker's status mapped to {icon, tone, label, hint}; the rendering is components/ui/status-badge.tsx. */
+const STATUS: Record<WorkerStatus, { label: string; tone: StatusTone; icon: LucideIcon; hint: string }> = {
+  online: { label: "online", tone: "ok", icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
+  idle: { label: "idle", tone: "muted", icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
+  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
 };
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
@@ -34,12 +38,12 @@ export default async function WorkersPage() {
           Your machines running <code className="rounded bg-muted px-1 font-mono text-xs">relay work</code>: their lanes, what they are on, when they last checked in.
         </PageIntro>
       </section>
-      {workers.length === 0 ? (
-        <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
-          No worker has registered yet. On a machine with the vendor logins, run <code className="rounded bg-muted px-1 font-mono text-xs">relay setup --site</code> and then{" "}
-          <code className="rounded bg-muted px-1 font-mono text-xs">relay work --install --yes</code>.
-        </p>
-      ) : null}
+      {workers.length === 0 && (
+        <EmptyState title="No workers yet" command={`npx @kyleroche/relay setup --site <this site>
+npx @kyleroche/relay work --install --yes`}>
+          A worker is a machine with your vendor logins running relay work. Join one with these two commands; it appears here on its first heartbeat.
+        </EmptyState>
+      )}
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {workers.map((w) => {
           const s = STATUS[w.status];
@@ -53,15 +57,14 @@ export default async function WorkersPage() {
                     {w.version ? <span className="ml-2 text-[11px]">relay {w.version}</span> : null}
                   </p>
                 </div>
-                <span className={cn("inline-flex shrink-0 items-center gap-1.5 text-xs", s.className)} title={s.hint}>
-                  <s.Icon className={cn("size-2.5", w.status === "online" && "fill-current")} aria-hidden="true" />
-                  {s.label}
-                </span>
+                <StatusBadge icon={s.icon} tone={s.tone} label={s.label} title={s.hint} iconClassName={cn("size-2.5", w.status === "online" && "fill-current")} />
               </div>
               <dl className="grid grid-cols-2 gap-2 text-sm">
                 <div>
                   <dt className="text-[11px] text-muted-foreground">Last seen</dt>
-                  <dd className="font-mono tabular-nums">{fmtAgo(w.lastSeen, now)}</dd>
+                  <dd>
+                    <RelTime iso={w.lastSeen} now={now} />
+                  </dd>
                 </div>
                 <div>
                   <dt className="text-[11px] text-muted-foreground">Runs today</dt>
@@ -76,7 +79,9 @@ export default async function WorkersPage() {
                       {w.current.project}
                     </Link>{" "}
                     <span className="font-mono text-xs">#{w.current.issue}</span>
-                    <span className="ml-1 font-mono text-[11px] text-muted-foreground">since {fmtAgo(w.current.startedAt, now)}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">
+                      since <RelTime iso={w.current.startedAt} now={now} />
+                    </span>
                   </p>
                 ) : (
                   <p className="text-sm text-muted-foreground">
@@ -87,20 +92,20 @@ export default async function WorkersPage() {
               </div>
               <ul className="flex flex-wrap gap-1" aria-label="Lanes and labels">
                 {w.lanes.map((l) => (
-                  <li key={`lane:${l}`} className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">
-                    {l}
-                  </li>
+                  <Pill key={`lane:${l}`} asChild tone="primary" mono title={`Serves the ${l} lane`}>
+                    <li>{l}</li>
+                  </Pill>
                 ))}
                 {w.labels.map((l) =>
                   l === "sandbox:off" ? (
                     // relay work --no-sandbox: this machine runs the Claude lane's Bash without Claude Code's OS sandbox
-                    <li key={`label:${l}`} className="rounded bg-destructive/10 px-1.5 py-0.5 font-mono text-[10px] text-destructive" title="Started with --no-sandbox: the Claude lane's Bash runs without Claude Code's OS sandbox on this machine">
-                      {l}
-                    </li>
+                    <Pill key={`label:${l}`} asChild tone="bad" mono title="Started with --no-sandbox: the Claude lane's Bash runs without Claude Code's OS sandbox on this machine">
+                      <li>{l}</li>
+                    </Pill>
                   ) : (
-                    <li key={`label:${l}`} className="rounded bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground">
-                      {l}
-                    </li>
+                    <Pill key={`label:${l}`} asChild mono>
+                      <li>{l}</li>
+                    </Pill>
                   ),
                 )}
               </ul>

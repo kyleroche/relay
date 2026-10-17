@@ -6,11 +6,13 @@ import { DemoNotice } from "@/components/demo-notice";
 import { PageIntro } from "@/components/page-intro";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Pill } from "@/components/ui/pill";
+import { RelTime } from "@/components/ui/rel-time";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
-import { fmtAgo } from "@/lib/format";
 import { requireSession } from "@/lib/session";
-import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath } from "@/lib/tasks";
+import { REVIEW_AGENT_PROMPT, STATE_HINT, STATE_TONE, taskPagePath, TONE_TEXT } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = {
@@ -32,7 +34,7 @@ function Row({ t, now }: { t: TaskView; now: number }) {
         </Link>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
           <span className="font-mono">{t.id}</span>
-          <span className="font-mono">{t.lane ?? "no lane"}</span>
+          {t.lane ? <Pill mono>{t.lane}</Pill> : <span>no lane</span>}
           {t.pr && (
             <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono hover:text-primary">
               PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />
@@ -47,11 +49,7 @@ function Row({ t, now }: { t: TaskView; now: number }) {
           )}
         </p>
       </div>
-      {t.updated_at && (
-        <time dateTime={t.updated_at} className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-          {fmtAgo(t.updated_at, now)}
-        </time>
-      )}
+      {t.updated_at && <RelTime iso={t.updated_at} now={now} className="shrink-0 text-xs text-muted-foreground" />}
     </li>
   );
 }
@@ -83,16 +81,16 @@ export default async function TasksPage() {
       </section>
 
       {db && tasks.length === 0 && (
-        <p className="rounded-md border bg-card p-4 text-sm text-muted-foreground">
-          No tasks yet. Open one with <code className="rounded bg-muted px-1 font-mono text-xs">relay task create --title … --lane claude</code>, the <code className="rounded bg-muted px-1 font-mono text-xs">relay_task_create</code> tool, or an <code className="rounded bg-muted px-1 font-mono text-xs">agent:*</code> label on a GitHub issue.
-        </p>
+        <EmptyState title="No tasks yet" command={`relay task create --title "…" --lane claude`}>
+          A task is a GitHub issue with an agent:* label. Open one with the command, the relay_task_create tool, or by labelling an issue.
+        </EmptyState>
       )}
       {groups.length > 0 && (
         <ul className="divide-y rounded-lg border" aria-label="Tasks by state">
           {groups.map(({ state, list }) => (
             <li key={state}>
               <h2 className="flex items-baseline gap-2 bg-muted/40 px-3 py-1.5 text-xs font-medium text-muted-foreground" title={STATE_HINT[state]}>
-                <span className={cn("font-mono", STATE_TONE[state])}>{state}</span>
+                <span className={cn(TONE_TEXT[STATE_TONE[state]])}>{state}</span>
                 <span className="font-mono tabular-nums text-foreground">{list.length}</span>
               </h2>
               <ul className="divide-y border-t">
