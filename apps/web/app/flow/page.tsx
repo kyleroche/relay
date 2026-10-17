@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { FlowView } from "@/components/flow/flow-view";
 import { getFlow } from "@/lib/data";
-import { STATIONS } from "@/lib/flow";
 import { requireSession } from "@/lib/session";
 
 export const metadata: Metadata = {
@@ -25,8 +24,10 @@ export default async function FlowPage() {
       <section className="py-6 sm:py-8">
         <h1 className="text-2xl font-semibold tracking-tight">What is moving</h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Each line is a lane, each stop a station: {STATIONS.join(", ")}. Projects feed the queue from the left, workers sit above Running and tether to the task they are on, a
-          failed run drops into the siding. Only tasks in motion are drawn; a merged one leaves at the right edge. Open a pill for the <Link href="/tasks" className="text-primary underline underline-offset-4">task</Link>.
+          Lanes are lines, states are stations, tasks are the trains. Only what is in motion is drawn.{" "}
+          <Link href="/docs/workers" className="text-primary underline underline-offset-4">
+            How it works
+          </Link>
         </p>
       </section>
       <section aria-label="Flow map">
