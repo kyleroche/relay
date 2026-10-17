@@ -13,11 +13,13 @@ import { digestProject, emptyUsage, formatUsage, installOwnedSection, invalidate
 import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady, RELAY_ROOT } from "./_common.ts";
 
 const TEMPLATES = join(RELAY_ROOT, "packages", "cli", "templates");
-const WORKFLOWS = ["relay-caller.yml", "relay-review.yml"] as const;
+const WORKFLOWS = ["relay-caller.yml", "relay-review.yml", "relay-cloud.yml"] as const;
 const LABELS: Array<{ name: string; color: string; description: string }> = [
   { name: "agent:claude", color: "D97757", description: "relay: implement with the Claude lane" },
   { name: "agent:codex", color: "10A37F", description: "relay: implement with the Codex lane" },
   { name: "agent:grok", color: "1DA1F2", description: "relay: implement with the Grok lane" },
+  { name: "agent:claude-cloud", color: "F2C4B3", description: "relay: hand to Claude's cloud tier (@claude), no runner" },
+  { name: "agent:codex-cloud", color: "9FE3CF", description: "relay: hand to Codex cloud (@codex), no runner" },
   { name: "deliverable:asset", color: "7057FF", description: "relay: the result is a media asset, not code" },
 ];
 
@@ -131,7 +133,7 @@ export function registerLink(program: Command): void {
         // 7. lane labels
         if (o.labels) {
           const gh = onPath("gh");
-          if (!gh) log("labels: gh not on PATH; create agent:claude|codex|grok and deliverable:asset by hand");
+          if (!gh) log("labels: gh not on PATH; create agent:claude|codex|grok, agent:claude-cloud|codex-cloud and deliverable:asset by hand");
           else
             for (const l of LABELS) {
               try {
