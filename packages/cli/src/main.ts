@@ -24,6 +24,7 @@ import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { openReady } from "./commands/_common.ts";
 import { lanesFromChecks, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
 // ../package.json is packages/cli/package.json from src/ and the package root from the bundled dist/relay.js.
@@ -67,7 +68,7 @@ program
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, whether the database or site is reachable, and how this machine authenticates")
+  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, whether the database or site is reachable, how this machine authenticates, and (site mode) which linked repos still lack the GitHub App")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);
@@ -97,6 +98,13 @@ program
           if (health.ok) {
             const who = await h.client.whoami().catch(() => undefined);
             if (who) checks.push({ status: "ok", name: "whoami", detail: `${who.name} (${who.source}): ${who.scopes.join(", ")}${who.expires_at ? `; expires ${who.expires_at}` : ""}` });
+            // linked repos the site's GitHub App is not installed on get no issues, labels, PRs or previews
+            try {
+              const report = await projectsEventsReport(h.client, cfg.site!);
+              checks.push(...report.checks);
+            } catch (e) {
+              checks.push({ status: "warn", name: "events", detail: `could not check the GitHub App per project: ${(e instanceof Error ? e.message : String(e)).slice(0, 160)}` });
+            }
           }
         } finally {
           await h.close();

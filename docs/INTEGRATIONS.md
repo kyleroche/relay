@@ -333,5 +333,6 @@ A laptop that should use the hosted relay rather than its own database runs `rel
 `relay usage`, `relay recall`, `relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`,
 `relay invite`, `relay task` and `relay webhook`, and the session hooks, talk to the site; `relay link` still digests
 with the local Claude login and uploads the result (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`, scope
-`projects:write`). `relay doctor` says which mode is active, how the machine authenticates, and whether the site
-answers. `relay setup --no-site` goes back to local.
+`projects:write`), then asks `GET /api/v1/projects/<slug>/github` (`feed:read` or `projects:write`) whether the site's
+GitHub App is installed on the repo and prints the install link when it is not. `relay doctor` says which mode is active,
+how the machine authenticates, whether the site answers, and which linked repos still lack the App. `relay setup --no-site` goes back to local.

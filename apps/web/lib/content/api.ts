@@ -138,6 +138,14 @@ curl -s "${SITE_URL}/api/v1/feed?kind=step.usage&limit=5" | jq '.events[] | {ts,
 
 \`operationId: getProject\`. One project with its current decisions, models and recent events.
 
+### GET /api/v1/projects/{slug}/github
+
+\`operationId: getProjectGitHub\`. Will GitHub events for the project's repository reach this site? \`app.installed\` is the GitHub App's installation discovery for the repo (\`configured: false\` when the site has no App), \`install_url\` where to install it (this site's \`/setup/github\` when none is configured), \`webhook\` the GitHub deliveries already recorded for the repo. \`relay link\` prints this as its \`events\` stage; \`relay doctor\` lists the linked projects still missing the App. Scope \`feed:read\` or \`projects:write\`.
+
+\`\`\`bash
+curl -s ${SITE_URL}/api/v1/projects/relay/github -H "Authorization: Bearer $TOKEN" | jq '{installed: .app.installed, install_url: .app.install_url}'
+\`\`\`
+
 ### Assets
 
 The asset library ([docs/ASSETS.md](/docs/assets)): media agents produce, stored privately, versioned, reviewed. Every view URL is signed and expires after an hour. Uploads need a database and a store (\`RELAY_DATA=db\`); the demo deployment answers \`501\` to uploads and serves mock assets.

@@ -56,6 +56,18 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         responses: { "200": response("Refreshed.", "#/components/schemas/ProjectRowEnvelope"), "201": response("Created.", "#/components/schemas/ProjectRowEnvelope"), "400": problemResponse("Bad slug or repo."), "501": notImplemented, ...commonErrors },
       },
     },
+    "/projects/{slug}/github": {
+      get: {
+        operationId: "getProjectGitHub",
+        tags: ["projects"],
+        summary: "Will GitHub events for this project's repository reach this site?",
+        description:
+          "The check `relay link` prints as its `events` stage and `relay doctor` repeats per project. `app.installed` is the GitHub App's installation discovery for the repo (`GET /repos/{owner}/{repo}/installation`, cached up to an hour); false with `configured: false` when the site has no App. `install_url` is the App's install page, or this site's `/setup/github` when no App is configured. `webhook` counts the GitHub deliveries already recorded for the repo (events with a `github:` dedupe key: an organization or repository webhook, or the App's own) and is omitted in mock mode. Readable with `feed:read` or `projects:write` (the scope `relay link` holds), or a session.",
+        security: [{ bearer: ["feed:read"] }, { bearer: ["projects:write"] }],
+        parameters: [slugParam],
+        responses: { "200": response("The status.", "#/components/schemas/ProjectGitHubStatus"), "404": problemResponse("No such project."), ...commonErrors },
+      },
+    },
     "/projects/{slug}/digests": {
       put: {
         operationId: "putProjectDigests",
@@ -447,6 +459,34 @@ export const integrationSchemas: Record<string, unknown> = {
     },
   },
   DecisionHistory: { type: "object", properties: { decisions: { type: "array", items: { $ref: "#/components/schemas/DecisionRow" } }, count: { type: "integer" } } },
+  ProjectGitHubStatus: {
+    type: "object",
+    required: ["repo", "app"],
+    properties: {
+      repo: { type: ["string", "null"], description: "owner/name, or null when the project has no repository." },
+      app: {
+        type: "object",
+        required: ["configured", "slug", "installed", "installation_id", "install_url"],
+        properties: {
+          configured: { type: "boolean", description: "This site acts as a GitHub App (environment or /setup/github)." },
+          slug: { type: ["string", "null"] },
+          installed: { type: "boolean", description: "The App is installed on the repository." },
+          installation_id: { type: ["integer", "null"] },
+          install_url: { type: "string", format: "uri", description: "Where to install the App; the site's /setup/github when none is configured." },
+          error: { type: "string", description: "Why the installation could not be checked; absent when the answer is reliable." },
+        },
+      },
+      webhook: {
+        type: "object",
+        required: ["org_or_repo_hook_seen", "last_delivery_at"],
+        properties: {
+          org_or_repo_hook_seen: { type: "boolean", description: "At least one GitHub delivery for the repository has been recorded." },
+          last_delivery_at: { type: ["string", "null"], format: "date-time" },
+        },
+        description: "Omitted when the deployment cannot say (mock mode).",
+      },
+    },
+  },
   ProjectUpsert: { type: "object", properties: { repo: { type: "string", description: "owner/name" }, path: { type: "string" }, stack: { type: "string" }, check_cmd: { type: "string" } } },
   ProjectRow: {
     type: "object",

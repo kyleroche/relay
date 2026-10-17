@@ -137,6 +137,18 @@ export async function listEvents(db: Db, opts: ListEventsOpts = {}): Promise<Eve
   return r.map(toEvent);
 }
 
+export interface GitHubDeliveryStats {
+  /** GitHub deliveries recorded for the repo (every ingested delivery carries a `github:` dedupe key). */
+  count: number;
+  last_delivery_at: string | null;
+}
+
+/** Has GitHub ever delivered for `owner/name`, and when last: the newest event for the repo with a `github:` dedupe key. */
+export async function githubDeliveryStats(db: Db, repoName: string): Promise<GitHubDeliveryStats> {
+  const r = await db.query(`SELECT count(*) AS n, max(ts) AS last FROM events WHERE repo = $1 AND dedupe_key LIKE 'github:%'`, [repoName]);
+  return { count: num(r[0]?.n), last_delivery_at: iso(r[0]?.last) ?? null };
+}
+
 /** Per-subscription totals of step.usage events since an ISO timestamp (reads the `ledger` view). */
 export async function usageSummary(db: Db, sinceIso: string): Promise<UsageSummaryRow[]> {
   const r = await db.query(

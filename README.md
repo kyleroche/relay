@@ -55,8 +55,10 @@ bearer token works on `/mcp` and `/api/v1` and renews itself ([Connect in one st
 
 `relay link` is the only per-repo step: it registers the repo, digests its files and writes the project summary
 (Sonnet, a few cents), renders `relay.md` from that summary, and installs the owned sections, caller workflows and
-labels. It prints each stage and one cost line, and a second run with nothing changed makes no model calls.
-`--refresh` rewrites the summary after memory changes; `--no-digest` skips the model steps.
+labels. On a hosted relay it ends by checking that the site's GitHub App is installed on the repo, and prints the
+install link when it is not (without it the repo's issues, labels, PRs and previews never reach the site). It prints
+each stage and one cost line, and a second run with nothing changed makes no model calls. `--refresh` rewrites the
+summary after memory changes; `--no-digest` skips the model steps; `--no-events` skips the GitHub App check.
 
 ## Link your model accounts
 

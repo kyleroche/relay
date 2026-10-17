@@ -43,8 +43,11 @@ import { credentialsFromToken, deviceFlow, redeemInvite, refreshAccessToken, tok
 import type { HttpFetch } from "../src/client/http.ts";
 
 let db: Db;
-// anchored to the real clock: findToken compares expiry against the database's now(), so a fixed date would expire the tokens
-let clock = Math.floor(Date.now() / 1000) * 1000 - 3 * 3_600_000;
+// Anchored to the real clock, six hours behind it. Two things compare this clock with the database's own now(): the
+// tokens' expiry (findToken), which needs clock + 24 h to be in the future, and the retention sweep, which must not
+// find a client created at now() a day older than the clock even after this file's ticks (under an hour) add up. A
+// pinned date satisfied both only on the day it was written.
+let clock = Math.floor(Date.now() / 1000) * 1000 - 6 * 3_600_000;
 const events: repo.EventRow[] = [];
 const o: OAuthServerOptions = { issuer: "https://relay.test", now: () => clock, onEvent: (row) => void events.push(row) };
 const tick = (seconds: number) => (clock += seconds * 1000);

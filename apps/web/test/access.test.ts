@@ -84,6 +84,10 @@ describe("classifyRoute", () => {
     // approving a task: a tasks:write bearer, or the signed-in person
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/approve", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/request-changes", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
+    // the GitHub status of a project: a bearer (feed:read or projects:write, checked by the route) or the session
+    expect(classifyRoute("/api/v1/projects/relay/github", { hasBearer: true, publicRead: false })).toBe("public");
+    expect(classifyRoute("/api/v1/projects/relay/github", anon)).toBe("session");
+    expect(classifyRoute("/api/v1/projects/relay/github", { hasBearer: false, publicRead: true })).toBe("public");
   });
 
   it("honours RELAY_PUBLIC_READ for anonymous GET reads only", () => {

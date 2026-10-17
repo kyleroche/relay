@@ -57,7 +57,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    cd ~/code/some-repo && npx @kyleroche/relay link
    ```
 
-   This is the only per-repo step: it registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), writes `relay.md`, and adds the owned section to `AGENTS.md`/`CLAUDE.md` and the `agent:*` GitHub labels. The caller workflows it offers are optional (`--no-workflows` skips them); a worker needs none of them.
+   This is the only per-repo step: it registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), writes `relay.md`, and adds the owned section to `AGENTS.md`/`CLAUDE.md` and the `agent:*` GitHub labels. The caller workflows it offers are optional (`--no-workflows` skips them); a worker needs none of them. If link says the GitHub App is not installed, give the user the install link it printed: one install covers every repo they pick, and until then that repo's issues, labels, PRs and previews do not reach the site.
 
 6. Optional, for a model the user will prompt (image or video models):
 
