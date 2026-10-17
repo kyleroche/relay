@@ -212,7 +212,8 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         issue: relayBranch(ref)?.issue ?? null,
         summary: state === "success" ? `${env} deployed for ${ref}` : `${env} deployment ${state} for ${ref}`,
         url: get<string>(status, "environment_url") ?? get<string>(status, "target_url") ?? null,
-        payload: { environment: env, state },
+        // ref and sha let deriveTaskStatus match the deployment to a task's branch (a deployment carries no PR number)
+        payload: { environment: env, state, ref: ref || null, sha: get<string>(payload, "deployment.sha") ?? null, description: get<string>(status, "description") ?? null },
       };
     }
 

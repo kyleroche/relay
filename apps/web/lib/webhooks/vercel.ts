@@ -21,7 +21,9 @@ export function normalizeVercel(body: Json): NewEvent | null {
   const project = get<string>(p, "project.name") ?? repoName ?? null;
   const repo = org && repoName ? `${org}/${repoName}` : null;
   const ref = get<string>(meta, "githubCommitRef") ?? "";
-  const issueMatch = /^relay\/(\d+)-/.exec(ref);
+  // a runner branch, either spelling: relay/<lane>-<issue> (run-lane.sh, job.ts) or the older relay/<issue>-<lane>
+  const issueMatch = /^relay\/(?:[a-z][a-z0-9-]*-(\d+)|(\d+)-[a-z][a-z0-9-]*)(?:$|[-/])/.exec(ref);
+  const issueFromRef = issueMatch ? Number(issueMatch[1] ?? issueMatch[2]) : null;
   const prId = get<string | number>(meta, "githubPrId");
   const target = get<string>(p, "target") ?? "preview";
   const host = get<string>(p, "url") ?? get<string>(p, "deployment.url");
@@ -33,14 +35,15 @@ export function normalizeVercel(body: Json): NewEvent | null {
     actor: "bot:vercel",
     project,
     repo,
-    issue: issueMatch?.[1] ? Number(issueMatch[1]) : null,
+    issue: Number.isInteger(issueFromRef) ? issueFromRef : null,
     pr: prId != null && prId !== "" ? Number(prId) : null,
     ts: createdAt ? new Date(createdAt).toISOString() : undefined,
     summary: ok
       ? `${target === "production" ? "Production" : "Preview"} deployed${prId ? ` for #${prId}` : ref ? ` for ${ref}` : ""}`
       : `${target === "production" ? "Production" : "Preview"} build failed${ref ? ` for ${ref}` : ""}`,
     url: ok ? (host ? `https://${host}` : null) : get<string>(p, "links.deployment") ?? null,
-    payload: { type, target, deployment_id: get(p, "deployment.id"), commit: get(meta, "githubCommitSha") },
+    // ref and commit let deriveTaskStatus match the deployment to a task when the issue number is not in the branch
+    payload: { type, target, deployment_id: get(p, "deployment.id"), commit: get(meta, "githubCommitSha"), ref: ref || null, inspector: get<string>(p, "links.deployment") ?? null },
     dedupe_key: `vercel:${id}`,
   };
 }

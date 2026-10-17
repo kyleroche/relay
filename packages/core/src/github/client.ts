@@ -19,6 +19,36 @@ export interface GitHubIssue {
   labels: string[];
 }
 
+export interface GitHubPull {
+  number: number;
+  title: string;
+  state: string;
+  merged: boolean;
+  html_url: string;
+  /** The head branch name and its current commit. */
+  head_ref: string;
+  head_sha: string;
+  base_ref: string;
+  /** GitHub login of whoever opened it. */
+  user: string;
+}
+
+export interface MergeOptions {
+  method?: "squash" | "merge" | "rebase";
+  /** Commit title (squash and merge methods). */
+  title?: string;
+  /** Commit body. */
+  message?: string;
+  /** Refuse to merge unless the head is still at this sha. */
+  sha?: string;
+}
+
+export interface MergeResult {
+  sha: string;
+  merged: boolean;
+  message: string;
+}
+
 export interface GitHubClient {
   /** How this client authenticates; printed by `relay doctor`, never the credential itself. */
   readonly source: "app" | "token" | "gh";
@@ -29,9 +59,66 @@ export interface GitHubClient {
   request(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
   /** Comment on an issue or pull request (the cloud-lane dispatch comment). */
   createComment(repo: string, issue: number, body: string): Promise<{ id: number; html_url: string }>;
+  /** One pull request with its head branch and sha (the review step reads it before merging). */
+  getPullRequest(repo: string, number: number): Promise<GitHubPull>;
+  /** Merge a pull request (squash by default). Throws GitHubError with GitHub's message (405 not mergeable, 409 head moved). */
+  mergePullRequest(repo: string, number: number, opts?: MergeOptions): Promise<MergeResult>;
+  /** Delete a branch (`refs/heads/<ref>`); a branch that is already gone is not an error. */
+  deleteBranch(repo: string, ref: string): Promise<void>;
 }
 
 const toComment = (j: Record<string, unknown>): { id: number; html_url: string } => ({ id: Number(j.id ?? 0), html_url: String(j.html_url ?? "") });
+
+export function toPull(j: Record<string, unknown>): GitHubPull {
+  const head = (j.head ?? {}) as Record<string, unknown>;
+  const base = (j.base ?? {}) as Record<string, unknown>;
+  const user = (j.user ?? {}) as Record<string, unknown>;
+  return {
+    number: Number(j.number),
+    title: String(j.title ?? ""),
+    state: String(j.state ?? ""),
+    merged: Boolean(j.merged),
+    html_url: String(j.html_url ?? ""),
+    head_ref: String(head.ref ?? ""),
+    head_sha: String(head.sha ?? ""),
+    base_ref: String(base.ref ?? ""),
+    user: String(user.login ?? ""),
+  };
+}
+
+const toMerge = (j: Record<string, unknown>): MergeResult => ({ sha: String(j.sha ?? ""), merged: Boolean(j.merged), message: String(j.message ?? "") });
+
+const mergeBody = (o: MergeOptions): Record<string, unknown> => ({
+  merge_method: o.method ?? "squash",
+  ...(o.title ? { commit_title: o.title } : {}),
+  ...(o.message ? { commit_message: o.message } : {}),
+  ...(o.sha ? { sha: o.sha } : {}),
+});
+
+/** Shared by the token and gh clients: the three pull-request calls over a raw `call(method, path, body)`. */
+function pullOps(call: (method: string, path: string, body?: unknown) => Promise<Record<string, unknown>>): Pick<GitHubClient, "getPullRequest" | "mergePullRequest" | "deleteBranch"> {
+  return {
+    async getPullRequest(repo, number) {
+      assertRepo(repo);
+      return toPull(await call("GET", `/repos/${repo}/pulls/${number}`));
+    },
+    async mergePullRequest(repo, number, opts = {}) {
+      assertRepo(repo);
+      return toMerge(await call("PUT", `/repos/${repo}/pulls/${number}/merge`, mergeBody(opts)));
+    },
+    async deleteBranch(repo, ref) {
+      assertRepo(repo);
+      const name = ref.replace(/^refs\/heads\//, "");
+      if (!name || /[\s~^:?*[\\]/.test(name)) throw new GitHubError(`branch name is not valid: ${ref}`);
+      try {
+        await call("DELETE", `/repos/${repo}/git/refs/heads/${name}`);
+      } catch (e) {
+        if (e instanceof GitHubError && (e.status === 404 || e.status === 422)) return; // already gone
+        throw e;
+      }
+    },
+  };
+}
 
 export class GitHubError extends Error {
   constructor(message: string, readonly status?: number) {
@@ -85,6 +172,7 @@ export function githubFromToken(token: string, fetchImpl: GitHubFetch = (u, i) =
       assertRepo(repo);
       return toComment(await call("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
     },
+    ...pullOps(call),
   };
 }
 
@@ -119,7 +207,11 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
       const args = ["api", "-X", method, "-H", "Accept: application/vnd.github+json", path];
       if (body !== undefined) args.push("--input", "-");
       const child = execFile(bin, args, { encoding: "utf8", timeout: 30_000, maxBuffer: 4 * 1024 * 1024, env: process.env }, (err, stdout, stderr) => {
-        if (err) return rej(new GitHubError(`gh api ${method} ${path} failed: ${(stderr || err.message).toString().split("\n")[0]?.slice(0, 200)}`));
+        if (err) {
+          const first = (stderr || err.message).toString().split("\n")[0] ?? "";
+          const status = /HTTP (\d{3})/.exec(first)?.[1];
+          return rej(new GitHubError(`gh api ${method} ${path} failed: ${first.slice(0, 200)}`, status ? Number(status) : undefined));
+        }
         try {
           res(stdout.trim() ? (JSON.parse(stdout) as Record<string, unknown>) : {});
         } catch (e) {
@@ -148,6 +240,7 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
       assertRepo(repo);
       return toComment(await api("POST", `/repos/${repo}/issues/${issue}/comments`, { body }));
     },
+    ...pullOps(api),
   };
 }
 

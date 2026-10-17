@@ -42,7 +42,7 @@ describe("compileBrief", () => {
   it("includes every section under a generous cap, in a fixed render order", async () => {
     const b = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000 });
     expect(b.sections.map((s) => s.name)).toEqual(["summary", "preferences", "decisions"]);
-    expect(b.omitted).toEqual(["guidance"]); // no model given
+    expect(b.omitted).toEqual(["review", "guidance"]); // no issue (so no review notes), no model given
     expect(b.text.indexOf("## Project: demo")).toBeLessThan(b.text.indexOf("## Preferences"));
     expect(b.text).toContain("test_runner = vitest");
     expect(b.text).toContain("Globally we keep pull requests small");
@@ -63,7 +63,7 @@ describe("compileBrief", () => {
       for (const line of b.text.split("\n").filter((l) => l.startsWith("- Decision"))) expect(line).toMatch(/because reason \d+ \[human\]$/);
       // every considered section is either rendered or reported omitted
       const names = new Set([...b.sections.map((s) => s.name), ...b.omitted]);
-      expect([...names].sort()).toEqual(["decisions", "guidance", "preferences", "summary"]);
+      expect([...names].sort()).toEqual(["decisions", "guidance", "preferences", "review", "summary"]);
     }
   });
 

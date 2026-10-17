@@ -257,6 +257,7 @@ export function composeJobPrompt(i: { repo: string; issue: ClaimedIssue; lane: s
     "## Deliverable",
     "",
     "Make the change in this working tree and run the project's own checks (pnpm typecheck / test) if present.",
+    "If Memory has a \"Review feedback\" section, a reviewer sent an earlier attempt back: address every point in it first.",
     "Do not push, open pull requests, or touch anything outside this repository; the worker commits and opens the PR.",
     "End with a short summary of what changed and anything the reviewer should look at.",
     "",

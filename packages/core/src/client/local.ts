@@ -7,6 +7,7 @@ import { detectGitHub, type GitHubClient } from "../github/client.ts";
 import { createInvite, listInvites, revokeInvite } from "../oauth/server.ts";
 import { TOKEN_SCOPES } from "../db/tokens.ts";
 import { openTask } from "../tasks/create.ts";
+import { approveTask, requestChanges } from "../tasks/review.ts";
 import { deliverWebhook, dispatchEvent, pingPayload, type DeliverOptions } from "../webhooks/dispatch.ts";
 import type { RelayClient } from "./types.ts";
 
@@ -123,6 +124,16 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
       return t ? repo.taskView(db, t) : undefined;
     },
     listTasks: (o = {}) => repo.listTaskViews(db, o),
+    async approveTask(id) {
+      const r = await approveTask(db, github(), id, opts.actor);
+      for (const ev of r.events) await afterWrite(ev);
+      return r.task;
+    },
+    async requestChanges(id, note) {
+      const r = await requestChanges(db, github(), id, opts.actor, note);
+      for (const ev of r.events) await afterWrite(ev);
+      return r.task;
+    },
 
     async createInvite(i) {
       const r = await createInvite(db, { name: i.name, scopes: i.scopes, ...(i.expiresInSeconds ? { expiresInSeconds: i.expiresInSeconds } : {}), ...(i.uses ? { uses: i.uses } : {}), createdBy: opts.actor }, { issuer: opts.issuer ?? "relay://local" });

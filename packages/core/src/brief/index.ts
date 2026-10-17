@@ -1,8 +1,8 @@
 /**
  * The brief compiler: the small envelope every model call starts with instead of re-reading the repo.
  *
- * `compileBrief` assembles four sections from memory (project summary, matching current decisions, preferences by
- * scope, matching vendor guidance) under a hard token cap. Sections are atomic: the summary and the preferences block
+ * `compileBrief` assembles five sections from memory (review feedback on the task's PR, project summary, matching
+ * current decisions, preferences by scope, matching vendor guidance) under a hard token cap. Sections are atomic: the summary and the preferences block
  * are included whole or omitted; the decision and guidance lists include whole items until the budget runs out and
  * are omitted when no item fits. Nothing is ever cut mid-sentence.
  *
@@ -16,6 +16,7 @@ import { approxTokens } from "../util.ts";
 import type { HarnessConfig } from "../config.ts";
 import type { Ledger } from "../ledger/ledger.ts";
 import { embedTexts } from "../onboard/embed.ts";
+import { reviewNotes } from "../tasks/review.ts";
 
 export interface BriefIssue {
   number?: number;
@@ -23,7 +24,7 @@ export interface BriefIssue {
   body?: string;
 }
 
-export type BriefSectionName = "summary" | "preferences" | "decisions" | "guidance";
+export type BriefSectionName = "review" | "summary" | "preferences" | "decisions" | "guidance";
 
 export interface CompileBriefOptions {
   /** Project slug; preferences at `project` scope and decisions for this project are selected. */
@@ -37,7 +38,7 @@ export interface CompileBriefOptions {
   lane?: string;
   /** Hard cap on the whole envelope, in approximate tokens (≈4 chars/token). */
   maxTokens: number;
-  /** Which sections to consider, in priority order. Default: preferences, decisions, summary, guidance. */
+  /** Which sections to consider, in priority order. Default: review, preferences, decisions, summary, guidance. */
   sections?: BriefSectionName[];
   /** Optional embedder (set when AI_GATEWAY_API_KEY is configured); vector retrieval is used when it returns a vector. */
   embed?: (text: string) => Promise<number[] | null>;
@@ -58,10 +59,10 @@ export interface Brief {
   omitted: BriefSectionName[];
 }
 
-/** Default allocation order: cheapest, most binding first; the big summary after; guidance last. */
-const DEFAULT_ORDER: BriefSectionName[] = ["preferences", "decisions", "summary", "guidance"];
+/** Default allocation order: the reviewer's notes first (they are why this run exists), then cheapest and most binding; the big summary after; guidance last. */
+const DEFAULT_ORDER: BriefSectionName[] = ["review", "preferences", "decisions", "summary", "guidance"];
 /** Rendering order is fixed so the envelope always reads the same way. */
-const RENDER_ORDER: BriefSectionName[] = ["summary", "preferences", "decisions", "guidance"];
+const RENDER_ORDER: BriefSectionName[] = ["review", "summary", "preferences", "decisions", "guidance"];
 
 const SCOPE_RANK: Record<repo.PreferenceRow["scope"], number> = { global: 0, project: 1, lane: 2, model: 3 };
 
@@ -157,7 +158,26 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
 
   for (const name of order) {
     let text = "";
-    if (name === "summary") {
+    if (name === "review") {
+      // notes a reviewer left with "Request changes" on this issue's PR (tasks/review.ts); the next run must address them
+      if (project && opts.issue?.number != null) {
+        const notes = await reviewNotes(db, { repo: project.repo ?? "", project: project.slug, issue: opts.issue.number });
+        if (notes.length) {
+          text =
+            heading("Review feedback") +
+            `A reviewer sent the pull request for #${opts.issue.number} back. Address every point below; the branch and PR already exist and this run replaces the branch.\n\n` +
+            notes.map((n) => `- ${n.at.slice(0, 16)} ${n.by}${n.pr ? ` on PR #${n.pr}` : ""}:\n  ${n.note.trim().replace(/\n/g, "\n  ")}`).join("\n") +
+            "\n";
+        }
+      }
+      const t = approxTokens(text);
+      if (!text || t > remaining) {
+        omitted.push(name);
+        continue;
+      }
+      rendered.set(name, { text, tokens: t });
+      remaining -= t;
+    } else if (name === "summary") {
       if (project?.summary) text = heading(`Project: ${project.slug}`) + project.summary.trim() + "\n";
       const t = approxTokens(text);
       if (!text || t > remaining) {

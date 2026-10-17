@@ -202,6 +202,9 @@ export class GitHubApp {
       addLabels: async (repo, issue, labels) => (await perRepo(repo)).addLabels(repo, issue, labels),
       getIssue: async (repo, issue) => (await perRepo(repo)).getIssue(repo, issue),
       createComment: async (repo, issue, body) => (await perRepo(repo)).createComment(repo, issue, body),
+      getPullRequest: async (repo, number) => (await perRepo(repo)).getPullRequest(repo, number),
+      mergePullRequest: async (repo, number, o) => (await perRepo(repo)).mergePullRequest(repo, number, o),
+      deleteBranch: async (repo, ref) => (await perRepo(repo)).deleteBranch(repo, ref),
       request: async (method, path, body) => (await perRepo(repoOfPath(path))).request(method, path, body),
     };
   }

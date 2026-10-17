@@ -173,6 +173,10 @@ export interface RelayClient {
   createTask(input: Omit<CreateTaskInput, "actor">): Promise<{ task_id: string; issue_url: string; created: boolean; task: TaskView }>;
   getTask(id: string): Promise<TaskView | undefined>;
   listTasks(opts?: { project?: string; state?: TaskState; limit?: number }): Promise<TaskView[]>;
+  /** Approve a task in review: squash-merge its PR, delete the branch, write task.approved (tasks/review.ts). */
+  approveTask(id: string): Promise<TaskView>;
+  /** Send a task's PR back with a note: a PR comment plus task.changes_requested; the task is queued again. */
+  requestChanges(id: string, note: string): Promise<TaskView>;
 
   // invites (approval without a browser)
   createInvite(input: InviteInput): Promise<{ code: string; invite: InviteRow }>;

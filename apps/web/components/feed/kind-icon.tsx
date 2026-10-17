@@ -48,6 +48,10 @@ const ICONS: Record<string, LucideIcon> = {
   "asset.uploaded": Image,
   "asset.reviewed": ClipboardCheck,
   "asset.published": Upload,
+  "task.created": CircleDot,
+  "task.approved": GitMerge,
+  "task.changes_requested": Eye,
+  "task.merge_failed": TriangleAlert,
 };
 
 const TONE: Record<string, string> = {
@@ -57,6 +61,9 @@ const TONE: Record<string, string> = {
   "preview.ready": "text-ok",
   "issue.closed": "text-ok",
   "asset.uploaded": "text-warn",
+  "task.approved": "text-ok",
+  "task.changes_requested": "text-warn",
+  "task.merge_failed": "text-bad",
 };
 
 export function KindIcon({ kind, className }: { kind: string; className?: string }) {

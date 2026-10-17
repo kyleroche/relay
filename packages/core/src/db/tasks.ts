@@ -24,6 +24,28 @@ export type TaskState = "queued" | "claimed" | "running" | "review" | "done" | "
 export const TASK_STATES: readonly TaskState[] = ["queued", "claimed", "running", "review", "done", "failed"];
 export const isTaskState = (s: string): s is TaskState => (TASK_STATES as readonly string[]).includes(s);
 
+export type PreviewState = "ready" | "failed" | "building" | "none";
+
+export interface TaskUsage {
+  /** step.usage rows folded in (one per worker run). */
+  runs: number;
+  tokens_in: number;
+  tokens_out: number;
+  cache_read: number;
+  cost_equiv: number;
+  /** Model of the latest run. */
+  model: string | null;
+  duration_ms: number | null;
+}
+
+export interface TaskReview {
+  /** The latest decision on the current PR; null while nobody has decided (or after a new run superseded a request). */
+  decided: "approved" | "changes_requested" | null;
+  by: string | null;
+  at: string | null;
+  note: string | null;
+}
+
 export interface TaskStatus {
   state: TaskState;
   /** `runner:<name>` of the runner that last claimed the task, when one did. */
@@ -32,8 +54,20 @@ export interface TaskStatus {
   pr: number | null;
   pr_url: string | null;
   issue_url: string;
+  /** The head branch of the run (`relay/<lane>-<issue>`), from run.started or pr.opened; null until a run starts. */
+  branch: string | null;
   /** Summary line of the latest event for this task. */
   summary: string | null;
+  /** The lane's own summary from the latest run.finished, or null before a run finished. */
+  run_summary: string | null;
+  usage: TaskUsage | null;
+  /** The latest successful deployment of the task's branch (Vercel or GitHub deployment_status), when one matched. */
+  preview_url: string | null;
+  /** ready: the url is current; building: a push landed after the last deployment; failed: the last build errored; none. */
+  preview_state: PreviewState;
+  review: TaskReview;
+  /** When the PR was merged (pr.merged from GitHub, or task.approved when relay merged it). */
+  merged_at: string | null;
   /** ts and kind of the latest event, or null when the feed has nothing yet. */
   updated_at: string | null;
   last_kind: string | null;
@@ -127,17 +161,43 @@ export interface ClaimLike {
   outcome: string | null;
 }
 
+/** The branch a worker pushes for an issue, either spelling (`relay/<lane>-<issue>`, older `relay/<issue>-<lane>`). */
+export const relayBranchPattern = (issue: number): RegExp => new RegExp(`^relay/(?:[a-z][a-z0-9-]*-${issue}|${issue}-[a-z][a-z0-9-]*)(?:$|[-/])`);
+
+const payloadStr = (e: EventRow, key: string): string | null => (typeof e.payload[key] === "string" ? (e.payload[key] as string) : null);
+
+/**
+ * Does a `preview.*` row belong to this task? The two ingest paths differ: the Vercel webhook knows the PR number and
+ * the branch (`githubPrId`, `githubCommitRef`), GitHub's deployment_status knows only the ref. So a deployment counts
+ * when its issue is ours, its PR is one of ours, or its ref (payload.ref / payload.branch) is the task's branch.
+ */
+export function previewMatches(task: Pick<TaskRow, "issue">, e: EventRow, prs: ReadonlySet<number>, branch: string | null): boolean {
+  if (!e.kind.startsWith("preview.")) return false;
+  if (e.issue != null) return e.issue === task.issue;
+  if (e.pr != null && prs.has(e.pr)) return true;
+  const ref = payloadStr(e, "ref") ?? payloadStr(e, "branch");
+  if (!ref) return false;
+  if (branch && ref === branch) return true;
+  return relayBranchPattern(task.issue).test(ref);
+}
+
 /**
  * Fold a task's events, oldest first, into one state. The table in docs/INTEGRATIONS.md is this function:
  *   issue.labeled -> queued          run.started -> running           run.failed -> failed
  *   run.dispatched -> running (a cloud lane: the vendor's tier has it until its PR opens)
  *   run.finished  -> failed when payload.conclusion is a failure, else review
  *   pr.opened     -> review          pr.merged, issue.closed -> done  pr.closed (no merge) -> queued
+ *   task.changes_requested -> queued (the next run addresses the note; docs/ARCHITECTURE.md "A task's life")
+ *   task.approved -> done when relay merged the PR itself (payload.merged); pr.merged from GitHub confirms it
+ *   task.merge_failed -> stays in review (GitHub refused the merge; the payload says why)
  * A task with no events yet is queued (relay opened the issue with its lane label).
  *
  * Claims (docs/WORKERS.md) add one step. A live lease on a queued task makes it `claimed`. A lease that ended
  * (expired or released) after the last run.started, with no run.finished or run.failed since, means the worker
  * vanished mid-run: the task is `queued` again and the next claim starts over from the base branch.
+ *
+ * Alongside the state: the PR, its branch, the latest preview of that branch (`preview.*` rows matched by issue, PR
+ * or ref), the lane's summary and the folded usage, the review decision and when the PR was merged.
  */
 export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: EventRow[], claims: ClaimLike[] = [], now: number = Date.now()): TaskStatus {
   const sorted = [...events].sort((a, b) => a.ts.localeCompare(b.ts) || a.id - b.id);
@@ -146,11 +206,32 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
   let lane: string | null = null;
   let pr: number | null = null;
   let pr_url: string | null = null;
+  let branch: string | null = null;
   let lastStart: string | null = null;
   let lastEnd: string | null = null;
+  let run_summary: string | null = null;
+  let usage = null as TaskUsage | null;
+  let merged_at: string | null = null;
+  let review: TaskReview = { decided: null, by: null, at: null, note: null };
+  // previews are matched against every PR the task ever had, whichever order the webhooks arrived in
+  const prs = new Set<number>();
+  for (const e of sorted) if (e.pr != null && !e.kind.startsWith("preview.")) prs.add(e.pr);
+  let preview = null as { url: string | null; state: PreviewState; ts: string } | null;
+  let lastPush: string | null = null;
+  const matched: EventRow[] = [];
   for (const e of sorted) {
+    if (e.kind.startsWith("preview.")) {
+      if (previewMatches(task, e, prs, branch)) {
+        matched.push(e);
+        if (e.kind === "preview.ready") preview = { url: e.url, state: "ready", ts: e.ts };
+        else if (e.kind === "preview.failed") preview = { url: preview?.url ?? null, state: "failed", ts: e.ts };
+      }
+      continue;
+    }
     if (e.lane) lane = e.lane;
     if (e.pr != null) pr = e.pr;
+    const b = payloadStr(e, "branch");
+    if (b && (e.kind === "run.started" || e.kind === "pr.opened")) branch = b;
     switch (e.kind) {
       case "issue.labeled":
         state = "queued";
@@ -173,24 +254,64 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
         state = FAILED_CONCLUSIONS.has(conclusion) ? "failed" : "review";
         lastEnd = e.ts;
         if (e.actor.startsWith("runner:")) runner = e.actor;
+        if (state === "review") {
+          run_summary = e.summary || run_summary;
+          lastPush = e.ts;
+          // a new run answers an earlier "changes requested"; the new PR state awaits its own decision
+          if (review.decided === "changes_requested") review = { decided: null, by: null, at: null, note: null };
+        }
         break;
       }
+      case "step.usage":
+        usage = {
+          runs: (usage?.runs ?? 0) + 1,
+          tokens_in: (usage?.tokens_in ?? 0) + e.tokens_in,
+          tokens_out: (usage?.tokens_out ?? 0) + e.tokens_out,
+          cache_read: (usage?.cache_read ?? 0) + e.cache_read,
+          cost_equiv: Math.round(((usage?.cost_equiv ?? 0) + e.cost_equiv) * 1e6) / 1e6,
+          model: e.model ?? usage?.model ?? null,
+          duration_ms: e.duration_ms ?? usage?.duration_ms ?? null,
+        };
+        break;
       case "pr.opened":
         state = "review";
         if (e.url) pr_url = e.url;
+        lastPush = e.ts;
         break;
       case "pr.merged":
       case "issue.closed":
         state = "done";
-        if (e.kind === "pr.merged" && e.url) pr_url = e.url;
+        if (e.kind === "pr.merged") {
+          if (e.url) pr_url = e.url;
+          merged_at = merged_at ?? e.ts; // relay's own task.approved, when it merged, already holds the moment
+        }
         break;
       case "pr.closed":
         state = "queued";
+        break;
+      case "task.approved":
+        review = { decided: "approved", by: e.actor, at: e.ts, note: null };
+        if (e.payload.merged === true) {
+          // relay merged the PR itself: the merge sha is in hand, GitHub's pr.merged only confirms it
+          state = "done";
+          merged_at = merged_at ?? e.ts;
+          if (e.url) pr_url = e.url;
+        }
+        break;
+      case "task.changes_requested":
+        review = { decided: "changes_requested", by: e.actor, at: e.ts, note: payloadStr(e, "note") };
+        state = "queued";
+        break;
+      case "task.merge_failed":
+        // GitHub refused the merge; the task stays where it was (review) and the payload says why
         break;
       default:
         break;
     }
   }
+  let preview_state: PreviewState = preview ? preview.state : "none";
+  if (preview && preview.state === "ready" && lastPush && lastPush > preview.ts) preview_state = "building";
+  if (!branch && lane && lastStart) branch = `relay/${lane}-${task.issue}`;
   const latest = [...claims].sort((a, b) => a.claimed_at.localeCompare(b.claimed_at)).at(-1);
   if (latest) {
     const live = !latest.released_at && new Date(latest.lease_until).getTime() > now;
@@ -202,7 +323,8 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
       state = "queued";
     }
   }
-  const last = sorted.at(-1);
+  const own = sorted.filter((e) => !e.kind.startsWith("preview.") || matched.includes(e));
+  const last = own.at(-1);
   if (pr != null && !pr_url) pr_url = `https://github.com/${task.repo}/pull/${pr}`;
   return {
     state,
@@ -211,18 +333,35 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
     pr,
     pr_url,
     issue_url: issueUrl(task.repo, task.issue),
+    branch,
     summary: last?.summary ?? null,
+    run_summary,
+    usage,
+    preview_url: preview?.url ?? null,
+    preview_state,
+    review,
+    merged_at,
     updated_at: last?.ts ?? null,
     last_kind: last?.kind ?? null,
-    events: sorted.length,
+    events: own.length,
   };
 }
 
-/** Every feed row about the task: same repo (or project) and issue number, oldest first. */
+/**
+ * Every feed row about the task, oldest first: same repo (or project) and issue number, plus the `preview.*` rows
+ * for the task's branch that arrived without an issue number (Vercel knows the PR and the ref, GitHub's
+ * deployment_status only the ref). `deriveTaskStatus` matches those again in memory.
+ */
 export async function taskEvents(db: Db, task: Pick<TaskRow, "repo" | "project" | "issue">): Promise<EventRow[]> {
   const r = await db.query(
-    `SELECT ${EVENT_COLS} FROM events WHERE issue = $3 AND (repo = $1 OR (repo IS NULL AND project = $2)) ORDER BY ts ASC, id ASC LIMIT 2000`,
-    [task.repo, task.project, task.issue],
+    `SELECT ${EVENT_COLS} FROM events
+     WHERE (repo = $1 OR (repo IS NULL AND project = $2))
+       AND (issue = $3
+            OR (kind LIKE 'preview.%' AND issue IS NULL
+                AND ((pr IS NOT NULL AND pr IN (SELECT e2.pr FROM events e2 WHERE e2.repo = $1 AND e2.issue = $3 AND e2.pr IS NOT NULL))
+                     OR coalesce(payload->>'ref', payload->>'branch', '') ~ $4)))
+     ORDER BY ts ASC, id ASC LIMIT 2000`,
+    [task.repo, task.project, task.issue, relayBranchPattern(task.issue).source],
   );
   return r.map(toEvent);
 }
