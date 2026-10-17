@@ -26,7 +26,7 @@ const nextConfig: NextConfig = {
     "/oauth/**": migrations,
     "/activate": migrations,
     "/setup/**": migrations,
-    "/tokens": migrations,
+    "/access": migrations,
     "/": migrations,
     "/assets": migrations,
     "/assets/[id]": migrations,
@@ -34,6 +34,10 @@ const nextConfig: NextConfig = {
     "/projects/[slug]": migrations,
     "/usage": migrations,
     "/workers": migrations,
+  },
+  // The Access page moved from /tokens to /access; old links keep working.
+  async redirects() {
+    return [{ source: "/tokens", destination: "/access", permanent: true }];
   },
   // proxy.ts holds the sign-in gate (lib/access.ts says what is public) and the Accept negotiation for /info and /docs.
   async headers() {

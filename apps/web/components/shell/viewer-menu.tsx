@@ -69,7 +69,7 @@ export function ViewerMenu({ session }: { session: Session | null }) {
           </Link>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
-          <Link href="/tokens">
+          <Link href="/access">
             <KeyRound /> Access
           </Link>
         </DropdownMenuItem>

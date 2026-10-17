@@ -3,7 +3,7 @@
 import { Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { removeClientAction, type TokenActionResult } from "@/app/tokens/actions";
+import { removeClientAction, type TokenActionResult } from "@/app/access/actions";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/collapsible";
 import { RelTime } from "@/components/ui/rel-time";

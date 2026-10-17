@@ -3,7 +3,7 @@
 import { Check, Copy, KeyRound, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/tokens/actions";
+import { createTokenAction, revokeTokenAction, type TokenActionResult } from "@/app/access/actions";
 import { ScopePicker, type ScopeOption, toggleIn } from "@/components/tokens/scope-picker";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/collapsible";

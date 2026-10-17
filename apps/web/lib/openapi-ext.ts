@@ -254,7 +254,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         operationId: "createToken",
         tags: ["tokens"],
         summary: "Mint a token",
-        description: "Returns the plaintext once. The /tokens page (signed-in) and `relay token create` in site mode call this. Only the SHA-256 is stored.",
+        description: "Returns the plaintext once. The /access page (signed-in) and `relay token create` in site mode call this. Only the SHA-256 is stored.",
         security: [{ bearer: ["tokens:write"] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/TokenCreate" } } } },
         responses: { "201": response("The token, shown once.", "#/components/schemas/TokenCreated"), "400": problemResponse("Bad name or scopes."), "501": notImplemented, ...commonErrors },

@@ -71,13 +71,13 @@ async function load(now: number): Promise<Loaded> {
 const EMPTY: Loaded = { requests: [], tokens: [], invites: [], clients: [] };
 
 /**
- * /tokens, the Access page: what is asking (device requests, with Approve and Deny), what exists (every token and how it
+ * /access, the Access page: what is asking (device requests, with Approve and Deny), what exists (every token and how it
  * was issued), invites when any exist, and the registered clients folded away. The prompt to hand an agent sits at
  * the top; the forms (invite, token by hand) open only from a button beside it. /activate stays the focused approval
  * page a device points a person at.
  */
 export default async function AccessPage() {
-  await requireSession("/tokens");
+  await requireSession("/access");
   const db = dataMode() === "db";
   const now = Date.now();
   const data = db ? await load(now) : EMPTY;

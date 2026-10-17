@@ -82,7 +82,7 @@ export const LINK_REPO_STEPS: string[] = [
 ];
 export const LINK_REPO_PROMPT = `Link this repository to relay at ${SITE_URL}: run \`npx @kyleroche/relay setup --site ${SITE_URL}\` if this machine has not joined yet and show me the code it prints, then \`npx @kyleroche/relay link\` here. Follow ${SITE_URL}/llms.txt ("Link a repository") if anything is unclear.`;
 
-export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. ${SITE_URL}/tokens is the operator's Access page: approve requests, revoke, invite; minting a token by hand is its fallback.`;
+export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. ${SITE_URL}/access is the operator's Access page: approve requests, revoke, invite; minting a token by hand is its fallback.`;
 
 /** The Markdown mirror of /info. */
 export function infoMarkdown(): string {

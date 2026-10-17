@@ -3,7 +3,7 @@
 import { Check, X } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
-import { decideAccessAction, type TokenActionResult } from "@/app/tokens/actions";
+import { decideAccessAction, type TokenActionResult } from "@/app/access/actions";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { Button } from "@/components/ui/button";
 import { Disclosure } from "@/components/ui/collapsible";

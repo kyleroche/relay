@@ -177,7 +177,7 @@ A machine does not have to hold the database. `relay setup --site https://relay.
 `RELAY_TOKEN` override both). Without `--token` it runs the device flow: it prints a code like `RLAY-4F7Q`, you approve
 it at `<site>/activate` (or a bot approves it over the API), and the CLI stores the 24-hour access token with its
 90-day refresh token and renews it before it lapses. `--invite <code>` redeems an invite from `relay invite create`
-with no approval; `--token <t>` pastes a token from `/tokens`. `relay setup` checks the site answers and accepts the
+with no approval; `--token <t>` pastes a token from `/access`. `relay setup` checks the site answers and accepts the
 credential before saving (`--yes` saves anyway). `docs/INTEGRATIONS.md` has the flows.
 
 With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,

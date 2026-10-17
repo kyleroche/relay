@@ -46,11 +46,11 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 py-16 sm:py-24">
       <div>
-        <Breadcrumb items={[{ label: "Access", href: "/tokens" }, { label: "Approve a device" }]} />
+        <Breadcrumb items={[{ label: "Access", href: "/access" }, { label: "Approve a device" }]} />
         <h1 className="mt-2 text-2xl font-semibold tracking-tight">Approve a device</h1>
         <p className="mt-2 text-sm text-muted-foreground">
           A CLI or bot that ran <code className="rounded bg-muted px-1 font-mono">relay setup --site</code> shows a code like <code className="rounded bg-muted px-1 font-mono">RLAY-4F7Q</code>. Enter it here, check what it asks for, and approve. The token it receives lasts 24 hours and renews for 90 days; revoke it on{" "}
-          <Link href="/tokens" className="underline underline-offset-4">
+          <Link href="/access" className="underline underline-offset-4">
             Access
           </Link>
           .
@@ -148,7 +148,7 @@ export default async function ActivatePage({ searchParams }: { searchParams: Pro
           </ul>
           <p className="mt-2 text-xs text-muted-foreground">
             The token is minted when the device next calls <code className="font-mono">/oauth/token</code>; it will then appear under Grants on{" "}
-            <Link href="/tokens" className="underline underline-offset-4">
+            <Link href="/access" className="underline underline-offset-4">
               Access
             </Link>
             .
