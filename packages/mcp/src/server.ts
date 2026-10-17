@@ -565,7 +565,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         project: z.string().min(1).describe("project slug (relay link registered it)"),
         title: z.string().min(1).max(256),
         body: z.string().max(60_000).optional().describe("issue body, markdown; the brief the lane reads"),
-        lane: z.enum(TASK_LANES).describe("which subscription implements it"),
+        lane: z.enum(TASK_LANES).optional().describe("claude, codex or grok run on the user's own workers (machines running relay work) and are the normal choice; default claude. claude-cloud and codex-cloud hand the task to the vendor's hosted tier and only work when the operator has wired it; do not pick them unless asked to."),
         priority: z.enum(TASK_PRIORITIES).optional(),
         idempotency_key: z.string().min(1).max(200).optional().describe("repeat calls with the same key return the same task and open nothing"),
       },
@@ -574,9 +574,10 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       const g = gate("tasks:write", "relay_task_create");
       if (g) return g;
       try {
-        const r = await openTask(db, opts.github, { ...args, actor: externalActor(actor) });
+        const lane = args.lane ?? "claude";
+        const r = await openTask(db, opts.github, { ...args, lane, actor: externalActor(actor) });
         for (const e of r.events) await emit(e);
-        return json({ task_id: r.task_id, issue_url: r.issue_url, created: r.created, state: r.task.state, lane: args.lane });
+        return json({ task_id: r.task_id, issue_url: r.issue_url, created: r.created, state: r.task.state, lane });
       } catch (e) {
         return fail(`relay: ${e instanceof Error ? e.message : String(e)}${e instanceof TaskCreateError && e.status === 503 ? " (relay_task_create needs GitHub access on the server)" : ""}`);
       }
