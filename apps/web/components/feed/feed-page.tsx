@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Feed } from "@/components/feed/feed";
 import { NeedsReview } from "@/components/feed/needs-review";
-import { getAssets, getFeed, getProjects } from "@/lib/data";
+import { getAssets, getFeed, getProjects, getTasks, getWorkers } from "@/lib/data";
 import { viewerTimeZone } from "@/lib/tz-server";
 
 /** The feed: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -28,11 +28,13 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     actor: one(sp.actor),
     kind: one(sp.kind),
   };
-  const [events, projects, allRecent, pending, tz] = await Promise.all([
+  const [events, projects, allRecent, pending, review, workers, tz] = await Promise.all([
     getFeed({ ...filters, limit: 150 }),
     getProjects(),
     getFeed({ limit: 300 }),
     getAssets({ status: "pending", limit: 50 }),
+    getTasks({ state: "review", limit: 50 }),
+    getWorkers(),
     viewerTimeZone(),
   ]);
   const now = Date.now();
@@ -40,6 +42,8 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
   const today = new Date().toISOString().slice(0, 10);
   const todayCount = allRecent.filter((e) => e.ts.slice(0, 10) === today).length;
   const todayCost = allRecent.filter((e) => e.ts.slice(0, 10) === today).reduce((s, e) => s + e.cost_equiv, 0);
+  const offline = workers.filter((w) => w.status === "offline").length;
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   return (
     <>
@@ -50,12 +54,10 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Everything humans, bots, runners and agents did across your coding-agent subscriptions, newest first. relay
               records each GitHub issue, run, model call, pull request, review and deployment as one append-only event with
-              its tokens and cost equivalent. New here? Read <Link href="/info" className="text-primary underline underline-offset-4">what relay is</Link>,
-              browse the <Link href="/docs" className="text-primary underline underline-offset-4">docs</Link>, or use the{" "}
-              <Link href="/docs/api" className="text-primary underline underline-offset-4">API</Link>.
+              its tokens and cost equivalent.
             </p>
           </div>
-          <dl className="flex gap-6 text-sm">
+          <dl className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
             <div>
               <dt className="text-xs text-muted-foreground">Today</dt>
               <dd className="font-mono tabular-nums">{todayCount} events</dd>
@@ -67,21 +69,39 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
             <div>
               <dt className="text-xs text-muted-foreground">Needs review</dt>
               <dd className="font-mono tabular-nums">
-                {pending.length > 0 ? (
-                  <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
-                    {pending.length} asset{pending.length === 1 ? "" : "s"}
+                {review.length > 0 ? (
+                  <Link href="/tasks" className="text-warn underline underline-offset-4">
+                    {plural(review.length, "task")}
                   </Link>
                 ) : (
-                  "0"
+                  plural(0, "task")
+                )}
+                <span className="text-muted-foreground"> · </span>
+                {pending.length > 0 ? (
+                  <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
+                    {plural(pending.length, "asset")}
+                  </Link>
+                ) : (
+                  plural(0, "asset")
                 )}
               </dd>
             </div>
+            {offline > 0 && (
+              <div>
+                <dt className="text-xs text-muted-foreground">Workers</dt>
+                <dd className="font-mono tabular-nums">
+                  <Link href="/workers" className="text-warn underline underline-offset-4">
+                    {plural(offline, "worker")} offline
+                  </Link>
+                </dd>
+              </div>
+            )}
           </dl>
         </div>
       </section>
       {!filters.project && !filters.lane && !filters.actor && !filters.kind && (
         <div className="mb-4">
-          <NeedsReview assets={pending} now={now} />
+          <NeedsReview tasks={review} assets={pending} now={now} />
         </div>
       )}
       <Feed events={events} projects={projects.map((p) => p.slug)} actors={actors} filters={filters} tz={tz} />

@@ -34,6 +34,8 @@ import type {
   ProjectDetail,
   ProjectSummary,
   Subscription,
+  TaskListOptions,
+  TaskView,
   UsageSummary,
   UsageWindow,
   Worker,
@@ -247,6 +249,10 @@ export const dbSource: DataSource = {
       });
     }
     return workers.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
+  },
+
+  async getTasks(opts: TaskListOptions = {}): Promise<TaskView[]> {
+    return repo.listTaskViews(await getDb(), opts);
   },
 
   async getModels(): Promise<ModelInfo[]> {

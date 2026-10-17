@@ -1,4 +1,13 @@
+import type { TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
+
+export type { TaskState, TaskView };
+
+export interface TaskListOptions {
+  project?: string;
+  state?: TaskState;
+  limit?: number;
+}
 
 export type ActorKind = "human" | "bot" | "runner" | "agent";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
@@ -218,6 +227,8 @@ export interface DataSource {
   getProject(slug: string): Promise<ProjectDetail | null>;
   getUsage(window: UsageWindow): Promise<UsageSummary>;
   getWorkers(): Promise<Worker[]>;
+  /** Tasks with their derived state, newest first; the tasks page and the feed's review strip read the `review` ones. Empty in mock mode. */
+  getTasks(opts?: TaskListOptions): Promise<TaskView[]>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
   getAssets(opts?: AssetListOptions): Promise<Asset[]>;
