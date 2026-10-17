@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { PipelineMap } from "@/components/flow/pipeline-map";
+import { FlowView } from "@/components/flow/flow-view";
 import { getFlow } from "@/lib/data";
 import { STATIONS } from "@/lib/flow";
 import { requireSession } from "@/lib/session";
@@ -29,8 +29,8 @@ export default async function FlowPage() {
           failed run drops into the siding. Only tasks in motion are drawn; a merged one leaves at the right edge. Open a pill for the <Link href="/tasks" className="text-primary underline underline-offset-4">task</Link>.
         </p>
       </section>
-      <section aria-label="Flow map" className="rounded-lg border bg-card px-3 py-3 sm:px-5 sm:py-4">
-        <PipelineMap initial={initial} />
+      <section aria-label="Flow map">
+        <FlowView initial={initial} />
       </section>
     </>
   );
