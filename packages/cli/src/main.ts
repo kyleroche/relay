@@ -23,7 +23,7 @@ import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { openReady, RELAY_ROOT } from "./commands/_common.ts";
-import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
@@ -76,6 +76,7 @@ program
     const major = Number(process.versions.node.split(".")[0]);
     checks.push({ status: major >= 24 ? "ok" : "fail", name: "node", detail: `v${process.versions.node}${major >= 24 ? "" : " (need 24+)"}` });
 
+    checks.push(pathCheck());
     const tools = await probeTools();
     checks.push(...tools);
     const lanes = lanesFromChecks(tools);

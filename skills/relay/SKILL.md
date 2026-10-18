@@ -12,7 +12,7 @@ relay lets one person's coding-agent subscriptions (Claude, Codex, Grok) work as
 
 Do these steps in order and stop at anything that needs the user's browser.
 
-relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>` runs it with no checkout. It needs Node 24 or newer (`node -v`); if the machine has an older Node, install 24 with the user's version manager or `brew install node@24` before anything else.
+relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>` runs it with no checkout, and `npm install -g @kyleroche/relay` installs the `relay` command (if the shell cannot find it afterwards, `npx @kyleroche/relay doctor`'s `path` line prints the PATH fix to give the user). It needs Node 24 or newer (`node -v`); if the machine has an older Node, install 24 with the user's version manager or `brew install node@24` before anything else.
 
 ### "Set up relay from <site> on this machine" (the common case: a hosted relay exists)
 

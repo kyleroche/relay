@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { defaultConfig, type HarnessConfig } from "@relay/core";
 import { mcpCheck } from "../src/commands/probes.ts";
+import { pathCheck } from "../src/commands/probes.ts";
 
 const ENTRY = "/opt/relay/dist/relay-mcp.js";
 const siteCfg = (over: Partial<HarnessConfig> = {}): HarnessConfig => ({ ...defaultConfig(), site: "https://relay.example.com", siteToken: "rly_secret", siteTokenName: "oauth:relay-cli@mac", siteTokenSource: "device", ...over });
@@ -40,5 +41,31 @@ describe("relay doctor: the mcp line", () => {
     const down = await mcpCheck(siteCfg(), { entry: ENTRY, listTools: async () => Promise.reject(new Error("relay-mcp: cannot reach https://relay.example.com/mcp: ECONNREFUSED")) });
     expect(down.status).toBe("fail");
     expect(down.detail).toMatch(/tools\/list failed: relay-mcp: cannot reach/);
+  });
+});
+
+describe("pathCheck", () => {
+  it("is ok when relay resolves on PATH", () => {
+    expect(pathCheck({ onPath: (b) => (b === "relay" ? "/usr/local/bin/relay" : undefined) })).toEqual({ status: "ok", name: "path", detail: "relay on PATH: /usr/local/bin/relay" });
+  });
+  it("warns with npm's bin directory and the shell's rc file when relay is missing", () => {
+    const c = pathCheck({ onPath: () => undefined, npmPrefix: () => "/opt/homebrew", shell: "/bin/zsh", running: "/Users/w/.npm/_npx/abc/node_modules/.bin/relay", pathEnv: "/usr/bin:/bin" });
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("npm install -g @kyleroche/relay");
+    expect(c.detail).toContain("/opt/homebrew/bin");
+    expect(c.detail).toContain("~/.zshrc");
+  });
+  it("still gives a fix when npm cannot say where its prefix is", () => {
+    const c = pathCheck({ onPath: () => undefined, npmPrefix: () => undefined, shell: "/bin/bash", running: "/usr/local/lib/node_modules/@kyleroche/relay/dist/relay.js", pathEnv: "/usr/bin:/bin" });
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("npm prefix -g");
+    expect(c.detail).toContain("~/.bashrc");
+    expect(c.detail).not.toContain("npm install -g");
+  });
+  it("says the command is simply not installed when npm's bin directory is already on PATH", () => {
+    const c = pathCheck({ onPath: () => undefined, npmPrefix: () => "/opt/homebrew", shell: "/bin/zsh", running: "/w/relay/bin/relay", pathEnv: "/opt/homebrew/bin:/usr/bin" });
+    expect(c.status).toBe("warn");
+    expect(c.detail).toContain("not installed as a command");
+    expect(c.detail).not.toContain(".zshrc");
   });
 });

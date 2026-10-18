@@ -60,7 +60,7 @@ Memory commands (`docs/MEMORY.md`): `relay brief`, `relay recall`, `relay decide
 
 If a user asks you to set up relay, do these steps and stop at anything that needs their browser. Their request is the consent for the writes below: when they asked you to set relay up on this machine, make it a worker, or link a repo, run the `--yes` forms without asking again; print the plan and ask only when nobody asked for that step.
 
-relay is on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>` runs it with no checkout. It needs Node 24 or newer: check `node -v` first and have the user install 24 (their version manager, or `brew install node@24`) if it is older.
+relay is on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>` runs it with no checkout, and `npm install -g @kyleroche/relay` installs the `relay` command (if the shell then cannot find it, npm's global bin directory is not on PATH; `relay doctor`'s `path` line prints the exact fix). It needs Node 24 or newer: check `node -v` first and have the user install 24 (their version manager, or `brew install node@24`) if it is older.
 
 When the user says "set up relay from `<site>` on this machine" (a hosted relay exists), the sequence is: `npx @kyleroche/relay setup --site <site>` (device flow in the user's browser, or `--invite <code>`), `npx @kyleroche/relay doctor`, `npx @kyleroche/relay work --install --yes`, then report the lanes the worker now serves. In full:
 

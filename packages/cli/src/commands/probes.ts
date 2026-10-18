@@ -2,8 +2,8 @@
  * Login probes shared by `relay doctor` and `relay work`: which vendor CLIs are on PATH and logged in. Probes print
  * only a derived status, never command output, so no token or account id can leak into a log.
  */
-import { execFile } from "node:child_process";
-import { join } from "node:path";
+import { execFile, execFileSync } from "node:child_process";
+import { delimiter, join } from "node:path";
 import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
@@ -117,6 +117,40 @@ export async function sandboxCheck(platform: NodeJS.Platform = process.platform)
     ? "the container is the boundary: the Claude lane runs with the allowlist alone, advertised as sandbox:container (recreate the container with `relay work --isolation container --install` to get the runtime flags it needs)"
     : "Claude jobs fail here (relay work never runs them unsandboxed); the kernel must allow unprivileged user namespaces";
   return { status: "warn", name: "sandbox", detail: `bubblewrap and socat on PATH but ${probe.detail}; ${fix}` };
+}
+
+/**
+ * Is `relay` a command on this shell's PATH? `npx @kyleroche/relay …` never installs one; `npm install -g` does, into
+ * npm's global bin directory, which some Node installs leave off PATH. The detail carries the exact fix.
+ */
+export function pathCheck(opts: { onPath?: (bin: string) => string | undefined; npmPrefix?: () => string | undefined; shell?: string; running?: string; pathEnv?: string } = {}): Check {
+  const find = opts.onPath ?? onPath;
+  const found = find("relay");
+  if (found) return { status: "ok", name: "path", detail: `relay on PATH: ${found}` };
+  const prefix = (opts.npmPrefix ?? defaultNpmPrefix)();
+  const bin = prefix ? join(prefix, "bin") : undefined;
+  const shell = opts.shell ?? process.env.SHELL ?? "";
+  const rc = shell.endsWith("zsh") ? "~/.zshrc" : shell.endsWith("fish") ? "~/.config/fish/config.fish" : "~/.bashrc";
+  const running = opts.running ?? process.argv[1] ?? "";
+  const viaNpx = /\/_npx\//.test(running);
+  const install = viaNpx ? "you are running through npx, which installs no command; run `npm install -g @kyleroche/relay`, then " : "";
+  const pathDirs = (opts.pathEnv ?? process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  if (bin && pathDirs.includes(bin)) {
+    // npm's bin directory is on PATH, so the command is simply not installed (a checkout runs bin/relay instead)
+    return { status: "warn", name: "path", detail: `relay is not installed as a command: npm install -g @kyleroche/relay (a checkout uses its bin/relay)` };
+  }
+  const fix = bin
+    ? `${install}add npm's bin directory to PATH: echo 'export PATH="${bin}:$PATH"' >> ${rc} and open a new shell`
+    : `${install}add the directory \`npm prefix -g\`/bin prints to PATH in ${rc} and open a new shell`;
+  return { status: "warn", name: "path", detail: `relay is not on PATH; ${fix}` };
+}
+
+function defaultNpmPrefix(): string | undefined {
+  try {
+    return execFileSync("npm", ["prefix", "-g"], { encoding: "utf8", timeout: 5000 }).trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** What `relay doctor` on a Mac reports about the container tier (docs/WORKERS.md, "Isolation"). */
