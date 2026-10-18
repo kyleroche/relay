@@ -16,6 +16,7 @@ npx @kyleroche/relay setup --site https://relay.example.com      # site mode: de
 npx @kyleroche/relay doctor                                      # logins, and the lanes this machine would serve
 npx @kyleroche/relay work --install --yes                        # the service that keeps `relay work` running
 npx @kyleroche/relay work status                                 # the service, the site's workers, the log tail
+npx @kyleroche/relay work forget old-mac                         # drop a retired worker's row (a renamed or decommissioned machine)
 ```
 
 `relay setup --site` stores the site URL in `~/.harness/config.json` and the token in `~/.harness/credentials.json`
@@ -57,7 +58,8 @@ Every step is a REST call under `/api/v1` with the bearer token; the same functi
 | claim | `POST /work/claim` `{worker_id, lanes?, labels?}` when the doorbell says so | the oldest `queued` task whose lane and labels match, leased for 30 minutes; `claim: null` when nothing is claimable |
 | start | `POST /work/{owner}/{repo}%23{issue}/start` `{worker_id, branch}` | `run.started` as `runner:<name>`; the task is `running` |
 | release | `POST /work/{owner}/{repo}%23{issue}/release` `{worker_id, outcome, pr, pr_url, summary, error, usage}` | `finished` → `run.finished` (+ PR); `failed` → `run.failed`; `released` frees the lease only. `usage` → one `step.usage` row as `agent:<lane>` |
-| list | `GET /workers` (`feed:read`) | every worker with `state` (online < 2 min, idle < 1 h, offline) and its current claim |
+| list | `GET /workers` (`feed:read`) | every worker with `state` (online < 2 min, idle < 1 h, offline), `retired` (offline > 7 days) and its current claim |
+| forget | `DELETE /workers/{id}` (`work:claim` or the signed-in person; the name works in place of the id) | removes the worker's row; `worker.forgotten` as the caller. 409 while it holds a live claim. Its claims and `run.*` events stay ("Retiring a worker" below) |
 
 ### The loop
 
@@ -127,6 +129,23 @@ heartbeat. `relay doctor` shows the file's values and age on the machine.
 - Task states (docs/INTEGRATIONS.md): `queued` → `claimed` (a live lease, no run yet) → `running` → `review` or
   `failed` → `done`; a reviewer's "request changes" sends `review` back to `queued`. `relay task ls --state claimed`
   shows what workers are holding.
+
+### Retiring a worker
+
+Registration is by name, so a machine that was renamed, moved from the host tier to the container tier (`kyrobook`
+became `kyrobook-container`) or decommissioned leaves its old row behind: `offline, seen 3 weeks ago`, forever. Two
+rules handle that:
+
+- **Retired after 7 days.** A worker offline for more than 7 days (`WORKER_RETIRED_MS`) is `retired`: the workers
+  page folds it under "Show N retired", the flow map stops drawing it, and `relay work status` prints `retired` in
+  place of `offline` with a hint. Nothing is deleted; a heartbeat brings it straight back.
+- **Forget removes it.** `relay work forget <name>` (or the Forget button on the workers page, or
+  `DELETE /api/v1/workers/{id}` with `work:claim`) deletes the row and writes `worker.forgotten` as the person or bot
+  who asked. The worker's claims stay (keyed by its id) and its `run.*` events keep their `runner:<name>` actor, so
+  every past run is still attributed. It is refused with a 409 while the worker holds a live claim: wait for the run,
+  or `relay task requeue` the task first. No confirmation step, because it is reversible: a machine that still runs
+  `relay work` gets a 404 on its next heartbeat or claim and registers itself again under the same name with a fresh
+  id (`worker.registered`), and so does one you start later.
 
 ## What a job does on the machine
 
@@ -401,7 +420,8 @@ runs `container start --attach relay-work` and the options are baked into the co
 
 Both run the relay that installed them (the npm package's `dist/relay.js`, or the checkout's `tsx` entry) with the Node
 that ran `--install`, and append to `$RELAY_HOME/work.log`. `relay work --uninstall --yes` stops the service and
-removes the file. `relay work status` shows whether it is loaded, the workers the site knows with their state,
+removes the file. `relay work status` shows whether it is loaded, the workers the site knows with their state
+(`retired` for one offline over 7 days; `relay work forget <name>` removes it, "Retiring a worker" above),
 poll cadence and current task, and the last ten log lines. To run in the foreground instead: `relay work` (stop with Ctrl-C; running
 jobs finish and the worker reports offline), or `relay work --once` to drain the queue and exit.
 
