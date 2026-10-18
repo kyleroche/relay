@@ -36,5 +36,6 @@ export default async function HomePage({ searchParams }: { searchParams: Promise
     if (one) qs.set(k, one);
   }
   if ([...qs.keys()].length > 0) redirect(`/feed?${qs}`);
-  return <BoardPage />;
+  const all = Array.isArray(sp.all) ? sp.all[0] : sp.all;
+  return <BoardPage all={all} />;
 }

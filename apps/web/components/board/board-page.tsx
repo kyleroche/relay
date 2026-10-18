@@ -17,7 +17,7 @@ export const BOARD_METADATA: Metadata = {
   alternates: { canonical: "/" },
 };
 
-export async function BoardPage() {
+export async function BoardPage({ all }: { all?: string } = {}) {
   const db = dataMode() === "db";
   const [tasks, workers, pending] = await Promise.all([getTasks({ limit: 300 }), getWorkers(), getAssets({ status: "pending", limit: 50 })]);
   const now = Date.now();
@@ -34,10 +34,8 @@ export async function BoardPage() {
       <section className="py-6 sm:py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">Board</h1>
-              <HomeTabs active="board" />
-            </div>
+            <h1 className="sr-only">Board</h1>
+            <HomeTabs active="board" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges, request changes sends it back with your note, release lifts a hold. The board refreshes itself.
             </p>
@@ -81,7 +79,7 @@ export async function BoardPage() {
           A task is a GitHub issue with an agent:* label. Open one with the command, the relay_task_create tool, or by labelling an issue; it appears in Queue here.
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} />
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} />
     </>
   );
 }

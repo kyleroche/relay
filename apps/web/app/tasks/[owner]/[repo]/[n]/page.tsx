@@ -13,7 +13,7 @@ import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
 import { SectionHeading } from "@/components/ui/section-heading";
-import { dataMode } from "@/lib/data";
+import { dataMode, getFeed, getTasks } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
 import { getDb } from "@/lib/db";
 import { fmtAgo, fmtCost, fmtDuration, fmtTokens } from "@/lib/format";
@@ -32,9 +32,15 @@ interface Loaded {
 }
 
 async function load(p: { owner: string; repo: string; n: string }): Promise<Loaded | null> {
-  if (dataMode() !== "db") return null;
   const id = `${p.owner}/${p.repo}#${p.n}`;
   if (!parseTaskId(id)) return null;
+  if (dataMode() !== "db") {
+    // demo data: the task the board folded from the dataset's events, and those events (lib/data-mock.ts)
+    const task = (await getTasks({ limit: 500 })).find((t) => t.id === id);
+    if (!task) return null;
+    const events = (await getFeed({ project: task.project, limit: 500 })).filter((e) => e.repo === task.repo && e.issue === task.issue) as unknown as EventRow[];
+    return { task, events, title: taskTitle(task, events) };
+  }
   const db = await getDb();
   const row = await core.getTask(db, id);
   if (!row) return null;
@@ -79,7 +85,7 @@ export default async function TaskPage({ params }: Props) {
   return (
     <>
       <section className="py-6 sm:py-8">
-        <Breadcrumb items={[{ label: "Tasks", href: "/tasks" }, { label: t.id, mono: true }]} />
+        <Breadcrumb items={[{ label: "Board", href: "/" }, { label: t.id, mono: true }]} />
         <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>

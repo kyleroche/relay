@@ -57,12 +57,12 @@ describe("classifyRoute", () => {
   });
 
   it("protects the app pages and the internal routes", () => {
-    for (const p of ["/tasks", "/tasks/acme/site/42", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/access", "/feed", "/activate", "/activate/", "/setup", "/setup/github", "/setup/github/callback", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
+    for (const p of ["/tasks/acme/site/42", "/projects", "/projects/relay", "/usage", "/workers", "/assets", "/assets/abc", "/access", "/feed", "/activate", "/activate/", "/setup", "/setup/github", "/setup/github/callback", "/api/feed", "/api/meters", "/api/assets/mock/abc"]) {
       expect(classifyRoute(p, anon), p).toBe("session");
     }
     // unknown paths are nobody's: they fall through to a real 404, never a sign-in redirect
     // /tokens is a next.config redirect to /access; it never reaches the proxy as a page
-    for (const p of ["/anything-else", "/tokens", "/feedX", "/feed/anything", "/flow", "/api/flow"]) expect(classifyRoute(p, anon), p).toBe("unknown");
+    for (const p of ["/anything-else", "/tokens", "/tasks", "/feedX", "/feed/anything", "/flow", "/api/flow"]) expect(classifyRoute(p, anon), p).toBe("unknown");
   });
 
   it("classifies / as public for everyone; the page itself picks the feed or the landing", () => {
@@ -114,7 +114,7 @@ describe("classifyRoute", () => {
     expect(classifyRoute("//info", anon)).toBe("public");
     expect(classifyRoute("/docs//api", anon)).toBe("public");
     expect(classifyRoute("/projects/", anon)).toBe("session");
-    expect(classifyRoute("/tasks/", anon)).toBe("session");
+    expect(classifyRoute("/tasks/acme/site/42/", anon)).toBe("session");
     expect(classifyRoute("/tasksX", anon)).toBe("unknown");
     expect(classifyRoute("//assets", anon)).toBe("session");
     expect(classifyRoute("/information", anon)).toBe("unknown");

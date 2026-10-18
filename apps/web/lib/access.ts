@@ -62,7 +62,7 @@ const PUBLIC_PREFIXES = [
 const PUBLIC_PATTERNS = [/^\/llms[^/]*\.txt$/, /^\/manifest[^/]*$/];
 
 /** The signed-in surface. Add a page here when you add one; anything not listed is a 404, not a redirect. */
-const SESSION_EXACT = new Set(["/tasks", "/projects", "/usage", "/workers", "/assets", "/access", "/activate", "/setup", "/feed", "/api/feed", "/api/meters"]);
+const SESSION_EXACT = new Set(["/projects", "/usage", "/workers", "/assets", "/access", "/activate", "/setup", "/feed", "/api/feed", "/api/meters"]);
 const SESSION_PREFIXES = ["/tasks/", "/projects/", "/assets/", "/activate/", "/setup/", "/api/assets/mock/"];
 
 /** True for the paths whose denial is a problem+json 401 rather than a redirect to /sign-in. */

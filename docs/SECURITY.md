@@ -275,7 +275,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Session required | |
 |---|---|
-| `/feed`, `/tasks`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/access` (the Access page; `/tokens` redirects to it) | the app pages (and the board, which is what `/` shows a signed-in viewer) |
+| `/feed`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/access` (the Access page; `/tokens` redirects to it) | the app pages (and the board, which is what `/` shows a signed-in viewer) |
 | `/activate`, `/setup/*` | approving a device code; the GitHub App setup |
 | `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |

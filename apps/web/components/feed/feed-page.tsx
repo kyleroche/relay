@@ -51,10 +51,8 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
       <section className="py-6 sm:py-8">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-2xl font-semibold tracking-tight">Feed</h1>
-              <HomeTabs active="feed" />
-            </div>
+            <h1 className="sr-only">Feed</h1>
+            <HomeTabs active="feed" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Everything humans, bots, workers and agents did across your coding-agent subscriptions, newest first. relay
               records each GitHub issue, run, model call, pull request, review and deployment as one append-only event with

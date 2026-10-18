@@ -16,8 +16,8 @@ import { cn } from "@/lib/utils";
  * on the card itself (the same client components and server actions as the task page, so the feed row is the same
  * whoever decided and wherever). Held and Failed appear only when they hold something, Held first because the gate
  * stopped those and a person should read them before anything else; Queue, Running, Review and Done are always there
- * so an empty board still says what the steps are. Each column shows its newest `cap` cards and links the rest to
- * /tasks, which is the complete list. DESIGN.md, "Board".
+ * so an empty board still says what the steps are. Each column shows its newest `cap` cards; "Show N more" (`?all=<column>`)
+ * opens the whole column in place. DESIGN.md, "Board".
  */
 
 interface Column {
@@ -101,13 +101,13 @@ function Card({ t, now, workers, canWrite }: { t: TaskView; now: number; workers
   );
 }
 
-export function Board({ tasks, workers, now, canWrite }: { tasks: TaskView[]; workers: Worker[]; now: number; canWrite: boolean }) {
+export function Board({ tasks, workers, now, canWrite, all }: { tasks: TaskView[]; workers: Worker[]; now: number; canWrite: boolean; all?: string }) {
   const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => c.states.includes(t.state)) })).filter((c) => c.always || c.list.length > 0);
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-flow-col lg:auto-cols-fr lg:grid-cols-none" aria-label="Board">
       {columns.map((c) => {
         const tone = STATE_TONE[c.states[0]!];
-        const shown = c.list.slice(0, c.cap);
+        const shown = all === c.key ? c.list : c.list.slice(0, c.cap);
         const more = c.list.length - shown.length;
         return (
           <section key={c.key} aria-labelledby={`col-${c.key}`} className="flex min-w-0 flex-col rounded-lg border bg-muted/30">
@@ -125,8 +125,13 @@ export function Board({ tasks, workers, now, canWrite }: { tasks: TaskView[]; wo
               </ul>
             )}
             {more > 0 && (
-              <Link href="/tasks" className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
-                {more} more in Tasks
+              <Link href={`/?all=${c.key}`} scroll={false} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                Show {more} more
+              </Link>
+            )}
+            {all === c.key && c.list.length > c.cap && (
+              <Link href="/" scroll={false} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                Show fewer
               </Link>
             )}
           </section>

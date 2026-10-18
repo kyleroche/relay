@@ -54,7 +54,7 @@ export async function approveTaskAction(taskId: string): Promise<TaskActionResul
     const r = await approveTask(await getDb(), await siteGitHub(), taskId, g.by);
     dispatchAfter(r.events);
     revalidatePath(pagePath(taskId));
-    revalidatePath("/tasks");
+    revalidatePath("/");
     return { ok: true, state: r.task.state };
   } catch (e) {
     revalidatePath(pagePath(taskId)); // a merge refusal wrote task.merge_failed; the page shows it once
@@ -71,7 +71,7 @@ export async function requestChangesAction(taskId: string, note: string): Promis
     const r = await requestChanges(await getDb(), await siteGitHub(), taskId, g.by, note);
     dispatchAfter(r.events);
     revalidatePath(pagePath(taskId));
-    revalidatePath("/tasks");
+    revalidatePath("/");
     return { ok: true, state: r.task.state };
   } catch (e) {
     return { ok: false, message: describe(e) };
@@ -86,7 +86,7 @@ export async function releaseTaskAction(taskId: string, note?: string | null): P
     const r = await releaseTask(await getDb(), taskId, g.by, { note: note ?? null });
     dispatchAfter(r.events);
     revalidatePath(pagePath(taskId));
-    revalidatePath("/tasks");
+    revalidatePath("/");
     return { ok: true, state: r.task.state };
   } catch (e) {
     return { ok: false, message: describe(e) };
@@ -101,7 +101,7 @@ export async function requeueTaskAction(taskId: string, input: { lane?: string |
     const r = await requeueTask(await getDb(), await siteGitHub(), taskId, g.by, { lane: input.lane ?? null, reason: input.reason ?? null });
     dispatchAfter(r.events);
     revalidatePath(pagePath(taskId));
-    revalidatePath("/tasks");
+    revalidatePath("/");
     const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
     return { ok: true, state: r.task.state, ...(github && !github.relabelled ? { message: `Queued, but the GitHub label did not move: ${github.error ?? "unknown error"}.` } : {}) };
   } catch (e) {

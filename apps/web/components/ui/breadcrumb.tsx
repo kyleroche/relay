@@ -11,7 +11,7 @@ export interface Crumb {
 }
 
 /**
- * The one trail above a detail page's h1: "Tasks / acme/site#42", "Projects / relay", "Assets / relay", "Docs / API".
+ * The one trail above a detail page's h1: "Board / acme/site#42", "Projects / relay", "Assets / relay", "Docs / API".
  * Anything after the trail (the docs page's source link) goes in `children` and sits on the same line.
  */
 export function Breadcrumb({ items, children, className }: { items: Crumb[]; children?: ReactNode; className?: string }) {
