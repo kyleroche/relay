@@ -153,6 +153,8 @@ export interface Worker {
   lastSeen: string;
   /** From last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
   status: WorkerStatus;
+  /** Offline for more than 7 days: folded away on the workers page and left off the flow map until forgotten (docs/WORKERS.md, "Retiring a worker"). */
+  retired: boolean;
   lanes: Lane[];
   /** relay CLI version the worker runs; "" when unknown. */
   version: string;

@@ -113,9 +113,9 @@ describe("helpers", () => {
 
 describe("flowScene (mock)", () => {
   const workers: Worker[] = [
-    { name: "studio", host: "studio.local", labels: [], lastSeen: at(0), status: "online", lanes: ["claude", "codex", "grok"], version: "", runsToday: 0, pollMs: null, current: null },
-    { name: "loft", host: "loft.local", labels: [], lastSeen: at(0), status: "idle", lanes: ["claude", "codex"], version: "", runsToday: 0, pollMs: null, current: null },
-    { name: "field", host: "field", labels: [], lastSeen: at(0), status: "offline", lanes: ["claude"], version: "", runsToday: 0, pollMs: null, current: null },
+    { name: "studio", host: "studio.local", labels: [], lastSeen: at(0), status: "online", retired: false, lanes: ["claude", "codex", "grok"], version: "", runsToday: 0, pollMs: null, current: null },
+    { name: "loft", host: "loft.local", labels: [], lastSeen: at(0), status: "idle", retired: false, lanes: ["claude", "codex"], version: "", runsToday: 0, pollMs: null, current: null },
+    { name: "field", host: "field", labels: [], lastSeen: at(0), status: "offline", retired: false, lanes: ["claude"], version: "", runsToday: 0, pollMs: null, current: null },
   ];
   const loopStart = Math.floor(T0 / (FLOW_STEP_MS * 20)) * FLOW_STEP_MS * 20;
 

@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import { Circle, Pause, Power, type LucideIcon } from "lucide-react";
 import Link from "next/link";
 import { PageIntro } from "@/components/page-intro";
+import { RetiredWorkers } from "@/components/workers/retired-workers";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
-import { getWorkers } from "@/lib/data";
+import { dataMode, getWorkers } from "@/lib/data";
 import type { WorkerStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -22,14 +23,17 @@ export const dynamic = "force-dynamic";
 const STATUS: Record<WorkerStatus, { label: string; tone: StatusTone; icon: LucideIcon; hint: string }> = {
   online: { label: "online", tone: "ok", icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
   idle: { label: "idle", tone: "muted", icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
-  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait." },
+  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait. After 7 days offline the worker is retired: folded away below, and relay work forget removes it." },
 };
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
 
 export default async function WorkersPage() {
-  const workers = await getWorkers();
+  const all = await getWorkers();
   const now = Date.now();
+  // offline for more than 7 days: a renamed or decommissioned machine; folded away, with a Forget button (docs/WORKERS.md, "Retiring a worker")
+  const workers = all.filter((w) => !w.retired);
+  const retired = all.filter((w) => w.retired);
   return (
     <>
       <section className="py-6 sm:py-8">
@@ -38,12 +42,13 @@ export default async function WorkersPage() {
           Your machines running <code className="rounded bg-muted px-1 font-mono text-xs">relay work</code>: their lanes, what they are on, when they last checked in.
         </PageIntro>
       </section>
-      {workers.length === 0 && (
+      {all.length === 0 && (
         <EmptyState title="No workers yet" command={`npx @kyleroche/relay setup --site <this site>
 npx @kyleroche/relay work --install --yes`}>
           A worker is a machine with your vendor logins running relay work. Join one with these two commands; it appears here on its first heartbeat.
         </EmptyState>
       )}
+      {all.length > 0 && workers.length === 0 && <p className="text-sm text-muted-foreground">No active workers: every machine that registered has been offline for more than 7 days. Tasks wait until one runs relay work again.</p>}
       <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {workers.map((w) => {
           const s = STATUS[w.status];
@@ -113,6 +118,7 @@ npx @kyleroche/relay work --install --yes`}>
           );
         })}
       </ul>
+      {retired.length > 0 && <RetiredWorkers workers={retired} canWrite={dataMode() === "db"} now={now} />}
     </>
   );
 }

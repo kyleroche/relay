@@ -407,7 +407,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         operationId: "listWorkers",
         tags: ["work"],
         summary: "Workers with their derived state and current task",
-        description: "Every machine that registered through `relay work`. `state` is online (heartbeat under 2 minutes), idle (under an hour) or offline; `current` is the live claim, if any.",
+        description: "Every machine that registered through `relay work`. `state` is online (heartbeat under 2 minutes), idle (under an hour) or offline; `retired` marks one offline for more than 7 days (folded away on the workers page, left off the flow map; `forgetWorker` removes it); `current` is the live claim, if any.",
         security: [{ bearer: ["feed:read"] }],
         responses: { "200": response("Workers, most recently seen first.", "#/components/schemas/WorkerList"), ...commonErrors },
       },
@@ -419,6 +419,18 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         security: [{ bearer: ["work:claim"] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/WorkerRegister" } } } },
         responses: { "201": response("Registered.", "#/components/schemas/WorkerRegistered"), "200": response("Refreshed.", "#/components/schemas/WorkerRegistered"), "400": problemResponse("Bad name or lanes."), "501": notImplemented, ...commonErrors },
+      },
+    },
+    "/workers/{id}": {
+      delete: {
+        operationId: "forgetWorker",
+        tags: ["work"],
+        summary: "Forget a retired worker",
+        description:
+          "Removes the worker's row, by id or name (`relay work forget <name>`): a machine that was renamed, moved to the container tier or decommissioned stops appearing in the workers list and on the flow map. Its claims and `run.*` events stay, so past runs keep their attribution. 409 while the worker holds a live claim (wait for the run, or requeue the task). Writes `worker.forgotten` as the caller. Reversible: the machine registers a fresh row under the same name the next time it runs `relay work`. A `work:claim` bearer or the signed-in person.",
+        security: [{ bearer: ["work:claim"] }],
+        parameters: [{ ...idParam, description: "The worker's id, or its name as `relay work status` lists it." }],
+        responses: { "200": response("Forgotten.", "#/components/schemas/WorkerForgotten"), "404": problemResponse("No such worker."), "409": problemResponse("The worker holds a live claim."), "501": notImplemented, ...commonErrors },
       },
     },
     "/workers/{id}/heartbeat": {
@@ -862,7 +874,14 @@ export const integrationSchemas: Record<string, unknown> = {
   WorkerView: {
     allOf: [
       { $ref: "#/components/schemas/Worker" },
-      { type: "object", properties: { state: { type: "string", enum: ["online", "idle", "offline"], description: "Derived from last_seen." }, current: { oneOf: [{ $ref: "#/components/schemas/LiveClaim" }, { type: "null" }] } } },
+      {
+        type: "object",
+        properties: {
+          state: { type: "string", enum: ["online", "idle", "offline"], description: "Derived from last_seen." },
+          retired: { type: "boolean", description: "Offline for more than 7 days; hidden by default on the workers page and left off the flow map until forgotten." },
+          current: { oneOf: [{ $ref: "#/components/schemas/LiveClaim" }, { type: "null" }] },
+        },
+      },
     ],
   },
   WorkerList: { type: "object", properties: { workers: { type: "array", items: { $ref: "#/components/schemas/WorkerView" } }, count: { type: "integer" } } },
@@ -878,6 +897,7 @@ export const integrationSchemas: Record<string, unknown> = {
     },
   },
   WorkerRegistered: { type: "object", properties: { worker: { $ref: "#/components/schemas/Worker" }, created: { type: "boolean" } } },
+  WorkerForgotten: { type: "object", required: ["forgotten"], properties: { forgotten: { $ref: "#/components/schemas/Worker", description: "The row as it was before it went." } } },
   Heartbeat: { type: "object", properties: { worker: { $ref: "#/components/schemas/Worker" }, leases: { type: "array", items: { $ref: "#/components/schemas/Claim" } } } },
   ClaimRequest: { type: "object", required: ["worker_id"], properties: { worker_id: { type: "string" }, lanes: { type: "array", items: { type: "string" } }, labels: { type: "array", items: { type: "string" } } } },
   ClaimResponse: {

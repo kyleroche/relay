@@ -180,7 +180,13 @@ export const dbSource: DataSource = {
     const now = Date.now();
     const dayStart = new Date(now);
     dayStart.setUTCHours(0, 0, 0, 0);
-    const [views, rows] = await Promise.all([repo.workerViews(db, now), repo.listEvents(db, { kind: "run.", limit: 2000 })]);
+    const [views, rows, forgotten] = await Promise.all([repo.workerViews(db, now), repo.listEvents(db, { kind: "run.", limit: 2000 }), repo.listEvents(db, { kind: "worker.forgotten", limit: 500 })]);
+    // a forgotten worker's run.* rows stay in the feed; the event-derived fallback below must not resurrect it
+    const forgottenAt = new Map<string, string>();
+    for (const e of forgotten) {
+      const name = typeof e.payload.name === "string" ? e.payload.name : null;
+      if (name && (forgottenAt.get(name) ?? "") < e.ts) forgottenAt.set(name, e.ts);
+    }
     const byRunner = new Map<string, EventRow[]>();
     for (const e of rows) {
       if (!e.actor.startsWith("runner:")) continue;
@@ -195,6 +201,7 @@ export const dbSource: DataSource = {
       labels: w.labels,
       lastSeen: w.last_seen,
       status: w.state,
+      retired: w.retired,
       lanes: w.lanes.map(asLane).filter((l): l is Lane => l !== null),
       version: w.version,
       runsToday: runsToday(w.name),
@@ -206,6 +213,8 @@ export const dbSource: DataSource = {
       if (known.has(actor)) continue;
       events.sort((a, b) => a.ts.localeCompare(b.ts));
       const last = events.at(-1)!;
+      const name = actor.slice("runner:".length);
+      if ((forgottenAt.get(name) ?? "") > last.ts) continue; // forgotten after its last run: gone for good, until it registers again
       const lastSeenMs = new Date(last.ts).getTime();
       const started = events.filter((e) => e.kind === "run.started");
       const lastStart = started.at(-1);
@@ -213,15 +222,17 @@ export const dbSource: DataSource = {
       const current = lastStart && !finished ? { project: lastStart.project ?? "", issue: lastStart.issue ?? 0, startedAt: lastStart.ts } : null;
       const lanes = [...new Set(events.map((e) => asLane(e.lane)).filter((l): l is Lane => l !== null))];
       const payloadLabels = (last.payload.labels as unknown) ?? (lastStart?.payload.labels as unknown);
+      const status = current ? "online" : now - lastSeenMs < H ? "idle" : "offline";
       workers.push({
-        name: actor.slice("runner:".length),
-        host: typeof last.payload.host === "string" ? last.payload.host : actor.slice("runner:".length),
+        name,
+        host: typeof last.payload.host === "string" ? last.payload.host : name,
         labels: Array.isArray(payloadLabels) ? (payloadLabels as string[]) : [],
         lastSeen: last.ts,
-        status: current ? "online" : now - lastSeenMs < H ? "idle" : "offline",
+        status,
+        retired: status === "offline" && now - lastSeenMs > repo.WORKER_RETIRED_MS,
         lanes,
         version: "",
-        runsToday: runsToday(actor.slice("runner:".length)),
+        runsToday: runsToday(name),
         pollMs: null,
         current,
       });
@@ -286,7 +297,8 @@ export const dbSource: DataSource = {
    * archive. Each row already carries its state, station and the moment it got there, written by the fold that ran
    * when the last event, claim or release landed; nothing is folded here. Expired leases are released first so a
    * vanished worker's task reads `queued`, as the fold would have said. Workers come from getWorkers (the same rows
-   * the workers page shows). /api/flow memoizes the result per instance for a few seconds.
+   * the workers page shows) minus the retired ones (offline over 7 days): a dead depot is not drawn. /api/flow
+   * memoizes the result per instance for a few seconds.
    */
   async getFlow(): Promise<FlowSnapshot> {
     const db = await getDb();
@@ -322,7 +334,7 @@ export const dbSource: DataSource = {
     return {
       ts: new Date(now).toISOString(),
       projects,
-      workers: workers.map((w) => {
+      workers: workers.filter((w) => !w.retired).map((w) => {
         // registered workers carry the claim's task id; an Actions-only runner names project and issue, so look the task up
         const c = w.current;
         const taskId = c ? (c.taskId ?? tasks.find((t) => t.project === c.project && t.issue === c.issue)?.id ?? null) : null;

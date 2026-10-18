@@ -203,6 +203,7 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 | \`PUT /api/v1/projects/{slug}\`, \`/digests\`, \`/summary\` | \`projects:write\` | what \`relay link\` uploads in site mode |
 | \`GET\`, \`POST /api/v1/webhooks\`; \`GET\`, \`DELETE /api/v1/webhooks/{id}\`; \`POST /api/v1/webhooks/{id}/test\` | \`webhooks:write\` | outbound webhooks; the signing secret is returned once on create; [payload and signature](/docs/feed#outbound-webhooks) |
 | \`GET\`, \`POST /api/v1/tokens\`; \`DELETE /api/v1/tokens/{id}\` | \`tokens:write\` | list, mint (plaintext once), revoke |
+| \`GET /api/v1/workers\` (\`listWorkers\`); \`DELETE /api/v1/workers/{id}\` (\`forgetWorker\`) | \`feed:read\`; \`work:claim\` | the machines running \`relay work\` with their state, \`retired\` (offline over 7 days) and current claim; forget one by id or name (\`relay work forget\`): 409 while it holds a live claim, \`worker.forgotten\` written, its past runs kept; the rest of the worker protocol is in [Workers](/docs/workers) |
 | \`GET /api/v1/whoami\` (\`whoami\`) | any credential | the caller's token name, scopes, expiry and source |
 | \`GET /api/v1/access\`; \`POST /api/v1/access/{user_code}/approve\` | \`tokens:write\` | pending device requests; approve (or \`{"decision":"deny"}\`) one by its code |
 | \`GET\`, \`POST /api/v1/invites\`; \`DELETE /api/v1/invites/{id}\` | \`tokens:write\` | invite codes: list (never the code), mint (code once), revoke |
