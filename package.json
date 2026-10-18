@@ -12,10 +12,18 @@
     "relay": "tsx packages/cli/src/main.ts"
   },
   "devDependencies": {
-    "typescript": "^5.9.0",
+    "@types/node": "^24.0.0",
     "tsx": "^4.20.0",
-    "vitest": "^3.2.0",
-    "@types/node": "^24.0.0"
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.5"
   },
-  "license": "Apache-2.0"
+  "license": "Apache-2.0",
+  "pnpm": {
+    "overrides": {
+      "tinypool": ">=2.1.2",
+      "source-map-js": ">=1.2.2",
+      "esbuild": ">=0.28.1",
+      "@vitest/mocker": ">=4.1.11"
+    }
+  }
 }
