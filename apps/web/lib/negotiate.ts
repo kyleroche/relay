@@ -3,7 +3,7 @@
  * tests can cover the decisions without booting Next.
  *
  * The homepage is two pages in one path: anonymous visitors get the public landing (HTML, or Markdown when the
- * Accept header prefers it); a signed-in viewer, and every request in mock mode, gets the feed as HTML regardless of
+ * Accept header prefers it); a signed-in viewer, and every request in mock mode, gets the app (the board) as HTML regardless of
  * Accept. `homeDecision` makes that call; `negotiateFormat` makes the Accept call for every negotiated path.
  */
 
@@ -69,18 +69,18 @@ export function negotiateFormat(accept: string | null | undefined): Format {
   return "html";
 }
 
-export type HomeView = "feed" | "landing";
+export type HomeView = "app" | "landing";
 
 /** Who sees what at `/`: the feed for a signed-in viewer (and the demo in mock mode), the public landing otherwise. */
 export function homeView(input: { signedIn: boolean; mock: boolean }): HomeView {
-  return input.signedIn || input.mock ? "feed" : "landing";
+  return input.signedIn || input.mock ? "app" : "landing";
 }
 
-export type HomeDecision = { view: "feed" } | { view: "landing"; format: Format };
+export type HomeDecision = { view: "app" } | { view: "landing"; format: Format };
 
 /** The whole call for `/`: the feed ignores Accept (it is an app page); the landing negotiates like any public page. */
 export function homeDecision(input: { signedIn: boolean; mock: boolean; accept: string | null | undefined }): HomeDecision {
-  if (homeView(input) === "feed") return { view: "feed" };
+  if (homeView(input) === "app") return { view: "app" };
   return { view: "landing", format: negotiateFormat(input.accept) };
 }
 

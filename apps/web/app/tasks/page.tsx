@@ -74,7 +74,7 @@ export default async function TasksPage() {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">Tasks</h1>
-            <PageIntro doc="/docs/workers">Every task is a GitHub issue; its state is read from the feed. Held ones were stopped by the injection gate and wait for you to read them; the ones in review wait for your decision.</PageIntro>
+            <PageIntro doc="/docs/workers">The complete list, every task relay knows; the board at / shows the newest per column with the decisions on the cards. Held ones were stopped by the injection gate and wait for you to read them; the ones in review wait for your decision.</PageIntro>
           </div>
           {db && <ReviewPrompt prompt={REVIEW_AGENT_PROMPT} />}
         </div>

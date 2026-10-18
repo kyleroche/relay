@@ -196,5 +196,5 @@ Use the raw request body, not a re-serialised object, and dedupe on `X-Relay-Del
   the `ledger` view). In site mode both read the hosted site (`GET /api/v1/feed`, `GET /api/v1/usage`).
 - Bots: `relay_task_list` / `relay_task_get` fold a task's rows into one state (`docs/INTEGRATIONS.md`). The fold is
   also cached on the task row after every write that names the task (`tasks.state`, `station`, `since`, …), which is
-  what the flow map and state-filtered lists read; the rows here remain the source of truth.
+  what the board and state-filtered lists read; the rows here remain the source of truth.
 - SQL: `select * from ledger where ts > now() - interval '7 days' order by ts desc`.

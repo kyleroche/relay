@@ -12,7 +12,7 @@ import { Button } from "@/components/ui/button";
  * The same core call as `relay_task_release`, `POST /api/v1/tasks/{id}/release` and `relay task release`. Renders into
  * the Held card's flex-wrap row beside Requeue; the outcome takes a full-width line under them.
  */
-export function ReleaseAction({ taskId, canWrite }: { taskId: string; canWrite: boolean }) {
+export function ReleaseAction({ taskId, canWrite, size = "default" }: { taskId: string; canWrite: boolean; size?: "default" | "sm" }) {
   const router = useRouter();
   const [result, setResult] = useState<TaskActionResult | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -34,7 +34,7 @@ export function ReleaseAction({ taskId, canWrite }: { taskId: string; canWrite: 
 
   return (
     <>
-      <Button variant="outline" onClick={release} disabled={!canWrite || pending} onBlur={() => setConfirm(false)} aria-label={confirm ? "Confirm: release this task to the queue" : "Release"}>
+      <Button size={size} variant="outline" onClick={release} disabled={!canWrite || pending} onBlur={() => setConfirm(false)} aria-label={confirm ? "Confirm: release this task to the queue" : "Release"}>
         <ShieldCheck className="size-3.5" aria-hidden="true" />
         {pending ? "Releasing…" : confirm ? "Release now" : "Release"}
       </Button>

@@ -137,7 +137,7 @@ became `kyrobook-container`) or decommissioned leaves its old row behind: `offli
 rules handle that:
 
 - **Retired after 7 days.** A worker offline for more than 7 days (`WORKER_RETIRED_MS`) is `retired`: the workers
-  page folds it under "Show N retired", the flow map stops drawing it, and `relay work status` prints `retired` in
+  page folds it under "Show N retired", the board stops counting it, and `relay work status` prints `retired` in
   place of `offline` with a hint. Nothing is deleted; a heartbeat brings it straight back.
 - **Forget removes it.** `relay work forget <name>` (or the Forget button on the workers page, or
   `DELETE /api/v1/workers/{id}` with `work:claim`) deletes the row and writes `worker.forgotten` as the person or bot
@@ -206,8 +206,8 @@ onto `claude`, `codex` or `grok` hands it to a machine.
 
 ### Held at the gate: release
 
-A task the gate held sits in state `held`: the doorbell does not count it, `claimNext` passes it over, the tasks page
-lists it first and the feed header counts it ("N tasks · M held · K assets"). Its page shows the score, the reasons
+A task the gate held sits in state `held`: the doorbell does not count it, `claimNext` passes it over, the board
+shows it in a Held column ahead of everything else with Release on the card, and the feed header counts it under "waiting on you". Its page shows the score, the reasons
 and who held it (`runner:<name>` from a worker, `bot:relay` from the site's pre-check at creation). Release it there
 ("Release", two clicks), with `relay task release <id> [--note <text>]`, `relay_task_release`, or
 `POST /api/v1/tasks/{id}/release`; `task.released` folds it back to `queued`, the doorbell rings, and the next worker
@@ -355,7 +355,7 @@ does anything:
    shown by xAI and press enter"); the whole address fails with "failed to sign in", and each code is single-use.
 
 Inside, `relay work` knows it is the container worker (`RELAY_ISOLATION=container`): it registers as
-`<hostname>-container` on the Mac's hostname, so the workers page and the flow map show it as a separate machine; it
+`<hostname>-container` on the Mac's hostname, so the workers page and the board show it as a separate machine; it
 adds the label `isolation:container`; and instead of exiting on "no lanes" it waits, re-probing the site token and the
 logins every 30 seconds, so `container exec` can always reach it. On start it probes bubblewrap (the smallest invocation
 Claude Code's sandbox needs). When it starts, the Claude lane's Bash runs inside Claude Code's sandbox nested in the

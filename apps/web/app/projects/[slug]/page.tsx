@@ -92,7 +92,7 @@ export default async function ProjectPage({ params }: Props) {
                 {p.lanes.length === 0 && <span className="text-muted-foreground">—</span>}
                 {p.lanes.map((l) => (
                   <Pill key={l} asChild mono className="hover:border-primary/50 hover:text-foreground">
-                    <Link href={`/?project=${p.slug}&lane=${l}`} title={`Feed: ${p.slug} on the ${l} lane`}>
+                    <Link href={`/feed?project=${p.slug}&lane=${l}`} title={`Feed: ${p.slug} on the ${l} lane`}>
                       {l}
                     </Link>
                   </Pill>
@@ -149,7 +149,7 @@ export default async function ProjectPage({ params }: Props) {
             <SectionHeading
               id="timeline"
               action={
-                <Link href={`/?project=${p.slug}`} className="text-primary underline underline-offset-4">
+                <Link href={`/feed?project=${p.slug}`} className="text-primary underline underline-offset-4">
                   Open in the feed
                 </Link>
               }

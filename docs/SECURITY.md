@@ -260,7 +260,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Public without a session | Why |
 |---|---|
-| `/` | the public landing for an anonymous visitor; the feed for a signed-in viewer (`apps/web/lib/negotiate.ts` decides, the page renders accordingly) |
+| `/` | the public landing for an anonymous visitor; the board for a signed-in viewer (`apps/web/lib/negotiate.ts` decides, the page renders accordingly) |
 | `/info`, `/about`, `/contact`, `/privacy`, `/docs`, `/docs/*`, `/api/markdown` | the public overview, the trust pages and the docs, HTML and Markdown |
 | `/openapi.json`, `/llms.txt`, `/llms-full.txt`, `/.well-known/*`, `/server.json`, `/robots.txt`, `/sitemap.xml`, `/manifest*`, `/skills/*` | the agent-readiness surface |
 | `/sign-in`, `/auth/*` | the sign-in flow itself |
@@ -275,7 +275,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 
 | Session required | |
 |---|---|
-| `/tasks`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/access` (the Access page; `/tokens` redirects to it) | the app pages (and the feed, which is what `/` shows a signed-in viewer) |
+| `/feed`, `/tasks`, `/tasks/*`, `/projects`, `/projects/*`, `/usage`, `/workers`, `/assets`, `/assets/*`, `/access` (the Access page; `/tokens` redirects to it) | the app pages (and the board, which is what `/` shows a signed-in viewer) |
 | `/activate`, `/setup/*` | approving a device code; the GitHub App setup |
 | `/api/feed`, `/api/meters`, `/api/assets/mock/*` | the pages' internal routes |
 | `/api/v1/*` without a bearer (and anonymous writes even with `RELAY_PUBLIC_READ=1`) | the signed-in viewer's scopes apply |

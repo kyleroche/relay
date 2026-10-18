@@ -15,7 +15,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
  * `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`. Renders into the parent's
  * flex-wrap row beside the review buttons; its outcome takes a full-width line under them.
  */
-export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, canWrite }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean }) {
+export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, canWrite, size = "default" }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean; size?: "default" | "sm" }) {
   const router = useRouter();
   const [result, setResult] = useState<TaskActionResult | null>(null);
   const [open, setOpen] = useState(false);
@@ -41,7 +41,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
     <>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
-          <Button variant="outline" disabled={!canWrite || pending}>
+          <Button size={size} variant="outline" disabled={!canWrite || pending}>
             <RotateCcw className="size-3.5" aria-hidden="true" /> Requeue
           </Button>
         </SheetTrigger>

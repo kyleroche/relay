@@ -102,7 +102,7 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 
 ## Reading the feed
 
-- Web: the site root is the public overview for anonymous visitors and the feed once signed in; `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
+- Web: the site root is the public overview for anonymous visitors and, once signed in, the board (every task by state, with approve, request changes, release and requeue on the cards; the feed is its second tab at `/feed`); `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
 - Terminal: `npx @kyleroche/relay feed --limit 20`, `npx @kyleroche/relay usage --window 7d`, `npx @kyleroche/relay task ls --state claimed`, `npx @kyleroche/relay work status` (`pnpm relay …` from a checkout).
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/workers`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
 - MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`.

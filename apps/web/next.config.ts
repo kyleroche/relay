@@ -35,9 +35,12 @@ const nextConfig: NextConfig = {
     "/usage": migrations,
     "/workers": migrations,
   },
-  // The Access page moved from /tokens to /access; old links keep working.
+  // The Access page moved from /tokens to /access and the flow map gave way to the board at /; old links keep working.
   async redirects() {
-    return [{ source: "/tokens", destination: "/access", permanent: true }];
+    return [
+      { source: "/tokens", destination: "/access", permanent: true },
+      { source: "/flow", destination: "/", permanent: true },
+    ];
   },
   // proxy.ts holds the sign-in gate (lib/access.ts says what is public) and the Accept negotiation for /info and /docs.
   async headers() {

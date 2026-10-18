@@ -30,9 +30,9 @@ describe("negotiateFormat", () => {
 
 describe("the homepage", () => {
   it("is the feed for a signed-in viewer and for mock mode, the landing otherwise", () => {
-    expect(homeView({ signedIn: true, mock: false })).toBe("feed");
-    expect(homeView({ signedIn: false, mock: true })).toBe("feed");
-    expect(homeView({ signedIn: true, mock: true })).toBe("feed");
+    expect(homeView({ signedIn: true, mock: false })).toBe("app");
+    expect(homeView({ signedIn: false, mock: true })).toBe("app");
+    expect(homeView({ signedIn: true, mock: true })).toBe("app");
     expect(homeView({ signedIn: false, mock: false })).toBe("landing");
   });
 
@@ -41,8 +41,8 @@ describe("the homepage", () => {
     expect(homeDecision({ signedIn: false, mock: false, accept: "text/html" })).toEqual({ view: "landing", format: "html" });
     expect(homeDecision({ signedIn: false, mock: false, accept: "application/json" })).toEqual({ view: "landing", format: "none" });
     // the feed is an app page: a signed-in agent asking for Markdown still gets HTML
-    expect(homeDecision({ signedIn: true, mock: false, accept: "text/markdown" })).toEqual({ view: "feed" });
-    expect(homeDecision({ signedIn: false, mock: true, accept: "text/markdown" })).toEqual({ view: "feed" });
+    expect(homeDecision({ signedIn: true, mock: false, accept: "text/markdown" })).toEqual({ view: "app" });
+    expect(homeDecision({ signedIn: false, mock: true, accept: "text/markdown" })).toEqual({ view: "app" });
   });
 });
 

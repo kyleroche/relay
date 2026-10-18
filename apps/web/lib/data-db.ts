@@ -18,7 +18,6 @@ type ModelRow = repo.ModelRow;
 import { getStore, taskUrl, toAsset, toVersion } from "./assets.ts";
 import { getDb } from "./db.ts";
 import type { EventKind } from "./events.ts";
-import type { FlowProject, FlowSnapshot, FlowTask } from "./flow.ts";
 import { composeMeters } from "./meters.ts";
 import type {
   Asset,
@@ -290,57 +289,4 @@ export const dbSource: DataSource = {
     return toAsset(await repo.publishAsset(db, id, url, { by }));
   },
 
-  /**
-   * The flow map, from the task state cache (packages/core/src/db/task-state.ts): one query over `tasks` returns
-   * everything in motion (queued, claimed, running, review), done tasks for 90 s after the merge so a client sees them
-   * reach Merged and fade, and failed ones for a day, so the siding shows what stalled today without turning into an
-   * archive. Each row already carries its state, station and the moment it got there, written by the fold that ran
-   * when the last event, claim or release landed; nothing is folded here. Expired leases are released first so a
-   * vanished worker's task reads `queued`, as the fold would have said. Workers come from getWorkers (the same rows
-   * the workers page shows) minus the retired ones (offline over 7 days): a dead depot is not drawn. /api/flow
-   * memoizes the result per instance for a few seconds.
-   */
-  async getFlow(): Promise<FlowSnapshot> {
-    const db = await getDb();
-    const now = Date.now();
-    await repo.expireLeases(db, now);
-    const [rows, workers] = await Promise.all([repo.flowTasks(db, { now, limit: 200 }), dbSource.getWorkers()]);
-    const tasks: FlowTask[] = rows.map((r) => ({
-      id: r.id,
-      project: r.project,
-      repo: r.repo,
-      issue: r.issue,
-      title: r.title ?? `#${r.issue}`,
-      lane: r.lane,
-      state: r.state,
-      station: r.station,
-      since: r.since,
-      pr: r.pr,
-      pr_url: r.pr_url,
-      preview_state: r.preview_state,
-      preview_url: r.preview_url,
-      runner: r.runner,
-      ...(r.cost != null ? { cost: r.cost } : {}),
-      ...(r.state === "held" ? { held: true as const } : {}),
-      ...(r.state === "failed" && r.last_error ? { error: r.last_error } : {}),
-    }));
-    // one stop per project with a task that is not done; the repo from the project row, else from the task itself
-    const projects: FlowProject[] = [];
-    for (const r of rows) {
-      if (r.state === "done" || projects.some((p) => p.slug === r.project)) continue;
-      projects.push({ slug: r.project, repo: r.project_repo ?? r.repo });
-    }
-    projects.sort((a, b) => a.slug.localeCompare(b.slug));
-    return {
-      ts: new Date(now).toISOString(),
-      projects,
-      workers: workers.filter((w) => !w.retired).map((w) => {
-        // registered workers carry the claim's task id; an Actions-only runner names project and issue, so look the task up
-        const c = w.current;
-        const taskId = c ? (c.taskId ?? tasks.find((t) => t.project === c.project && t.issue === c.issue)?.id ?? null) : null;
-        return { name: w.name, lanes: w.lanes, state: w.status, current: taskId ? { task_id: taskId } : null, last_seen: w.lastSeen };
-      }),
-      tasks,
-    };
-  },
 };

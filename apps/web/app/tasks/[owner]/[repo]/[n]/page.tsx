@@ -49,8 +49,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 }
 
 const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
-/** States a task can be requeued from on this page: anything in flight or stuck. A queued task is already queued; a done one is finished. */
-const REQUEUE_STATES = new Set(["running", "failed", "review", "claimed"]);
+/** States a task can be requeued from on this page: anything but done. A queued task is requeued to move it to another lane. */
+const REQUEUE_STATES = new Set(["queued", "running", "failed", "review", "claimed"]);
 
 /**
  * One task, top to bottom: the issue (title, id, lane, state, worker), the Held card while the injection gate holds

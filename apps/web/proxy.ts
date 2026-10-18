@@ -73,7 +73,7 @@ export default async function proxy(req: NextRequest): Promise<NextResponse> {
     const signedIn = mock ? true : (await readSession(req)) !== null;
     const decision = homeDecision({ signedIn, mock, accept });
     // the response depends on the cookie as well as on Accept
-    if (decision.view === "feed") return pass(req, "Accept, Cookie");
+    if (decision.view === "app") return pass(req, "Accept, Cookie");
     return serve(req, decision.format, "Accept, Cookie");
   }
   if (hasMarkdownMirror(pathname)) return serve(req, negotiateFormat(accept));

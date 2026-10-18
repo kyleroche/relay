@@ -8,7 +8,7 @@
  * authorize page asks for a session itself, with a `next` that returns to it), the endpoints that carry their own
  * authentication (/mcp and /api/v1 bearer tokens, webhook and cron secrets, signed asset URLs), and anonymous /api/v1
  * reads when the deploy enables public read. The app's own pages — tasks, projects, usage, workers, the asset pages, tokens,
- * /activate (approving a device code), /setup/* (the GitHub App), /flow (the flow map), the internal /api/feed, /api/meters and /api/flow routes — and
+ * /activate (approving a device code), /setup/* (the GitHub App), /feed (the feed tab), the internal /api/feed and /api/meters routes — and
  * /api/v1 calls without a bearer need a session. Paths that are neither are `unknown`: they fall through so Next.js
  * answers 404. Agents and scanners must see a real not-found, never a redirect to sign-in (docs/AGENT-READINESS.md).
  */
@@ -62,7 +62,7 @@ const PUBLIC_PREFIXES = [
 const PUBLIC_PATTERNS = [/^\/llms[^/]*\.txt$/, /^\/manifest[^/]*$/];
 
 /** The signed-in surface. Add a page here when you add one; anything not listed is a 404, not a redirect. */
-const SESSION_EXACT = new Set(["/tasks", "/projects", "/usage", "/workers", "/assets", "/access", "/activate", "/setup", "/flow", "/api/feed", "/api/meters", "/api/flow"]);
+const SESSION_EXACT = new Set(["/tasks", "/projects", "/usage", "/workers", "/assets", "/access", "/activate", "/setup", "/feed", "/api/feed", "/api/meters"]);
 const SESSION_PREFIXES = ["/tasks/", "/projects/", "/assets/", "/activate/", "/setup/", "/api/assets/mock/"];
 
 /** True for the paths whose denial is a problem+json 401 rather than a redirect to /sign-in. */

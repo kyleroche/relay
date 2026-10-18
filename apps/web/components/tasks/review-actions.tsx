@@ -14,7 +14,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
  * flex-wrap row: the buttons inline, the outcome on a full-width line under them. A merge GitHub refused is not
  * repeated here: the page's Decide card shows task.merge_failed once.
  */
-export function ReviewActions({ taskId, pr, canWrite }: { taskId: string; pr: number | null; canWrite: boolean }) {
+export function ReviewActions({ taskId, pr, canWrite, size = "default" }: { taskId: string; pr: number | null; canWrite: boolean; size?: "default" | "sm" }) {
   const router = useRouter();
   const [result, setResult] = useState<TaskActionResult | null>(null);
   const [confirm, setConfirm] = useState(false);
@@ -53,13 +53,13 @@ export function ReviewActions({ taskId, pr, canWrite }: { taskId: string; pr: nu
   const outcome = result && !open && !(result.mergeRefused && !result.ok) ? result : null;
   return (
     <>
-      <Button onClick={approve} disabled={disabled} onBlur={() => setConfirm(false)} aria-label={confirm ? `Confirm: merge pull request #${pr}` : "Approve and merge"}>
+      <Button size={size} onClick={approve} disabled={disabled} onBlur={() => setConfirm(false)} aria-label={confirm ? `Confirm: merge pull request #${pr}` : "Approve and merge"}>
         <GitMerge className="size-3.5" aria-hidden="true" />
         {pending && confirm ? "Merging…" : confirm ? `Merge #${pr} now` : "Approve and merge"}
       </Button>
       <Sheet open={open} onOpenChange={setOpen}>
         <SheetTrigger asChild>
-          <Button variant="outline" disabled={disabled}>
+          <Button size={size} variant="outline" disabled={disabled}>
             <MessageSquareWarning className="size-3.5" aria-hidden="true" /> Request changes
           </Button>
         </SheetTrigger>

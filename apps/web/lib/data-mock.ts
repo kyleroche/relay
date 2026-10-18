@@ -1,5 +1,6 @@
 /** DataSource over the in-memory dataset in ./mock.ts. */
-import { flowScene } from "./flow-mock.ts";
+import { deriveTaskStatus } from "@relay/core";
+import { taskTitle as coreTaskTitle } from "@relay/core/tasks/station.ts";
 import { appendEvent, dataset, MOCK_PROJECTS } from "./mock.ts";
 import type {
   DataSource,
@@ -11,6 +12,7 @@ import type {
   ProjectSummary,
   Subscription,
   SubscriptionUsage,
+  TaskView,
   UsageSummary,
   UsageWindow,
 } from "./types.ts";
@@ -193,9 +195,32 @@ export const mockSource: DataSource = {
     return dataset().workers;
   },
 
-  /** Tasks need a database; the demo dataset has none (the tasks page says so). */
-  async getTasks() {
-    return [];
+  /**
+   * The demo's tasks, folded from its events the way the database does it (`deriveTaskStatus`): one task per
+   * (repo, issue) with an issue.opened row, newest first. No claims exist here, so nothing reads `claimed`; the
+   * decisions on the board are disabled (the actions need a database) but every column has cards.
+   */
+  async getTasks(opts = {}) {
+    const now = Date.now();
+    const byTask = new Map<string, FeedEvent[]>();
+    for (const e of dataset().events) {
+      if (!e.repo || e.issue == null) continue;
+      const id = `${e.repo}#${e.issue}`;
+      byTask.set(id, [...(byTask.get(id) ?? []), e]);
+    }
+    const tasks: TaskView[] = [];
+    for (const [id, events] of byTask) {
+      const opened = events.find((e) => e.kind === "issue.opened" || e.kind === "task.created");
+      if (!opened?.project || !opened.repo || opened.issue == null) continue;
+      const row = { id, project: opened.project, repo: opened.repo, issue: opened.issue, idempotency_key: null, created_by: opened.actor, created_at: opened.ts, lane: opened.lane, title: null };
+      const status = deriveTaskStatus(row, events, [], now);
+      tasks.push({ ...row, title: coreTaskTitle(row, events), ...status });
+    }
+    tasks.sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
+    let out = tasks;
+    if (opts.project) out = out.filter((t) => t.project === opts.project);
+    if (opts.state) out = out.filter((t) => t.state === opts.state);
+    return out.slice(0, opts.limit ?? 100);
   },
 
   async getModels() {
@@ -275,11 +300,4 @@ export const mockSource: DataSource = {
     return a;
   },
 
-  async getFlow() {
-    // the scripted scene (lib/flow-mock.ts) over the dataset's workers (retired ones left out, as in db mode): one task moves every 8 s, by the clock
-    return flowScene(
-      Date.now(),
-      dataset().workers.filter((w) => !w.retired),
-    );
-  },
 };

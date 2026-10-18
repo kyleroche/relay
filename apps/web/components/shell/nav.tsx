@@ -14,8 +14,7 @@ export interface NavItem {
  * the GitHub App), the theme and the reference pages live in the avatar menu; see DESIGN.md, "Information architecture".
  */
 export const NAV: readonly NavItem[] = [
-  { href: "/", label: "Feed" },
-  { href: "/tasks", label: "Tasks" },
+  { href: "/", label: "Board" },
   { href: "/projects", label: "Projects" },
   { href: "/assets", label: "Assets" },
   { href: "/usage", label: "Usage" },
@@ -33,7 +32,7 @@ export function Nav({ items = NAV, className }: { items?: readonly NavItem[]; cl
   return (
     <nav aria-label="Primary" className={cn("flex flex-wrap items-center gap-0.5 text-sm", className)}>
       {items.map((item) => {
-        const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+        const active = item.href === "/" ? pathname === "/" || pathname === "/feed" : pathname.startsWith(item.href);
         return (
           <Link
             key={item.href}

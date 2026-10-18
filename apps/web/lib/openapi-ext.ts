@@ -407,7 +407,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         operationId: "listWorkers",
         tags: ["work"],
         summary: "Workers with their derived state and current task",
-        description: "Every machine that registered through `relay work`. `state` is online (heartbeat under 2 minutes), idle (under an hour) or offline; `retired` marks one offline for more than 7 days (folded away on the workers page, left off the flow map; `forgetWorker` removes it); `current` is the live claim, if any.",
+        description: "Every machine that registered through `relay work`. `state` is online (heartbeat under 2 minutes), idle (under an hour) or offline; `retired` marks one offline for more than 7 days (folded away on the workers page, left out of the board's worker count; `forgetWorker` removes it); `current` is the live claim, if any.",
         security: [{ bearer: ["feed:read"] }],
         responses: { "200": response("Workers, most recently seen first.", "#/components/schemas/WorkerList"), ...commonErrors },
       },
@@ -427,7 +427,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["work"],
         summary: "Forget a retired worker",
         description:
-          "Removes the worker's row, by id or name (`relay work forget <name>`): a machine that was renamed, moved to the container tier or decommissioned stops appearing in the workers list and on the flow map. Its claims and `run.*` events stay, so past runs keep their attribution. 409 while the worker holds a live claim (wait for the run, or requeue the task). Writes `worker.forgotten` as the caller. Reversible: the machine registers a fresh row under the same name the next time it runs `relay work`. A `work:claim` bearer or the signed-in person.",
+          "Removes the worker's row, by id or name (`relay work forget <name>`): a machine that was renamed, moved to the container tier or decommissioned stops appearing in the workers list and in the board's worker count. Its claims and `run.*` events stay, so past runs keep their attribution. 409 while the worker holds a live claim (wait for the run, or requeue the task). Writes `worker.forgotten` as the caller. Reversible: the machine registers a fresh row under the same name the next time it runs `relay work`. A `work:claim` bearer or the signed-in person.",
         security: [{ bearer: ["work:claim"] }],
         parameters: [{ ...idParam, description: "The worker's id, or its name as `relay work status` lists it." }],
         responses: { "200": response("Forgotten.", "#/components/schemas/WorkerForgotten"), "404": problemResponse("No such worker."), "409": problemResponse("The worker holds a live claim."), "501": notImplemented, ...commonErrors },
@@ -878,7 +878,7 @@ export const integrationSchemas: Record<string, unknown> = {
         type: "object",
         properties: {
           state: { type: "string", enum: ["online", "idle", "offline"], description: "Derived from last_seen." },
-          retired: { type: "boolean", description: "Offline for more than 7 days; hidden by default on the workers page and left off the flow map until forgotten." },
+          retired: { type: "boolean", description: "Offline for more than 7 days; hidden by default on the workers page and left out of the board's worker count until forgotten." },
           current: { oneOf: [{ $ref: "#/components/schemas/LiveClaim" }, { type: "null" }] },
         },
       },

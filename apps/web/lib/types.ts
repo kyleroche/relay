@@ -1,6 +1,5 @@
 import type { TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
-import type { FlowSnapshot } from "./flow.ts";
 
 export type { TaskState, TaskView };
 
@@ -153,7 +152,7 @@ export interface Worker {
   lastSeen: string;
   /** From last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
   status: WorkerStatus;
-  /** Offline for more than 7 days: folded away on the workers page and left off the flow map until forgotten (docs/WORKERS.md, "Retiring a worker"). */
+  /** Offline for more than 7 days: folded away on the workers page and left out of the board's worker count until forgotten (docs/WORKERS.md, "Retiring a worker"). */
   retired: boolean;
   lanes: Lane[];
   /** relay CLI version the worker runs; "" when unknown. */
@@ -250,6 +249,4 @@ export interface DataSource {
   reviewAsset(id: string, review: AssetReview): Promise<Asset | null>;
   /** Copies the bytes to the public store and records the URL; null when unknown, throws when the store cannot publish. */
   publishAsset(id: string, by: string): Promise<Asset | null>;
-  /** The flow map's snapshot (lib/flow.ts): projects with work in motion, workers, and every task with its station. */
-  getFlow(): Promise<FlowSnapshot>;
 }

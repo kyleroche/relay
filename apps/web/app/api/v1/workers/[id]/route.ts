@@ -11,7 +11,7 @@ type Ctx = { params: Promise<{ id: string }> };
 
 /**
  * operationId: forgetWorker. Remove a retired worker's row by id or name (`relay work forget <name>`): the workers
- * page and the flow map stop showing it. Its claims and run.* events stay, so past runs keep their attribution.
+ * page and the board stop showing it. Its claims and run.* events stay, so past runs keep their attribution.
  * 404 for an unknown worker, 409 while it holds a live claim. Writes `worker.forgotten` as the caller. A machine that
  * runs `relay work` again registers a fresh row under the same name. A `work:claim` bearer or the signed-in person.
  */
