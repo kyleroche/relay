@@ -371,6 +371,9 @@ program
   });
 
 program.parseAsync(process.argv).catch((e) => {
-  console.error(e instanceof Error ? e.stack ?? e.message : e);
+  // one line for the person; the stack only when asked (RELAY_DEBUG=1), since most failures here are a missing tool
+  // or login whose message already says what to do
+  const msg = e instanceof Error ? e.message : String(e);
+  console.error(process.env.RELAY_DEBUG && e instanceof Error ? e.stack ?? msg : `relay: ${msg}`);
   process.exit(1);
 });
