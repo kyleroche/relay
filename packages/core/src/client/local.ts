@@ -10,6 +10,7 @@ import { openTask } from "../tasks/create.ts";
 import { approveTask, requestChanges } from "../tasks/review.ts";
 import { requeueTask } from "../tasks/requeue.ts";
 import { releaseTask } from "../tasks/gate.ts";
+import { forgetWorkerServer, WorkError } from "../work/server.ts";
 import { deliverWebhook, dispatchEvent, pingPayload, type DeliverOptions } from "../webhooks/dispatch.ts";
 import type { RelayClient } from "./types.ts";
 
@@ -160,6 +161,18 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
       const r = await releaseTask(db, id, opts.actor, { note: o.note ?? null });
       for (const ev of r.events) await afterWrite(ev);
       return r.task;
+    },
+
+    async forgetWorker(idOrName) {
+      let r;
+      try {
+        r = await forgetWorkerServer(db, idOrName, opts.actor);
+      } catch (e) {
+        if (e instanceof WorkError && e.status === 404) return undefined;
+        throw e;
+      }
+      for (const ev of r.events) await afterWrite(ev);
+      return r.worker;
     },
 
     async createInvite(i) {

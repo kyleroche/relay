@@ -9,6 +9,7 @@
  *   relay work --install       print the LaunchAgent (macOS) or systemd user unit (Linux); --yes writes and starts it
  *   relay work --uninstall     stop and remove the service; --yes to do it
  *   relay work status          the service, this site's workers, the log tail
+ *   relay work forget <name>   remove a retired worker's row (a renamed or decommissioned machine); it comes back if it runs `relay work` again
  *
  * Isolation tier 2 (docs/WORKERS.md, "Isolation"): `--isolation container` runs the whole worker inside one
  * persistent Linux container made with Apple's `container` CLI. `--install` builds the image, creates the container
@@ -84,6 +85,7 @@ import {
   type LoginRedirect,
   type WorkApi,
   type WorkerView,
+  workerRetired,
 } from "@relay/core";
 import { log, onPath, openReady } from "./_common.ts";
 import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.ts";
@@ -207,12 +209,16 @@ export const defaultDeps: WorkDeps = {
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
 
+/** Offline for more than 7 days (WORKER_RETIRED_MS) reads `retired`; older sites without the flag get the same rule applied here. */
+const isRetired = (w: WorkerView, now: number): boolean => w.retired ?? workerRetired(w, now);
+
 function fmtWorker(w: WorkerView, now: number): string {
   const ago = Math.max(0, Math.round((now - new Date(w.last_seen).getTime()) / 1000));
-  const seen = ago < 90 ? `${ago}s ago` : ago < 5400 ? `${Math.round(ago / 60)}m ago` : `${Math.round(ago / 3600)}h ago`;
+  const seen = ago < 90 ? `${ago}s ago` : ago < 5400 ? `${Math.round(ago / 60)}m ago` : ago < 48 * 3600 ? `${Math.round(ago / 3600)}h ago` : `${Math.round(ago / 86_400)}d ago`;
   const cur = w.current ? `  on ${w.current.task_id} since ${w.current.claimed_at.slice(11, 16)}Z` : "";
   const every = w.poll_ms && w.state !== "offline" ? `  every ${fmtInterval(w.poll_ms)}` : "";
-  return `${w.name.padEnd(14)} ${w.state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${every}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}${cur}`;
+  const state = isRetired(w, now) ? "retired" : w.state;
+  return `${w.name.padEnd(14)} ${state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${every}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}${cur}`;
 }
 
 /** `--max-interval`, else RELAY_WORK_MAX_INTERVAL, else 5 minutes; never below the first tick. */
@@ -396,10 +402,31 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         const now = Date.now();
         console.log("workers:");
         for (const w of workers) console.log(`  ${fmtWorker(w, now)}`);
+        const retired = workers.filter((w) => isRetired(w, now));
+        if (retired.length) console.log(`  retired: offline for more than 7 days (${retired.map((w) => w.name).join(", ")}); relay work forget <name> removes one, and it comes back if that machine runs relay work again`);
       }
       if (logTail.length) {
         console.log(`log:      ${p.logPath}`);
         for (const l of logTail) console.log(`  ${l}`);
+      }
+    });
+
+  work
+    .command("forget")
+    .argument("<name-or-id>", "the worker as `relay work status` lists it")
+    .description("Remove a retired worker (a renamed or decommissioned machine) from the workers list; its past runs stay attributed, and it comes back if it runs relay work again")
+    .action(async (nameOrId: string) => {
+      const h = await openReady();
+      try {
+        const w = await h.client.forgetWorker(nameOrId);
+        if (!w) {
+          log(`no worker named '${nameOrId}' (relay work status lists them)`);
+          process.exitCode = 1;
+          return;
+        }
+        log(`forgot ${w.name} (${w.id}; ${w.lanes.join(", ") || "no lanes"}; last seen ${w.last_seen.slice(0, 16)}Z); its past runs stay in the feed, and it registers again if that machine runs relay work`);
+      } finally {
+        await h.close();
       }
     });
 

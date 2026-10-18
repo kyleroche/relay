@@ -9,7 +9,9 @@
  * interval so the workers page can show it, and the plan meters relay's status line saved under ~/.harness/meters
  * (`meters.ts`), so the site's header can show the login's own 5-hour and 7-day usage. One job at a time by default;
  * `jobs` raises it, and the lane adapters' per-subscription locks still keep one process per vendor login. A stop
- * (SIGTERM, --once with an empty queue) lets running jobs finish, then reports the worker offline.
+ * (SIGTERM, --once with an empty queue) lets running jobs finish, then reports the worker offline. A heartbeat or
+ * claim the site answers with 404 means the worker was forgotten there (`relay work forget`); the loop registers
+ * again under the same name and carries on with the new id.
  */
 import type { WorkerRow } from "../db/workers.ts";
 import { relayHome } from "../hooks/cache.ts";
@@ -90,8 +92,19 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   const idleHeartbeatMs = Math.max(heartbeatMs, opts.idleHeartbeatMs ?? IDLE_HEARTBEAT_MS);
   const lanes = opts.lanes;
   const labels = opts.labels ?? [];
-  const { worker } = await opts.api.register({ name: opts.name, host: opts.host, lanes, labels, version: opts.version });
+  const register = () => opts.api.register({ name: opts.name, host: opts.host, lanes, labels, version: opts.version });
+  let { worker } = await register();
   log(`registered as ${worker.name} (${worker.id}) serving ${worker.lanes.join(", ") || "no lanes"}${worker.labels.length ? ` with labels ${worker.labels.join(", ")}` : ""} via ${opts.api.mode}`);
+  /** The site no longer knows this worker's id (someone ran `relay work forget`): take a fresh row under the same name. */
+  const forgotten = (e: unknown): boolean => typeof e === "object" && e !== null && (e as { status?: unknown }).status === 404;
+  const reregister = async (why: string): Promise<void> => {
+    try {
+      ({ worker } = await register());
+      log(`${why}: this worker was forgotten on the site; registered again as ${worker.name} (${worker.id})`);
+    } catch (e) {
+      log(`${why}: forgotten on the site and registering again failed: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
   const results: JobResult[] = [];
   const running = new Set<Promise<void>>();
   let stopped = false;
@@ -100,6 +113,8 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   let lastVersion: number | undefined;
   /** Claim on the next pass whatever the doorbell says: at start, after a claim, and when a job finishes. */
   let claimNow = true;
+  /** A claim already retried once after the site forgot this worker. */
+  let retried = false;
   const run = opts.runJob ?? runJob;
   const readMeters = opts.meters ?? (() => readMeterFiles(relayHome()));
   /** Never let a bad meter file cost a heartbeat. */
@@ -125,7 +140,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
     beating = opts.api
       .heartbeat(worker.id, { interval_ms: interval, meters: meters() })
       .then(() => undefined)
-      .catch((e: unknown) => log(`heartbeat failed: ${e instanceof Error ? e.message : String(e)}`))
+      .catch((e: unknown) => (forgotten(e) ? reregister("heartbeat") : log(`heartbeat failed: ${e instanceof Error ? e.message : String(e)}`)))
       .finally(() => (beating = undefined));
     return beating;
   };
@@ -179,11 +194,18 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
       try {
         claim = await opts.api.claim({ worker_id: worker.id, lanes, labels });
       } catch (e) {
+        if (forgotten(e) && !retried) {
+          await reregister("claim");
+          retried = true; // one immediate retry with the new id; a second 404 waits like any other failure
+          claimNow = true;
+          continue;
+        }
         log(`claim failed: ${e instanceof Error ? e.message : String(e)}`);
         if (opts.once) break;
         await rest();
         continue;
       }
+      retried = false;
       if (!claim) {
         if (opts.once) break;
         await rest();

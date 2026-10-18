@@ -90,6 +90,10 @@ describe("classifyRoute", () => {
     // releasing a task the gate held: a tokens:write bearer (checked by the route), or the signed-in person
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/release", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/release", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
+    // forgetting a retired worker: a work:claim bearer (checked by the route) or the signed-in person; never anonymous public read
+    expect(classifyRoute("/api/v1/workers/kyrobook", { hasBearer: true, publicRead: false, method: "DELETE" })).toBe("public");
+    expect(classifyRoute("/api/v1/workers/kyrobook", { hasBearer: false, publicRead: false, method: "DELETE" })).toBe("session");
+    expect(classifyRoute("/api/v1/workers/kyrobook", { hasBearer: false, publicRead: true, method: "DELETE" })).toBe("session");
     // the GitHub status of a project: a bearer (feed:read or projects:write, checked by the route) or the session
     expect(classifyRoute("/api/v1/projects/relay/github", { hasBearer: true, publicRead: false })).toBe("public");
     expect(classifyRoute("/api/v1/projects/relay/github", anon)).toBe("session");

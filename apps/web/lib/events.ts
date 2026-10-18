@@ -16,6 +16,7 @@ export const EVENT_KINDS = {
   "worker.registered": { group: "run", source: "runner", label: "Worker registered", description: "A machine ran relay work for the first time; payload has its lanes and labels." },
   "worker.online": { group: "run", source: "runner", label: "Worker online", description: "A worker came (back) online and is claiming tasks." },
   "worker.offline": { group: "run", source: "runner", label: "Worker offline", description: "A worker shut down cleanly, or was marked offline after an hour of silence." },
+  "worker.forgotten": { group: "run", source: "web", label: "Worker forgotten", description: "A person or a work:claim bot removed a retired worker's row (relay work forget); payload has its name, lanes and last sighting. Its past runs stay; it registers again if the machine runs relay work." },
   // Run lifecycle (relay work; also from GitHub workflow_job on the optional Actions runners)
   "run.started": { group: "run", source: "runner", label: "Run started", description: "A worker claimed the task, cloned the repo and is running the lane." },
   "run.finished": { group: "run", source: "runner", label: "Run finished", description: "The lane finished; payload.conclusion and the PR are set." },

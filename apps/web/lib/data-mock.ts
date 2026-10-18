@@ -276,7 +276,10 @@ export const mockSource: DataSource = {
   },
 
   async getFlow() {
-    // the scripted scene (lib/flow-mock.ts) over the dataset's workers: one task moves every 8 s, by the clock
-    return flowScene(Date.now(), dataset().workers);
+    // the scripted scene (lib/flow-mock.ts) over the dataset's workers (retired ones left out, as in db mode): one task moves every 8 s, by the clock
+    return flowScene(
+      Date.now(),
+      dataset().workers.filter((w) => !w.retired),
+    );
   },
 };

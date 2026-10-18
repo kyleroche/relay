@@ -9,6 +9,7 @@
  *   start      POST /api/v1/work/{task}/start             run.started (the clone is ready and the lane is about to run)
  *   release    POST /api/v1/work/{task}/release           run.finished or run.failed plus the step.usage row; `released` just frees the lease;
  *                                                        `held` frees it and writes task.held (the injection gate, tasks/gate.ts)
+ *   forget     DELETE /api/v1/workers/{id}               remove a retired worker's row (by id or name); 409 while it holds a live claim; worker.forgotten
  *
  * Every row these write carries the worker as `runner:<name>`, the actor the feed, the task derivation and the
  * workers page already understand. A worker cannot write arbitrary kinds: the shape is fixed here.
@@ -17,7 +18,7 @@ import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
 import { getProject } from "../db/projects.ts";
 import { getTask, type TaskRow } from "../db/tasks.ts";
-import { claimNext, doorbell, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
+import { claimNext, doorbell, forgetWorker, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
 import type { MeterReading } from "../meters.ts";
 import { heldEvent, type GateVerdict } from "../tasks/gate.ts";
@@ -289,6 +290,31 @@ export async function releaseServer(db: Db, taskId: string, input: ReleaseInput)
 }
 
 export const listWorkersServer = (db: Db): Promise<WorkerView[]> => workerViews(db);
+
+export interface ForgottenResult {
+  worker: WorkerRow;
+  events: EventRow[];
+}
+
+/**
+ * Forget a worker (`relay work forget`, DELETE /api/v1/workers/{id}): the row goes, `worker.forgotten` is written as
+ * the caller (not the worker: it is not the one speaking), with the worker's name and last sighting in the payload.
+ * 404 for an unknown id or name, 409 while the worker holds a live claim. Reversible by running `relay work` on the
+ * machine again, which registers a fresh row under the same name.
+ */
+export async function forgetWorkerServer(db: Db, idOrName: string, actor: string): Promise<ForgottenResult> {
+  const r = await forgetWorker(db, idOrName);
+  if (r.outcome === "unknown") throw new WorkError(`No worker '${idOrName}'.`, 404);
+  if (r.outcome === "busy") throw new WorkError(`${r.worker.name} holds a live claim on ${r.claim.task_id} (lease until ${r.claim.lease_until}); wait for it to finish or requeue the task first.`, 409);
+  const { worker } = r;
+  const e = await writeEvent(db, {
+    kind: "worker.forgotten",
+    actor,
+    summary: `${worker.name} forgotten (last seen ${worker.last_seen.slice(0, 16)}Z)`,
+    payload: { worker: worker.id, name: worker.name, host: worker.host, lanes: worker.lanes, labels: worker.labels, version: worker.version, last_seen: worker.last_seen },
+  });
+  return { worker, events: e ? [e] : [] };
+}
 
 /** The project row a claimed task belongs to (its repo is what the worker clones). */
 export const taskProject = (db: Db, task: Pick<TaskRow, "project">) => getProject(db, task.project);
