@@ -15,6 +15,15 @@ export interface Check {
   detail: string;
 }
 
+/** How to put each tool on a machine that lacks it, for the doctor line (official sources only). */
+export const INSTALL_HINT: Record<ProbeTool, string> = {
+  claude: "install: npm install -g @anthropic-ai/claude-code (or the macOS pkg from claude.com/code), then run claude and /login",
+  codex: "install: npm install -g @openai/codex, then codex login (or use fx: fx login codex)",
+  fx: "install: the macOS arm64 tarball from https://releases.fx.sh (version in https://releases.fx.sh/latest.txt) into ~/.local/bin, then fx login codex / fx login grok",
+  grok: "install: the grok CLI from x.ai's docs, then grok login (or use fx: fx login grok)",
+  gh: "install: brew install gh, or the macOS pkg from https://github.com/cli/cli/releases/latest, then gh auth login && gh auth setup-git",
+};
+
 export type ProbeTool = "claude" | "codex" | "fx" | "grok" | "gh";
 export const PROBE_TOOLS: readonly ProbeTool[] = ["claude", "codex", "fx", "grok", "gh"];
 
@@ -79,7 +88,7 @@ export async function probeTools(): Promise<Check[]> {
   for (const tool of PROBE_TOOLS) {
     const bin = onPath(tool);
     if (!bin) {
-      checks.push({ status: tool === "gh" || tool === "claude" ? "fail" : "warn", name: `cli:${tool}`, detail: "not on PATH" });
+      checks.push({ status: tool === "gh" || tool === "claude" ? "fail" : "warn", name: `cli:${tool}`, detail: `not on PATH; ${INSTALL_HINT[tool]}` });
       continue;
     }
     checks.push({ status: "ok", name: `cli:${tool}`, detail: bin });
