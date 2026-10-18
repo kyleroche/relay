@@ -22,7 +22,7 @@ export const WORKER_OFFLINE_MS = 60 * 60_000;
 /** Online = heartbeat within this window; between it and WORKER_OFFLINE_MS the worker is idle. */
 export const WORKER_ONLINE_MS = 2 * 60_000;
 /**
- * A worker offline for longer than this is retired: the workers page folds it away and the flow map stops drawing
+ * A worker offline for longer than this is retired: the workers page folds it away and the board stops drawing
  * it. The row stays until `forgetWorker` removes it (docs/WORKERS.md, "Retiring a worker").
  */
 export const WORKER_RETIRED_MS = 7 * 24 * 60 * 60_000;
@@ -70,7 +70,7 @@ export interface LiveClaim extends ClaimRow {
 export interface WorkerView extends WorkerRow {
   /** Derived from last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
   state: WorkerStatus;
-  /** Offline for more than WORKER_RETIRED_MS (7 days): folded away on the workers page, left off the flow map; `forgetWorker` removes it. */
+  /** Offline for more than WORKER_RETIRED_MS (7 days): folded away on the workers page, left off the board; `forgetWorker` removes it. */
   retired: boolean;
   current: LiveClaim | null;
 }

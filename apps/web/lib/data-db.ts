@@ -22,6 +22,7 @@ import { composeMeters } from "./meters.ts";
 import type {
   Asset,
   AssetDetail,
+  BoardTask,
   AssetListOptions,
   AssetReview,
   DataSource,
@@ -241,6 +242,14 @@ export const dbSource: DataSource = {
 
   async getTasks(opts: TaskListOptions = {}): Promise<TaskView[]> {
     return repo.listTaskViews(await getDb(), opts);
+  },
+
+  /** Expired leases are released first so a vanished worker's task reads `queued`, as the fold would have said. */
+  async getBoard(opts = {}): Promise<BoardTask[]> {
+    const db = await getDb();
+    const now = Date.now();
+    await repo.expireLeases(db, now);
+    return repo.boardTasks(db, { now, ...opts });
   },
 
   async getModels(): Promise<ModelInfo[]> {

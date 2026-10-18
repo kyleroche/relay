@@ -2,8 +2,8 @@
  * The task state cache (migration 010). The feed is the source of truth and `deriveTaskStatus` + `deriveStation` the
  * only derivation; this module runs that fold for ONE task after a write that can change it and stores the result on
  * the task row (`state`, `station`, `since`, `pr`, `pr_url`, `preview_state`, `preview_url`, `runner`, `last_error`,
- * `cost`, `title`). Readers that used to fold every task on every call (the flow map's snapshot, the tasks list) read
- * the columns in one query instead.
+ * `cost`, `title`). Readers that show many tasks at once (the board, `boardTasks` below) read the columns in one query
+ * instead of folding every task on every call.
  *
  * Who calls `refreshTaskState`: `writeEvent` for a row that names a task (repo + issue, or a `preview.*` row matched
  * by PR or branch), `createTask`, and the claim writes in db/workers.ts (`claimNext`, `releaseClaim`, `expireLeases`).
@@ -14,7 +14,7 @@
 import { type Db, iso, num } from "./client.ts";
 import type { EventRow } from "./events.ts";
 import { deriveTaskStatus, taskClaims, taskEvents, taskId, toTask, TASK_COLS, type ClaimLike, type PreviewState, type TaskRow, type TaskState } from "./tasks.ts";
-import { deriveStation, failureLine, FLOW_DONE_MS, FLOW_FAILED_MS, taskTitle, type Station } from "../tasks/station.ts";
+import { deriveStation, failureLine, taskTitle, type Station } from "../tasks/station.ts";
 
 /** The cached columns, as `materializeTask` computes them. */
 export interface TaskStateCache {
@@ -116,13 +116,13 @@ export async function backfillTaskState(db: Db, opts: { all?: boolean; now?: num
   return r.length;
 }
 
-/** One row of the flow map's snapshot query: the task row plus its cache, and the project's repo for the stop. */
-export interface FlowRow extends TaskRow, TaskStateCache {
+/** One row of the board query: the task row plus its cache, and the project's repo. */
+export interface BoardRow extends TaskRow, TaskStateCache {
   /** The repo of the task's project row, null when the project row is gone. */
   project_repo: string | null;
 }
 
-const toFlowRow = (r: Record<string, unknown>): FlowRow => ({
+const toBoardRow = (r: Record<string, unknown>): BoardRow => ({
   ...toTask(r),
   state: r.state as TaskState,
   station: r.station as Station,
@@ -137,28 +137,35 @@ const toFlowRow = (r: Record<string, unknown>): FlowRow => ({
   project_repo: (r.project_repo as string | null) ?? null,
 });
 
+/** How long a failed task stays on the board: a week, so what stalled recently is seen without the column becoming an archive. */
+export const BOARD_FAILED_MS = 7 * 24 * 3_600_000;
+
 /**
- * The tasks the flow map draws, in one query over the cache: everything in motion (queued, held, claimed, running, review),
- * done tasks for `FLOW_DONE_MS` after they reached Merged (so a client sees them arrive and fade) and failed ones for
- * `FLOW_FAILED_MS` (the siding shows what stalled today without turning into an archive). A row whose cache is empty
- * is filled in and the query run again, so the first snapshot after the migration is complete. Lease expiry is the
- * caller's: run `expireLeases` first when the snapshot should not show a vanished worker's lease as live.
+ * The tasks the board shows, in one query over the cache: everything in motion (queued, held, claimed, running,
+ * review) and the failed ones of the last `BOARD_FAILED_MS`, newest `since` first up to `limit`; plus the `doneLimit`
+ * most recently merged. A row whose cache is empty is filled in and the query run again, so the first read after the
+ * migration is complete. Lease expiry is the caller's: run `expireLeases` first when the result should not show a
+ * vanished worker's lease as live.
  */
-export async function flowTasks(db: Db, opts: { now?: number; limit?: number } = {}): Promise<FlowRow[]> {
+export async function boardTasks(db: Db, opts: { now?: number; limit?: number; doneLimit?: number } = {}): Promise<BoardRow[]> {
   const now = opts.now ?? Date.now();
-  const limit = opts.limit ?? 200;
+  const limit = opts.limit ?? 300;
+  const doneLimit = opts.doneLimit ?? 10;
+  const cols = `${TASK_COLS.split(", ")
+    .map((c) => `t.${c}`)
+    .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost, p.repo AS project_repo`;
   const select = async () =>
     db.query(
-      `SELECT ${TASK_COLS.split(", ")
-        .map((c) => `t.${c}`)
-        .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost, p.repo AS project_repo
-       FROM tasks t LEFT JOIN projects p ON p.slug = t.project
-       WHERE t.state IS NULL
-          OR t.state IN ('queued', 'held', 'claimed', 'running', 'review')
-          OR (t.state = 'done' AND t.since > $1::timestamptz)
-          OR (t.state = 'failed' AND t.since > $2::timestamptz)
-       ORDER BY t.created_at DESC, t.id DESC LIMIT $3`,
-      [new Date(now - FLOW_DONE_MS).toISOString(), new Date(now - FLOW_FAILED_MS).toISOString(), limit],
+      `(SELECT ${cols} FROM tasks t LEFT JOIN projects p ON p.slug = t.project
+        WHERE t.state IS NULL
+           OR t.state IN ('queued', 'held', 'claimed', 'running', 'review')
+           OR (t.state = 'failed' AND t.since > $1::timestamptz)
+        ORDER BY t.since DESC NULLS FIRST, t.created_at DESC, t.id DESC LIMIT $2)
+       UNION ALL
+       (SELECT ${cols} FROM tasks t LEFT JOIN projects p ON p.slug = t.project
+        WHERE t.state = 'done'
+        ORDER BY t.since DESC, t.created_at DESC, t.id DESC LIMIT $3)`,
+      [new Date(now - BOARD_FAILED_MS).toISOString(), limit, doneLimit],
     );
   let rows = await select();
   const empty = rows.filter((r) => r.state == null);
@@ -166,5 +173,8 @@ export async function flowTasks(db: Db, opts: { now?: number; limit?: number } =
     for (const r of empty) await refreshTaskState(db, r.id as string, now);
     rows = await select();
   }
-  return rows.filter((r) => r.state != null).map(toFlowRow);
+  return rows
+    .filter((r) => r.state != null)
+    .map(toBoardRow)
+    .sort((a, b) => b.since.localeCompare(a.since) || b.created_at.localeCompare(a.created_at));
 }

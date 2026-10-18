@@ -6,7 +6,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
-import { dataMode, getAssets, getTasks, getWorkers } from "@/lib/data";
+import { dataMode, getAssets, getBoard, getWorkers } from "@/lib/data";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
 
 /** The board: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -19,7 +19,7 @@ export const BOARD_METADATA: Metadata = {
 
 export async function BoardPage({ all }: { all?: string } = {}) {
   const db = dataMode() === "db";
-  const [tasks, workers, pending] = await Promise.all([getTasks({ limit: 300 }), getWorkers(), getAssets({ status: "pending", limit: 50 })]);
+  const [tasks, workers, pending] = await Promise.all([getBoard({ limit: 300, doneLimit: 10 }), getWorkers(), getAssets({ status: "pending", limit: 50 })]);
   const now = Date.now();
   const live = workers.filter((w) => !w.retired);
   const online = live.filter((w) => w.status !== "offline").length;

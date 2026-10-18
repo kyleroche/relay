@@ -1,5 +1,5 @@
 /**
- * The flow map's vocabulary (apps/web/DESIGN.md, "Visuals"): a task's *station* is where its pill sits on the transit
+ * The station vocabulary, cached on the task row (db/task-state.ts): a task's *station* is where its pill sits on the transit
  * map. Stations are coarser than feed events and finer than task states: `review` splits into PR, Preview and Review
  * so the operator sees whether a PR is waiting on Vercel, on a first look, or on a decision somebody has started.
  *
@@ -134,12 +134,8 @@ export function deriveStation(task: StationInput, events: StationEvent[] = [], o
   return { station, since: stationSince(task, station, events, opts) };
 }
 
-/** States drawn on the map. Done tasks ride along briefly (so the client sees them reach Merged and fade); the adapters decide how briefly. */
+/** The states that count as in motion: not merged, not failed. */
 export const IN_MOTION: ReadonlySet<TaskState> = new Set<TaskState>(["queued", "held", "claimed", "running", "review"]);
-
-/** How long a done task stays on the map after it merged, and a failed one on the siding (`flowTasks` in db/task-state.ts). */
-export const FLOW_DONE_MS = 90_000;
-export const FLOW_FAILED_MS = 24 * 3_600_000;
 
 /** The error line of a failed task, from its last run.failed (summary) or the failed run.finished. */
 export function failureLine(events: StationEvent[]): string | undefined {

@@ -1,6 +1,6 @@
 import { ArrowUpRight, Cpu } from "lucide-react";
 import Link from "next/link";
-import { CLOUD_LANES, WORKER_LANES, type TaskState, type TaskView } from "@relay/core";
+import { CLOUD_LANES, WORKER_LANES, type TaskState } from "@relay/core";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
@@ -8,7 +8,7 @@ import { PreviewBadge } from "@/components/tasks/state-badge";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { STATE_HINT, STATE_TONE, taskPagePath, TONE_TEXT } from "@/lib/tasks";
-import type { Worker } from "@/lib/types";
+import type { BoardTask, Worker } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils";
  * on the card itself (the same client components and server actions as the task page, so the feed row is the same
  * whoever decided and wherever). Held and Failed appear only when they hold something, Held first because the gate
  * stopped those and a person should read them before anything else; Queue, Running, Review and Done are always there
- * so an empty board still says what the steps are. Each column shows its newest `cap` cards; "Show N more" (`?all=<column>`)
+ * so an empty board still says what the steps are. The cards come from one query over the task state cache
+ * (`boardTasks`), not a fold per task. Each column shows its newest `cap` cards; "Show N more" (`?all=<column>`)
  * opens the whole column in place. DESIGN.md, "Board".
  */
 
@@ -40,8 +41,8 @@ const COLUMNS: readonly Column[] = [
 
 const workerName = (runner: string | null): string | null => (runner ? runner.replace(/^runner:/, "") : null);
 
-function Card({ t, now, workers, canWrite }: { t: TaskView; now: number; workers: Worker[]; canWrite: boolean }) {
-  const title = t.title ?? t.run_summary ?? t.summary ?? t.id;
+function Card({ t, now, workers, canWrite }: { t: BoardTask; now: number; workers: Worker[]; canWrite: boolean }) {
+  const title = t.title ?? `#${t.issue}`;
   const inFlight = t.state === "claimed" || t.state === "running";
   const name = workerName(t.runner);
   const worker = name ? workers.find((w) => w.name === name) : undefined;
@@ -60,7 +61,7 @@ function Card({ t, now, workers, canWrite }: { t: TaskView; now: number; workers
         ) : (
           <span>no lane</span>
         )}
-        {t.updated_at && <RelTime iso={t.updated_at} now={now} />}
+        {t.since && <RelTime iso={t.since} now={now} />}
       </p>
       {inFlight && name && (
         <p className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground" title={worker ? `${name}: ${worker.status}` : name}>
@@ -72,7 +73,7 @@ function Card({ t, now, workers, canWrite }: { t: TaskView; now: number; workers
         </p>
       )}
       {t.state === "held" && <p className="mt-1.5 text-xs text-warn">Stopped by the injection gate. Read the issue on its page before releasing it.</p>}
-      {t.state === "failed" && t.run_summary && <p className="mt-1.5 line-clamp-2 text-xs text-bad">{t.run_summary}</p>}
+      {t.state === "failed" && t.last_error && <p className="mt-1.5 line-clamp-2 text-xs text-bad">{t.last_error}</p>}
       {(t.pr || t.preview_url || t.preview_state !== "none") && (
         <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
           {t.pr && (
@@ -101,7 +102,7 @@ function Card({ t, now, workers, canWrite }: { t: TaskView; now: number; workers
   );
 }
 
-export function Board({ tasks, workers, now, canWrite, all }: { tasks: TaskView[]; workers: Worker[]; now: number; canWrite: boolean; all?: string }) {
+export function Board({ tasks, workers, now, canWrite, all }: { tasks: BoardTask[]; workers: Worker[]; now: number; canWrite: boolean; all?: string }) {
   const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => c.states.includes(t.state)) })).filter((c) => c.always || c.list.length > 0);
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-flow-col lg:auto-cols-fr lg:grid-cols-none" aria-label="Board">

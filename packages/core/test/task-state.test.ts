@@ -1,7 +1,7 @@
 /**
  * The task state cache (db/task-state.ts, migration 010): every write that can change a task rewrites its cached
  * state and station; the backfill fills rows the cache never saw (including through the migration runner); and the
- * flow map's one-query snapshot returns exactly what the old per-task fold returned, for a fraction of the queries.
+ * board's one-query read returns exactly what the old per-task fold returned, for a fraction of the queries.
  */
 import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,8 +11,8 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate, MIGRATIONS_DIR } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
-import { backfillTaskState, flowTasks, refreshTaskState } from "../src/db/task-state.ts";
-import { deriveStation, failureLine, FLOW_DONE_MS, FLOW_FAILED_MS, IN_MOTION, taskTitle } from "../src/tasks/station.ts";
+import { backfillTaskState, BOARD_FAILED_MS, boardTasks, refreshTaskState } from "../src/db/task-state.ts";
+import { deriveStation, failureLine, IN_MOTION, taskTitle } from "../src/tasks/station.ts";
 import { requeueTask } from "../src/tasks/requeue.ts";
 import { approveTask } from "../src/tasks/review.ts";
 import type { GitHubClient, GitHubIssue, GitHubPull } from "../src/github/client.ts";
@@ -181,7 +181,7 @@ describe("refreshTaskState after each write path", () => {
 });
 
 describe("backfill", () => {
-  it("fills rows whose cache is empty; listTaskViews and flowTasks fill what they meet", async () => {
+  it("fills rows whose cache is empty; listTaskViews and boardTasks fill what they meet", async () => {
     const a = await open("claude");
     await write(a, "run.started", { ts: ago(M) });
     const b = await open("claude");
@@ -199,7 +199,7 @@ describe("backfill", () => {
     expect((await cache(a.id)).state).toBe("running");
 
     await db.query("UPDATE tasks SET state = NULL WHERE id = $1", [b.id]);
-    const flow = await flowTasks(db, { now: NOW, limit: 500 });
+    const flow = await boardTasks(db, { now: NOW, limit: 500 });
     expect(flow.find((r) => r.id === b.id)).toMatchObject({ state: "queued", station: "Queue" });
     expect((await cache(b.id)).state).toBe("queued");
   });
@@ -247,7 +247,7 @@ interface OracleRow {
   error: string | null;
   cost: number | null;
 }
-async function oracleFlow(h: Db, now: number): Promise<OracleRow[]> {
+async function oracleBoard(h: Db, now: number, doneLimit: number): Promise<OracleRow[]> {
   const rows = await repo.listTasks(h, { limit: 200 });
   const views = await Promise.all(
     rows.map(async (row) => {
@@ -273,10 +273,11 @@ async function oracleFlow(h: Db, now: number): Promise<OracleRow[]> {
     }),
   );
   const sinceMs = (t: { since: string }) => new Date(t.since).getTime();
-  return views.filter((t) => IN_MOTION.has(t.state as repo.TaskState) || (t.state === "done" && now - sinceMs(t) < FLOW_DONE_MS) || (t.state === "failed" && now - sinceMs(t) < FLOW_FAILED_MS));
+  const done = views.filter((t) => t.state === "done").sort((a, b) => b.since.localeCompare(a.since)).slice(0, doneLimit);
+  return views.filter((t) => IN_MOTION.has(t.state as repo.TaskState) || done.includes(t) || (t.state === "failed" && now - sinceMs(t) < BOARD_FAILED_MS)).sort((a, b) => b.since.localeCompare(a.since));
 }
 
-describe("flowTasks: the one-query snapshot", () => {
+describe("boardTasks: the one-query read", () => {
   it("returns the tasks the per-task fold returned, with the same stations, for a fraction of the queries", async () => {
     // a fresh database so the counts are about this set alone
     const h = await openDb({ file: ":memory:" });
@@ -315,8 +316,8 @@ describe("flowTasks: the one-query snapshot", () => {
       await w(failedFresh, "run.started", { ts: ago(40 * M) });
       await w(failedFresh, "run.failed", { ts: ago(35 * M), summary: "claude exited 1", payload: { error: "tests failed" } });
       const failedOld = await mk("claude");
-      await w(failedOld, "run.started", { ts: ago(50 * 60 * M) });
-      await w(failedOld, "run.failed", { ts: ago(49 * 60 * M), summary: "timed out" });
+      await w(failedOld, "run.started", { ts: ago(8 * 24 * 60 * M + 2 * M) });
+      await w(failedOld, "run.failed", { ts: ago(8 * 24 * 60 * M + M), summary: "timed out" });
       const sentBack = await mk("grok");
       await w(sentBack, "pr.opened", { ts: ago(15 * M), pr: 6 });
       await w(sentBack, "task.changes_requested", { ts: ago(14 * M), actor: "human:kyle", pr: 6, payload: { note: "more" } });
@@ -332,10 +333,10 @@ describe("flowTasks: the one-query snapshot", () => {
       const counting: Db = { ...h, query: (sql, params) => (count++, h.query(sql, params)) };
 
       count = 0;
-      const before = await oracleFlow(counting, NOW);
+      const before = await oracleBoard(counting, NOW, 1);
       const oracleQueries = count;
       count = 0;
-      const rows = await flowTasks(counting, { now: NOW, limit: 200 });
+      const rows = await boardTasks(counting, { now: NOW, limit: 200, doneLimit: 1 });
       const snapshotQueries = count;
 
       const after: OracleRow[] = rows.map((r) => ({
@@ -376,7 +377,7 @@ describe("flowTasks: the one-query snapshot", () => {
       // 13 tasks: the old path ran one list plus events and claims per task; the new one runs one query
       expect(oracleQueries).toBe(1 + 2 * 13);
       expect(snapshotQueries).toBe(1);
-      console.log(`flow snapshot over ${n} tasks: ${oracleQueries} queries per poll before, ${snapshotQueries} after`);
+      console.log(`board read over ${n} tasks: ${oracleQueries} queries before, ${snapshotQueries} after`);
     } finally {
       await h.close();
     }

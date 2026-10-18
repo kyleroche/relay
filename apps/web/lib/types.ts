@@ -1,7 +1,10 @@
-import type { TaskState, TaskView } from "@relay/core";
+import type { BoardRow, TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
 
 export type { TaskState, TaskView };
+
+/** One card on the board: the task row plus its cached state (packages/core/src/db/task-state.ts), no fold per task. */
+export type BoardTask = BoardRow;
 
 export interface TaskListOptions {
   project?: string;
@@ -240,8 +243,10 @@ export interface DataSource {
   getProject(slug: string): Promise<ProjectDetail | null>;
   getUsage(window: UsageWindow): Promise<UsageSummary>;
   getWorkers(): Promise<Worker[]>;
-  /** Tasks with their derived state, newest first; the tasks page and the feed's review strip read the `review` ones. Empty in mock mode. */
+  /** Tasks with their derived state, newest first (one fold per task; the API and the feed header use it with small limits). */
   getTasks(opts?: TaskListOptions): Promise<TaskView[]>;
+  /** The board's cards in one query over the state cache: everything in motion, failed within a week, the newest merged. */
+  getBoard(opts?: { limit?: number; doneLimit?: number }): Promise<BoardTask[]>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
   getAssets(opts?: AssetListOptions): Promise<Asset[]>;

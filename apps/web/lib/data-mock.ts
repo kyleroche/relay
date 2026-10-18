@@ -1,8 +1,9 @@
 /** DataSource over the in-memory dataset in ./mock.ts. */
 import { deriveTaskStatus } from "@relay/core";
-import { taskTitle as coreTaskTitle } from "@relay/core/tasks/station.ts";
+import { stationOf, taskTitle as coreTaskTitle } from "@relay/core/tasks/station.ts";
 import { appendEvent, dataset, MOCK_PROJECTS } from "./mock.ts";
 import type {
+  BoardTask,
   DataSource,
   FeedEvent,
   FeedOptions,
@@ -221,6 +222,22 @@ export const mockSource: DataSource = {
     if (opts.project) out = out.filter((t) => t.project === opts.project);
     if (opts.state) out = out.filter((t) => t.state === opts.state);
     return out.slice(0, opts.limit ?? 100);
+  },
+
+  /** The board from the same folded tasks: the cache columns a database would hold, derived here. */
+  async getBoard(opts = {}) {
+    const all = await this.getTasks({ limit: 500 });
+    const row = (t: TaskView): BoardTask => ({
+      ...t,
+      station: stationOf(t, []),
+      since: t.updated_at ?? t.created_at,
+      last_error: t.state === "failed" ? t.run_summary : null,
+      cost: t.usage?.cost_equiv ?? null,
+      project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
+    });
+    const live = all.filter((t) => t.state !== "done").slice(0, opts.limit ?? 300);
+    const done = all.filter((t) => t.state === "done").slice(0, opts.doneLimit ?? 10);
+    return [...live, ...done].map(row);
   },
 
   async getModels() {

@@ -31,7 +31,7 @@ export const CONTAINER_ENV = "RELAY_ISOLATION";
 export const CONTAINER_WORKER_NAME_ENV = "RELAY_WORKER_NAME";
 export const CONTAINER_WORKER_HOST_ENV = "RELAY_WORKER_HOST";
 
-/** Advertised by the container worker, so the workers page and the flow map show it as a separate machine. */
+/** Advertised by the container worker, so the workers page and the board show it as a separate machine. */
 export const ISOLATION_LABEL = "isolation:container";
 /** The Claude lane's Bash runs inside Claude Code's own sandbox, nested in the container. */
 export const SANDBOX_ON_LABEL = "sandbox:on";

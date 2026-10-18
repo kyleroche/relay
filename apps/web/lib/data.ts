@@ -24,6 +24,7 @@ export const getProject = (slug: string) => source().getProject(slug);
 export const getUsage = (window: UsageWindow) => source().getUsage(window);
 export const getWorkers = () => source().getWorkers();
 export const getTasks = (opts?: TaskListOptions) => source().getTasks(opts);
+export const getBoard = (opts?: { limit?: number; doneLimit?: number }) => source().getBoard(opts);
 export const getModels = () => source().getModels();
 export const writeEvent = (event: NewEvent) => source().writeEvent(event);
 export const getAssets = (opts?: AssetListOptions) => source().getAssets(opts);

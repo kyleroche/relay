@@ -3,7 +3,7 @@
  * idempotency key) and the title; the state a bot asks about is DERIVED from the feed by `deriveTaskStatus`, so the
  * table can never disagree with what GitHub and the runners actually did. Since migration 010 the row also carries a
  * CACHE of that fold (`state`, `station`, `since`, the PR, the preview, the runner: db/task-state.ts), rewritten after
- * every write that can change the task, so lists and the flow map read one query instead of folding every history.
+ * every write that can change the task, so lists and the board read one query instead of folding every history.
  */
 import { type Db, iso, num } from "./client.ts";
 import { EVENT_COLS, toEvent, type EventRow } from "./events.ts";

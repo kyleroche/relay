@@ -91,7 +91,7 @@ export const toEvent = (r: Record<string, unknown>): EventRow => ({
 /**
  * Append one event. With a dedupe_key that already exists nothing is written and undefined is returned. A row that
  * names a task (repo + issue, or a `preview.*` row for a task's PR or branch) refreshes that task's state cache
- * (db/task-state.ts) before returning, so a list or the flow map read after this call sees the new state.
+ * (db/task-state.ts) before returning, so a list or the board read after this call sees the new state.
  */
 export async function writeEvent(db: Db, e: EventInput): Promise<EventRow | undefined> {
   const ts = e.ts instanceof Date ? e.ts.toISOString() : e.ts ?? null;
