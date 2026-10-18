@@ -451,10 +451,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       const c = needContainer();
       const p = plan({ jobs: "1" }, deps, c.bin);
       if (existsSync(p.path)) {
-        for (const w of p.load) {
-          const r = deps.sh(w);
-          if (!r.ok && !/already|in progress|service already loaded/i.test(r.out)) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
-        }
+        loadService(p.load, { tolerateLoaded: true });
         return log(`service loaded (${p.path}); it runs: ${c.plan.attach.join(" ")}`);
       }
       const r = deps.sh(c.plan.start, { timeoutMs: 120_000 });
@@ -748,12 +745,38 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     log(`wrote ${p.path}`);
     // a reload: stop the previous registration first so bootstrap does not refuse the duplicate
     if (deps.platform === "darwin") deps.sh(p.unload[0]!);
-    for (const w of p.load) {
-      const r = deps.sh(w);
-      if (!r.ok) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
-      log(`ran ${w.join(" ")}`);
-    }
+    loadService(p.load);
     log(`service running; follow it with: tail -f ${p.logPath}; check with: relay work status`);
+  }
+
+  /**
+   * Load the service. On macOS a LaunchAgent belongs in the user's `gui/<uid>` domain, which only exists while that
+   * user has a desktop session; over SSH with nobody logged in on screen, bootstrap fails with "Input/output error",
+   * so the `user/<uid>` domain is tried next (it runs without a desktop but ends with the SSH login session unless
+   * the user is logged in). Says which domain took it.
+   */
+  function loadService(load: string[][], opts: { tolerateLoaded?: boolean } = {}): void {
+    for (const w of load) {
+      const r = deps.sh(w);
+      if (r.ok) {
+        log(`ran ${w.join(" ")}`);
+        continue;
+      }
+      if (opts.tolerateLoaded && /already|in progress|service already loaded/i.test(r.out)) continue;
+      const guiIdx = w.findIndex((a) => /^gui\/\d+$/.test(a));
+      if (deps.platform === "darwin" && guiIdx >= 0) {
+        const alt = [...w];
+        alt[guiIdx] = w[guiIdx]!.replace(/^gui\//, "user/");
+        const r2 = deps.sh(alt);
+        if (r2.ok) {
+          log(`ran ${alt.join(" ")}`);
+          console.log(`note        loaded into the user domain: no desktop session for this user (SSH?). It runs while this login lasts; log in on the Mac's screen (or enable automatic login) and re-run relay work --install --yes for the gui domain, which survives logouts.`);
+          continue;
+        }
+        throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""} (and user domain: ${r2.out.split("\n")[0] ?? ""}); log in on the Mac's screen as this user once, then re-run`);
+      }
+      throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
+    }
   }
 
   /**
@@ -945,11 +968,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     mkdirSync(dirname(service.logPath), { recursive: true });
     writeFileSync(service.path, service.content);
     log(`wrote ${service.path}`);
-    for (const w of service.load) {
-      const r = deps.sh(w);
-      if (!r.ok) throw new Error(`${w.join(" ")} failed: ${r.out.split("\n")[0] ?? ""}`);
-      log(`ran ${w.join(" ")}`);
-    }
+    loadService(service.load);
     console.log(`\n${CONTAINER_NAME} is running ${image} as worker ${workerName}.`);
     printLogins("  ", after.doctor, "Log in inside:\n");
     console.log(`\nThe logins land in the ${CONTAINER_VOLUME} volume, never on this Mac's home. Check with: relay work container status; the worker's log: relay work container logs -f`);

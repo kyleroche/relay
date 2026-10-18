@@ -110,3 +110,15 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 ## Where to read more
 
 `AGENTS.md` at the repo root is written for agents and is the source of truth for commands and conventions; `docs/ARCHITECTURE.md` holds the five rules and a task's life; `docs/WORKERS.md` is how a machine becomes a worker and what a job does.
+
+## A clean machine, what the first install hits
+
+Lessons from real installs; `relay doctor` prints the fix for each, give it to the user verbatim:
+
+- **Node 24 without Homebrew**: the installer from nodejs.org, or a version manager; `relay` refuses older Node. Check `node -v` before anything.
+- **`relay` not found after `npm install -g`**: npm's global bin directory is not on the shell's PATH (a prefix such as `~/.local/node`); `relay doctor`'s `path` line prints the `echo 'export PATH=…' >> ~/.zshrc` line. `npx @kyleroche/relay <command>` works meanwhile.
+- **`gh` missing and no Homebrew**: the macOS pkg from https://github.com/cli/cli/releases/latest, then `gh auth login && gh auth setup-git`. No lane can push without it.
+- **Codex and Grok lanes** need `fx` (tarball from https://releases.fx.sh) or the vendor CLIs, each logged in; a machine with only the Claude login is a claude-only worker, which is fine.
+- **`launchctl bootstrap gui/<uid>` fails with "Input/output error"** when the user has no desktop session (SSH onto a Mac nobody is logged into). relay falls back to the `user/<uid>` domain and says so; for a worker that must survive logouts, log in once on the screen (or enable automatic login) and re-run `relay work --install --yes`.
+- **The container tier** (`--isolation container`) needs Apple's `container` tool installed and `container system start`; without it, use host mode (`relay work --install --yes`), which still runs the Claude lane in Claude Code's own sandbox.
+- **Stop at anything that needs the user's browser or password**: logins, the device code on `/activate`, installers.
