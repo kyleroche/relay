@@ -153,6 +153,9 @@ const run = (bin: string, args: string[], opts: { cwd?: string; timeoutMs?: numb
     const child = execFile(bin, args, { cwd: opts.cwd, env: opts.env ?? cleanEnv(), timeout: opts.timeoutMs ?? 120_000, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) =>
       res({ code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }),
     );
+    // a child that exits before reading its stdin (gh with --body-file -, or a test double) makes the pipe EPIPE;
+    // that is not an error of ours and must not surface as an unhandled stream error
+    child.stdin?.on("error", () => {});
     child.stdin?.end(opts.input ?? "");
   });
 
