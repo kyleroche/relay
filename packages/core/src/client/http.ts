@@ -10,6 +10,7 @@ import type { ProjectRow } from "../db/projects.ts";
 import type { TaskView } from "../db/tasks.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
+import type { WorkerRow } from "../db/workers.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { GitHubStatus, RelayClient, WhoAmI } from "./types.ts";
 
@@ -193,6 +194,16 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
       try {
         const r = await rest<{ revoked: TokenRow }>("DELETE", `/tokens/${encodeURIComponent(idOrName)}`);
         return r.body.revoked;
+      } catch (e) {
+        if (e instanceof RelayHttpError && e.status === 404) return undefined;
+        throw e;
+      }
+    },
+
+    async forgetWorker(idOrName) {
+      try {
+        const r = await rest<{ forgotten: WorkerRow }>("DELETE", `/workers/${encodeURIComponent(idOrName)}`);
+        return r.body.forgotten;
       } catch (e) {
         if (e instanceof RelayHttpError && e.status === 404) return undefined;
         throw e;

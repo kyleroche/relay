@@ -21,6 +21,11 @@ export const LEASE_MS = 30 * 60_000;
 export const WORKER_OFFLINE_MS = 60 * 60_000;
 /** Online = heartbeat within this window; between it and WORKER_OFFLINE_MS the worker is idle. */
 export const WORKER_ONLINE_MS = 2 * 60_000;
+/**
+ * A worker offline for longer than this is retired: the workers page folds it away and the flow map stops drawing
+ * it. The row stays until `forgetWorker` removes it (docs/WORKERS.md, "Retiring a worker").
+ */
+export const WORKER_RETIRED_MS = 7 * 24 * 60 * 60_000;
 
 export type WorkerStatus = "online" | "idle" | "offline";
 
@@ -65,6 +70,8 @@ export interface LiveClaim extends ClaimRow {
 export interface WorkerView extends WorkerRow {
   /** Derived from last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
   state: WorkerStatus;
+  /** Offline for more than WORKER_RETIRED_MS (7 days): folded away on the workers page, left off the flow map; `forgetWorker` removes it. */
+  retired: boolean;
   current: LiveClaim | null;
 }
 
@@ -222,6 +229,29 @@ export function workerState(w: Pick<WorkerRow, "last_seen" | "status">, now: num
   return "offline";
 }
 
+/** Retired = offline and silent for more than WORKER_RETIRED_MS; a clean `offline` report alone does not retire a worker. */
+export function workerRetired(w: Pick<WorkerRow, "last_seen" | "status">, now: number = Date.now()): boolean {
+  return workerState(w, now) === "offline" && now - new Date(w.last_seen).getTime() > WORKER_RETIRED_MS;
+}
+
+export type ForgetResult = { outcome: "forgotten"; worker: WorkerRow } | { outcome: "busy"; worker: WorkerRow; claim: LiveClaim } | { outcome: "unknown" };
+
+/**
+ * Forget a worker by id or name: delete its row so it stops appearing anywhere. Refused (`busy`) while it holds a live
+ * claim, since the lease would then belong to nobody; expired leases are released first so a vanished worker is not
+ * stuck behind a stale one. Its claims stay (migration 011 dropped the cascade) and the run.* events keep their
+ * `runner:<name>` actor, so history is intact. A worker that registers again with the same name gets a fresh row.
+ */
+export async function forgetWorker(db: Db, idOrName: string, now: number = Date.now()): Promise<ForgetResult> {
+  const worker = (await getWorker(db, idOrName)) ?? (await getWorkerByName(db, idOrName));
+  if (!worker) return { outcome: "unknown" };
+  await expireLeases(db, now);
+  const live = (await liveClaims(db, { workerId: worker.id }))[0];
+  if (live) return { outcome: "busy", worker, claim: live };
+  const r = await db.query(`DELETE FROM workers WHERE id = $1 RETURNING ${W}`, [worker.id]);
+  return r[0] ? { outcome: "forgotten", worker: toWorker(r[0]) } : { outcome: "unknown" };
+}
+
 /** Every live claim with its task and worker, newest first. */
 export async function liveClaims(db: Db, opts: { workerId?: string } = {}): Promise<LiveClaim[]> {
   const params: unknown[] = [];
@@ -238,7 +268,7 @@ export async function liveClaims(db: Db, opts: { workerId?: string } = {}): Prom
 /** Workers with their derived state and current task, for the workers page and `relay work status`. */
 export async function workerViews(db: Db, now: number = Date.now()): Promise<WorkerView[]> {
   const [workers, claims] = await Promise.all([listWorkers(db), liveClaims(db)]);
-  return workers.map((w) => ({ ...w, state: workerState(w, now), current: claims.find((c) => c.worker_id === w.id && new Date(c.lease_until).getTime() > now) ?? null }));
+  return workers.map((w) => ({ ...w, state: workerState(w, now), retired: workerRetired(w, now), current: claims.find((c) => c.worker_id === w.id && new Date(c.lease_until).getTime() > now) ?? null }));
 }
 
 /** The live claim a worker holds on a task, if any. */

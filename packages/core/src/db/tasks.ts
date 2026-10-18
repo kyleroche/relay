@@ -396,10 +396,10 @@ export async function taskEvents(db: Db, task: Pick<TaskRow, "repo" | "project" 
   return r.map(toEvent);
 }
 
-/** The claims on a task, oldest first, in the shape the derivation reads. */
+/** The claims on a task, oldest first, in the shape the derivation reads. A forgotten worker's claims stay (its id stands in for the name). */
 export async function taskClaims(db: Db, taskId: string): Promise<ClaimLike[]> {
   const r = await db.query(
-    `SELECT w.name AS worker, c.lease_until, c.claimed_at, c.released_at, c.outcome FROM claims c JOIN workers w ON w.id = c.worker_id
+    `SELECT coalesce(w.name, c.worker_id) AS worker, c.lease_until, c.claimed_at, c.released_at, c.outcome FROM claims c LEFT JOIN workers w ON w.id = c.worker_id
      WHERE c.task_id = $1 ORDER BY c.claimed_at ASC LIMIT 200`,
     [taskId],
   );

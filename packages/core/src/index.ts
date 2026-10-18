@@ -13,7 +13,7 @@ export * from "./oauth/index.ts";
 export { TASK_STATES, isTaskState, parseTaskId, taskId, deriveTaskStatus, previewMatches, relayBranchPattern, type TaskRow, type TaskState, type TaskStatus, type TaskView, type TaskUsage, type TaskReview, type PreviewState, type ClaimLike } from "./db/tasks.ts";
 export { refreshTaskState, refreshTaskForEvent, backfillTaskState, materializeTask, flowTasks, type TaskStateCache, type FlowRow } from "./db/task-state.ts";
 export * from "./tasks/station.ts";
-export { LEASE_MS, WORKER_ONLINE_MS, WORKER_OFFLINE_MS, WORKER_NAME, workerState, requiredLabels, type WorkerRow, type WorkerView, type WorkerStatus, type WorkerInput, type ClaimRow, type ClaimOutcome, type LiveClaim, type Claimed } from "./db/workers.ts";
+export { LEASE_MS, WORKER_ONLINE_MS, WORKER_OFFLINE_MS, WORKER_RETIRED_MS, WORKER_NAME, workerState, workerRetired, requiredLabels, type WorkerRow, type WorkerView, type WorkerStatus, type WorkerInput, type ClaimRow, type ClaimOutcome, type LiveClaim, type Claimed } from "./db/workers.ts";
 export * from "./work/index.ts";
 export { WEBHOOK_EVENT_KINDS, publicWebhook, generateWebhookSecret, type WebhookRow, type PublicWebhook, type DeliveryRow } from "./db/webhooks.ts";
 export * from "./webhooks/dispatch.ts";

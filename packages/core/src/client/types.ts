@@ -10,6 +10,7 @@ import type { TaskState, TaskView } from "../db/tasks.ts";
 import type { InviteRow } from "../db/oauth.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
+import type { WorkerRow } from "../db/workers.ts";
 import type { CreateTaskInput } from "../tasks/create.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { BriefIssue } from "../brief/index.ts";
@@ -218,6 +219,10 @@ export interface RelayClient {
   requeueTask(id: string, opts?: RequeueTaskInput): Promise<TaskView>;
   /** Release a task the injection gate held: task.released, the task is queued again (tasks/gate.ts). */
   releaseTask(id: string, opts?: ReleaseTaskInput): Promise<TaskView>;
+
+  // workers
+  /** Forget a retired worker by id or name (`relay work forget`): its row goes, its claims stay; undefined when none matches. Throws while it holds a live claim. */
+  forgetWorker(idOrName: string): Promise<WorkerRow | undefined>;
 
   // invites (approval without a browser)
   createInvite(input: InviteInput): Promise<{ code: string; invite: InviteRow }>;

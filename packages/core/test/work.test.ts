@@ -11,7 +11,7 @@ import { deriveTaskStatus, type ClaimLike } from "../src/db/tasks.ts";
 import type { MeterReading } from "../src/meters.ts";
 import { localWorkApi, type WorkApi } from "../src/work/api.ts";
 import type { JobResult } from "../src/work/job.ts";
-import { claimServer, doorbellServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
+import { claimServer, doorbellServer, forgetWorkerServer, heartbeatServer, registerWorkerServer, releaseServer, startServer, WorkError, type ClaimResult } from "../src/work/server.ts";
 import { servicePlan } from "../src/work/service.ts";
 import { fxLoginWords, isLoginProvider, LOGIN_PROVIDERS, loginDonePage, manualLoginSteps, OAUTH_PROVIDERS, parseLoginCallback, parseLoginUrl, replayUrl } from "../src/work/login.ts";
 import {
@@ -231,6 +231,92 @@ describe("worker protocol (server side)", () => {
     const r = await releaseServer(db, task.id, { worker_id: reg.worker.id, outcome: "failed", error: "grok exited 1", usage: null });
     expect(r.events.map((e) => e.kind)).toEqual(["run.failed"]);
     expect((await repo.taskView(db, task)).state).toBe("failed");
+  });
+});
+
+describe("forgetWorker (relay work forget, DELETE /api/v1/workers/{id})", () => {
+  it("deletes the row by name or id, keeps the claims attributed, writes worker.forgotten as the caller", async () => {
+    const reg = await registerWorkerServer(db, { name: "old-mac", host: "old-mac.local", lanes: ["claude"], version: "0.2.0" });
+    const task = await newTask("claude");
+    await claimServer(db, { worker_id: reg.worker.id });
+    await startServer(db, task.id, { worker_id: reg.worker.id });
+    await releaseServer(db, task.id, { worker_id: reg.worker.id, outcome: "finished", pr: 7, pr_url: "https://github.com/acme/demo/pull/7" });
+
+    const r = await forgetWorkerServer(db, "old-mac", "human:kyle");
+    expect(r.worker.id).toBe(reg.worker.id);
+    expect(r.events.map((e) => e.kind)).toEqual(["worker.forgotten"]);
+    expect(r.events[0]?.actor).toBe("human:kyle");
+    expect(r.events[0]?.summary).toContain("old-mac forgotten");
+    expect(r.events[0]?.payload).toMatchObject({ worker: reg.worker.id, name: "old-mac", host: "old-mac.local", lanes: ["claude"] });
+    expect(await repo.getWorker(db, reg.worker.id)).toBeUndefined();
+    expect((await repo.workerViews(db)).some((w) => w.name === "old-mac")).toBe(false);
+    // the claim history stays (no cascade), and the task's run is still attributed to the worker that ran it
+    const claims = await repo.listClaims(db, { workerId: reg.worker.id });
+    expect(claims.map((c) => c.outcome)).toEqual(["finished"]);
+    const view = await repo.taskView(db, task);
+    expect(view.state).toBe("review");
+    expect(view.runner).toBe("runner:old-mac");
+    // unknown afterwards, by name and by id
+    await expect(forgetWorkerServer(db, "old-mac", "human:kyle")).rejects.toMatchObject({ status: 404 });
+    await expect(forgetWorkerServer(db, reg.worker.id, "human:kyle")).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("refuses with 409 while the worker holds a live claim, and forgets once it is released", async () => {
+    const reg = await registerWorkerServer(db, { name: "busy", lanes: ["codex"] });
+    const task = await newTask("codex");
+    const c = await claimServer(db, { worker_id: reg.worker.id });
+    expect(c?.task.id).toBe(task.id);
+    await expect(forgetWorkerServer(db, "busy", "human:kyle")).rejects.toMatchObject({ status: 409 });
+    expect(await repo.getWorker(db, reg.worker.id)).toBeDefined();
+    await releaseServer(db, task.id, { worker_id: reg.worker.id, outcome: "released" });
+    const r = await forgetWorkerServer(db, reg.worker.id, "token:ops");
+    expect(r.worker.name).toBe("busy");
+    expect(r.events[0]?.actor).toBe("token:ops");
+  });
+
+  it("a worker that registers again after being forgotten gets a fresh row, and a heartbeat on the old id is a 404", async () => {
+    const first = await registerWorkerServer(db, { name: "mini-container", lanes: ["claude"] });
+    await forgetWorkerServer(db, "mini-container", "human:kyle");
+    await expect(heartbeatServer(db, first.worker.id)).rejects.toMatchObject({ status: 404 });
+    const again = await registerWorkerServer(db, { name: "mini-container", lanes: ["claude", "codex"] });
+    expect(again.created).toBe(true);
+    expect(again.worker.id).not.toBe(first.worker.id);
+    expect(again.events.map((e) => e.kind)).toEqual(["worker.registered", "worker.online"]);
+    await forgetWorkerServer(db, "mini-container", "human:kyle");
+  });
+
+  it("marks a worker offline for more than 7 days as retired; a fresh offline report is not retired", () => {
+    const now = Date.parse("2026-10-17T12:00:00Z");
+    const day = 24 * 60 * 60_000;
+    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "online" }, now)).toBe(true);
+    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "offline" }, now)).toBe(true);
+    expect(repo.workerRetired({ last_seen: new Date(now - 3 * day).toISOString(), status: "offline" }, now)).toBe(false);
+    expect(repo.workerRetired({ last_seen: new Date(now - 60_000).toISOString(), status: "offline" }, now)).toBe(false);
+    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "online" }, now - 8 * day + 1000)).toBe(false);
+  });
+
+  it("the loop registers again when the site has forgotten it", async () => {
+    const reg = await registerWorkerServer(db, { name: "loop-fresh", lanes: ["grok"] });
+    const api = localWorkApi(db, { dispatch: false });
+    let claims = 0;
+    const spy: WorkApi = {
+      ...api,
+      async claim(input) {
+        claims++;
+        if (claims === 1) {
+          await forgetWorkerServer(db, "loop-fresh", "human:kyle"); // forgotten between the registration and the first claim
+          return api.claim(input); // the old id: a 404
+        }
+        expect(input.worker_id).not.toBe(reg.worker.id); // the retry carries the new id
+        return null;
+      },
+    };
+    const logs: string[] = [];
+    const r = await runWorker({ api: spy, name: "loop-fresh", host: "h", lanes: ["grok"], version: "t", once: true, log: (m) => logs.push(m) });
+    expect(claims).toBe(2);
+    expect(r.worker.id).not.toBe(reg.worker.id);
+    expect(logs.some((l) => l.includes("forgotten on the site; registered again"))).toBe(true);
+    await forgetWorkerServer(db, "loop-fresh", "human:kyle");
   });
 });
 

@@ -84,6 +84,15 @@ beforeAll(async () => {
       const t = await admin.getTask(id);
       return t ? json(200, t) : problem(404, "Not Found", `No task ${id}.`, u.pathname);
     }
+    const wk = /^\/workers\/([^/]+)$/.exec(p);
+    if (wk && init.method === "DELETE") {
+      try {
+        const row = await admin.forgetWorker(decodeURIComponent(wk[1]!));
+        return row ? json(200, { forgotten: row }) : problem(404, "Not Found", "No such worker.", u.pathname);
+      } catch (e) {
+        return problem(409, "Conflict", (e as Error).message, u.pathname);
+      }
+    }
     if (p === "/webhooks" && init.method === "POST") return json(201, await admin.addWebhook(body as unknown as Parameters<RelayClient["addWebhook"]>[0]));
     if (p === "/webhooks" && init.method === "GET") return json(200, { webhooks: await admin.listWebhooks() });
     const wh = /^\/webhooks\/([^/]+)(\/test)?$/.exec(p);
@@ -175,6 +184,22 @@ describe("RelayClient over HTTP", () => {
     expect(t).toMatchObject({ id: "acme/demo#42", state: "running", runner: "runner:mini", lane: "claude" });
     expect((await site.listTasks({ state: "running" })).map((x) => x.id)).toEqual(["acme/demo#42"]);
     expect(await site.getTask("acme/demo#999")).toBeUndefined();
+  });
+
+  it("workers: forget by name, undefined once gone, a live claim is a 409 on both sides", async () => {
+    const reg = await repo.registerWorker(db, { name: "old-mac", lanes: ["claude"] });
+    const gone = await site.forgetWorker("old-mac");
+    expect(gone?.id).toBe(reg.worker.id);
+    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/api/v1/workers/old-mac" });
+    expect(await site.forgetWorker("old-mac")).toBeUndefined();
+    expect(await local.forgetWorker("old-mac")).toBeUndefined();
+    expect((await local.listEvents({ kind: "worker.forgotten" })).map((e) => e.actor)).toEqual(["token:grok-bot"]);
+    // a worker on a task cannot be forgotten
+    const busy = await repo.registerWorker(db, { name: "busy", lanes: ["claude"] });
+    const { task } = await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 9001, createdBy: "human:test", lane: "claude" });
+    expect((await repo.claimNext(db, { workerId: busy.worker.id, lanes: ["claude"] }))?.task.id).toBe(task.id);
+    await expect(site.forgetWorker("busy")).rejects.toMatchObject({ status: 409 });
+    await expect(local.forgetWorker(busy.worker.id)).rejects.toMatchObject({ status: 409 });
   });
 
   it("webhooks: add shows the secret once, list hides it, rm removes", async () => {
