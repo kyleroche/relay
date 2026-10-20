@@ -179,7 +179,8 @@ export default async function TaskPage({ params }: Props) {
             <p className="mt-1 text-xs text-muted-foreground">Built from {t.branch ?? "the task's branch"} by Vercel or the repository's deployment.</p>
           </section>
         ) : (
-          inReview && (
+          inReview &&
+          !t.asset && (
             <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
               {t.preview_state === "failed" ? "The preview build failed; the feed row below links to the build log." : "No preview yet. It appears here when Vercel (or a GitHub deployment) reports the branch built."}
             </p>
