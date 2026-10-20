@@ -23,7 +23,14 @@ const LABELS: Array<{ name: string; color: string; description: string }> = [
   { name: "agent:grok", color: "1DA1F2", description: "relay: implement with the Grok lane" },
   { name: "agent:claude-cloud", color: "F2C4B3", description: "relay: hand to Claude's cloud tier (@claude), no runner" },
   { name: "agent:codex-cloud", color: "9FE3CF", description: "relay: hand to Codex cloud (@codex), no runner" },
+  { name: "agent:nodes", color: "E4A11B", description: "relay: run a Griptape Nodes workflow on a worker that has the engine" },
   { name: "deliverable:asset", color: "7057FF", description: "relay: the result is a media asset, not code" },
+  // a production's stages (docs/ARCHITECTURE.md "A task's life", the asset path): which step of the film the issue is
+  { name: "stage:script", color: "BFD4F2", description: "relay: production stage, the script" },
+  { name: "stage:character", color: "BFD4F2", description: "relay: production stage, a character design" },
+  { name: "stage:shot", color: "BFD4F2", description: "relay: production stage, a shot" },
+  { name: "stage:vo", color: "BFD4F2", description: "relay: production stage, voice-over" },
+  { name: "stage:cut", color: "BFD4F2", description: "relay: production stage, the cut" },
 ];
 
 interface LinkOptions {

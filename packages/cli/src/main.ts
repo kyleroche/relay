@@ -1,10 +1,9 @@
 import { Command } from "commander";
 import { writeFileSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
 import {
   openHarness, loadConfig, ensureHome, openDb, migrate, currentVersion, seedRegistry, onboardModel, retrieveGuidance, assertOnboarded, NotOnboardedError, repo,
-  runFx, runClaude, recordLane, registerProject, digestProject, summarizeProject, defaultHookContext, hookPaths,
+  runFx, runClaude, recordLane, defaultHookContext, hookPaths,
 } from "@relay/core";
 import type { FxProvider, ClaudeModel, FileConfig } from "@relay/core";
 import { registerAssetCommands } from "./commands/assets.ts";
@@ -22,6 +21,7 @@ import { registerTask } from "./commands/task.ts";
 import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
+import { registerProjectCommands } from "./commands/project.ts";
 import { openReady, RELAY_ROOT } from "./commands/_common.ts";
 import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
@@ -39,6 +39,7 @@ registerTask(program);
 registerWebhook(program);
 registerWork(program, version);
 registerLane(program);
+registerProjectCommands(program);
 
 // ---------- memory layer: setup, link, brief, recall, decide, prefer, capture, memory (packages/cli/src/commands) ----------
 for (const register of [registerSetup, registerLink, registerBrief, registerRecall, registerDecide, registerPrefer, registerCapture, registerMemory]) register(program);
@@ -248,82 +249,6 @@ program
       await recordLane(h.ledger, req, r, kind === "claude" ? "anthropic" : kind);
       console.log(JSON.stringify({ ok: r.ok, model: r.model, subscription: r.subscription, text: r.text.slice(0, 200), tokensIn: r.tokensIn, tokensOut: r.tokensOut, cacheRead: r.cacheRead, costEquiv: r.costEquiv, durationMs: r.durationMs, error: r.error }, null, 2));
       if (!r.ok) process.exitCode = 1;
-    } finally {
-      await h.close();
-    }
-  });
-
-// ---------- projects ----------
-
-const project = program.command("project").description("Register projects and maintain their file digests");
-project
-  .command("add")
-  .argument("<slug>")
-  .argument("<path>")
-  .option("--stack <text>", "one-line stack note")
-  .option("--check <cmd>", "check command (build/test/lint) the task loop runs after each step")
-  .description("Register (or refresh) a project and hash its files")
-  .action(async (slug: string, path: string, o: { stack?: string; check?: string }) => {
-    const h = await openHarness();
-    try {
-      const args: { slug: string; path: string; stack?: string; checkCmd?: string } = { slug, path: resolve(path) };
-      if (o.stack) args.stack = o.stack;
-      if (o.check) args.checkCmd = o.check;
-      console.log(JSON.stringify(await registerProject(h, args, log)));
-    } finally {
-      await h.close();
-    }
-  });
-project
-  .command("digest")
-  .argument("<slug>")
-  .option("--max <n>", "max files this run", "400")
-  .option("--batch <n>", "files per Sonnet call", "8")
-  .description("Summarize files whose content hash changed since their last digest (Sonnet, no tools)")
-  .action(async (slug: string, o: { max: string; batch: string }) => {
-    const h = await openHarness();
-    try {
-      console.log(JSON.stringify(await digestProject(h, slug, { maxFiles: Number(o.max), batchFiles: Number(o.batch), log })));
-    } finally {
-      await h.close();
-    }
-  });
-project
-  .command("summarize")
-  .argument("<slug>")
-  .description("Write the ≤500-word project summary from README/AGENTS files and the digest index (relay link does this for you)")
-  .action(async (slug: string) => {
-    const h = await openHarness();
-    try {
-      console.log((await summarizeProject(h, slug, log)).text);
-    } finally {
-      await h.close();
-    }
-  });
-project
-  .command("show")
-  .argument("<slug>")
-  .description("Project row, digest coverage, and summary")
-  .action(async (slug: string) => {
-    const h = await openHarness();
-    try {
-      const p = await repo.getProject(h.db, slug);
-      if (!p) throw new Error(`unknown project ${slug}`);
-      const files = await repo.listFileDigests(h.db, slug);
-      const stale = files.filter((f) => !f.summary || f.summary_sha !== f.sha256).length;
-      console.log(`${p.slug}  ${p.path ?? "-"}\nstack: ${p.stack ?? "-"}  check: ${p.check_cmd ?? "-"}\nfiles: ${files.length} (${stale} need digest)  summary: ${p.summary_tokens ?? 0} tokens`);
-      for (const f of files.slice(0, 15)) console.log(`  ${f.path.padEnd(48)} ${f.summary ? f.summary.slice(0, 90) : "(no digest)"}`);
-      if (p.summary) console.log("\n" + p.summary);
-    } finally {
-      await h.close();
-    }
-  });
-project
-  .command("list")
-  .action(async () => {
-    const h = await openHarness();
-    try {
-      for (const p of await repo.listProjects(h.db)) console.log(`${p.slug.padEnd(20)} ${p.path ?? "-"}  summary=${p.summary_tokens ?? 0}tok`);
     } finally {
       await h.close();
     }

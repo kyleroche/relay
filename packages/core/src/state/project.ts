@@ -64,7 +64,7 @@ export interface ProjectHandle {
   ledger?: Ledger;
 }
 
-export async function registerProject(h: ProjectHandle, p: { slug: string; path: string; stack?: string; checkCmd?: string }, log: Log = noopLog): Promise<{ files: number; removed: number }> {
+export async function registerProject(h: ProjectHandle, p: { slug: string; path: string; repo?: string; stack?: string; checkCmd?: string }, log: Log = noopLog): Promise<{ files: number; removed: number }> {
   await repo.upsertProject(h.db, p);
   const files = scanFiles(p.path);
   await repo.upsertFileDigests(h.db, p.slug, files.map(({ path, sha256, size }) => ({ path, sha256, size })));
