@@ -1,7 +1,8 @@
 import { createMcpHandler, type Grant } from "@relay/mcp";
 import { NextResponse, type NextRequest } from "next/server";
 import { ACCESS_HOWTO, accessSteps, AUTHORIZATION_SERVER_URL, bearerChallenge, clientKey, problem, rateHeaders, RESOURCE_METADATA_URL, takeToken } from "@/lib/api";
-import { getStore, publicUploadUrl, publicViewUrl, VIEW_TTL } from "@/lib/assets";
+import { afterReview, afterUpload } from "@/lib/asset-hooks";
+import { getStore, publicUploadUrl, publicViewUrl, toAsset, VIEW_TTL } from "@/lib/assets";
 import { resolveGrant } from "@/lib/auth";
 import { dataMode, getFeed, getProject, publicReadEnabled } from "@/lib/data";
 import { getDb, getMemoryDb } from "@/lib/db";
@@ -49,7 +50,17 @@ async function handler(req: Request): Promise<Response> {
       },
     },
     ...(dataMode() === "db"
-      ? { assets: { store: getStore(), ttl: VIEW_TTL, viewUrl: (u: string, k: string) => publicViewUrl(u, k, true), uploadUrl: (u: string, k: string) => publicUploadUrl(u, k, true) } }
+      ? {
+          assets: {
+            store: getStore(),
+            ttl: VIEW_TTL,
+            viewUrl: (u: string, k: string) => publicViewUrl(u, k, true),
+            uploadUrl: (u: string, k: string) => publicUploadUrl(u, k, true),
+            // the same GitHub comment hooks the REST routes and the viewer run: a note on upload, a note and close/reopen on review
+            afterUpload: async (row) => afterUpload(await toAsset(row)),
+            afterReview: async (row) => afterReview(await toAsset(row)),
+          },
+        }
       : {}),
   });
   return mcp(req);

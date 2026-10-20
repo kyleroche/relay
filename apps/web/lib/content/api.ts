@@ -45,7 +45,7 @@ Scopes are named and granted per token:
 | \`memory:write\` | relay_decide, relay_prefer |
 | \`assets:read\` | GET /api/v1/assets, GET /api/v1/assets/{id}, relay_asset_list, relay_asset_get |
 | \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
-| \`assets:review\` | PUT /api/v1/assets/{id}/review |
+| \`assets:review\` | PUT /api/v1/assets/{id}/review, relay_asset_review |
 | \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{owner}/{repo}%23{n}, relay_task_get, relay_task_list |
 | \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/request-changes, POST /api/v1/tasks/{id}/requeue, relay_task_create, relay_task_approve, relay_task_request_changes, relay_task_requeue |
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
@@ -234,6 +234,7 @@ curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/requeue" -H "Authorizat
 | \`relay_decide\`, \`relay_prefer\` | \`memory:write\` | record a decision; set a preference |
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
+| \`relay_asset_review\` | \`assets:review\` | approve (closes the task's issue; the task is done) or reject with a note (reopens it, queues the task; the note is the next run's review feedback); never an asset the caller's own runs produced |
 | \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
 | \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, held, claimed, running, review, done, failed) with runner, PR, preview URL, run summary, usage and the review decision; \`held\` is what the injection gate stopped |
 | \`relay_task_approve\`, \`relay_task_request_changes\` | \`tasks:write\` | approve a task in review (relay squash-merges the PR and deletes the branch) or send it back with a note (PR comment, task queued again, note in the next brief). A bot never approves a PR its own lane produced |

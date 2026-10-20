@@ -49,6 +49,7 @@ describe("relay mcp tools", () => {
       "relay_asset_get",
       "relay_asset_list",
       "relay_asset_request_upload",
+      "relay_asset_review",
       "relay_brief",
       "relay_decide",
       "relay_event_log",
@@ -203,6 +204,41 @@ describe("relay mcp tools", () => {
     expect((await client.callTool({ name: "relay_recall", arguments: { query: "x" } })).isError).toBe(true);
     await client.close();
     await server.close();
+  });
+
+  it("asset review: the uploader cannot review its own asset, a reviewer can, a rejection needs a note, and the hook runs", async () => {
+    const reviewed: string[] = [];
+    const up = await connect({ canWrite: false, scopes: ["assets:write"], actor: "bot:oauth:nodes-worker" });
+    const req = jsonOf<{ id: string; key: string }>(await up.client.callTool({ name: "relay_asset_request_upload", arguments: { project: "demo", filename: "shot-12.svg" } }));
+    await store.put(req.key, Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), { contentType: "image/svg+xml" });
+    await up.client.callTool({ name: "relay_asset_finalize", arguments: { key: req.key, project: "demo", title: "Shot 12", issue: 12 } });
+    await up.client.close();
+    await up.server.close();
+
+    const self = await connect({ canWrite: false, scopes: ["assets:review"], actor: "bot:oauth:nodes-worker" });
+    const own = await self.client.callTool({ name: "relay_asset_review", arguments: { id: req.id, decision: "approved" } });
+    expect(own.isError).toBe(true);
+    expect(textOf(own)).toMatch(/cannot review/);
+    await self.client.close();
+    await self.server.close();
+
+    const rv = await connect({ canWrite: false, scopes: ["assets:review"], actor: "bot:oauth:grok-bot", assets: { store, afterReview: async (row) => void reviewed.push(`${row.id}:${row.status}`) } });
+    const noNote = await rv.client.callTool({ name: "relay_asset_review", arguments: { id: req.id, decision: "rejected" } });
+    expect(noNote.isError).toBe(true);
+    expect(textOf(noNote)).toMatch(/needs a note/);
+    const ok = jsonOf<{ id: string; status: string; reviewed_by: string; task_id: string | null }>(await rv.client.callTool({ name: "relay_asset_review", arguments: { id: req.id, decision: "approved" } }));
+    expect(ok).toMatchObject({ id: req.id, status: "approved", reviewed_by: "bot:oauth:grok-bot" });
+    expect(reviewed).toEqual([`${req.id}:approved`]);
+    const again = await rv.client.callTool({ name: "relay_asset_review", arguments: { id: req.id, decision: "rejected", note: "too dark" } });
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toMatch(/is approved/);
+    // no scope, no review
+    const ro = await connect({ canWrite: false, scopes: ["assets:read"] });
+    expect(textOf(await ro.client.callTool({ name: "relay_asset_review", arguments: { id: req.id, decision: "approved" } }))).toMatch(/assets:review/);
+    await ro.client.close();
+    await ro.server.close();
+    await rv.client.close();
+    await rv.server.close();
   });
 
   it("whoami and webhook subscribe/unsubscribe over a scoped connection", async () => {

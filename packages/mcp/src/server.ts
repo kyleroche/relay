@@ -80,6 +80,7 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_asset_get", scope: "assets:read", description: "One asset with its version chain and short-lived signed view URLs." },
   { name: "relay_asset_request_upload", scope: "assets:write", description: "Reserve an asset id and get a one-time upload URL; PUT the bytes there, then call relay_asset_finalize." },
   { name: "relay_asset_finalize", scope: "assets:write", description: "Turn an uploaded object into an asset row (probe, thumbnail, record) after relay_asset_request_upload." },
+  { name: "relay_asset_review", scope: "assets:review", description: "Approve or reject an asset: approved closes the task's issue when the asset has one (the task is done); rejected needs a note, which reopens the issue, queues the task again and becomes the decision the next run reads. A bot may review only with assets:review and never an asset its own runs produced." },
   { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a GitHub issue in the project's repo with the agent:<lane> label (and priority:<p>); returns task_id and issue_url. Idempotent on idempotency_key." },
   { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, held, claimed, running, review, done or failed, plus the worker, PR, preview URL (preview_url, preview_state), the lane's run summary, usage and the review decision. held means the injection gate flagged the issue text; the task.held row in its feed carries the score and reasons." },
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state. state=review is what waits for a decision; state=held is what the injection gate stopped and a person should look at." },
@@ -115,6 +116,10 @@ export interface AssetHooks {
   uploadUrl?: (signedUrl: string, key: string) => string;
   /** Lifetime of signed URLs in seconds (default 3600). */
   ttl?: number;
+  /** After relay_asset_finalize: the web app comments on the issue. Best effort. */
+  afterUpload?: (row: AssetRow) => void | Promise<void>;
+  /** After relay_asset_review: the web app comments on the issue and closes it on approval. Best effort. */
+  afterReview?: (row: AssetRow) => void | Promise<void>;
 }
 
 export interface RelayServerOptions {
@@ -553,7 +558,39 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (!assetsHooks) return noStore();
       try {
         const row = await finalizeFromKey(db, assetsHooks.store, { key, project, issue, pr, title, description, replaces: replaces ?? null, tags, createdBy: actor });
+        await assetsHooks.afterUpload?.(row);
         return json({ ...publicAsset(row), url: await viewUrl(row.storage_key) });
+      } catch (e) {
+        return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_asset_review",
+    {
+      title: "Approve or reject an asset",
+      description: toolDescription("relay_asset_review"),
+      inputSchema: {
+        id: z.string().min(1).describe("asset id (relay_asset_list, or the asset.uploaded delivery)"),
+        decision: z.enum(["approved", "rejected"]),
+        note: z.string().max(10_000).optional().describe("required on rejection: what should change, written for the model that will act on it"),
+      },
+    },
+    async ({ id, decision, note }) => {
+      const g = gate("assets:review", "relay_asset_review");
+      if (g) return g;
+      const text = note?.trim() || null;
+      if (decision === "rejected" && !text) return fail("relay: a rejection needs a note; it becomes the decision the next attempt reads");
+      try {
+        const before = await repo.getAsset(db, id);
+        if (!before) return fail(`relay: no asset ${id}`);
+        if (before.status !== "pending") return fail(`relay: asset ${id} is ${before.status}; only a pending asset can be reviewed`);
+        if (before.created_by === actor) return fail(`relay: ${actor} produced this asset and cannot review it; a person or another bot decides`);
+        const row = await repo.reviewAsset(db, id, { decision, by: actor, note: text });
+        await assetsHooks?.afterReview?.(row);
+        const repoName = row.project ? (await repo.getProject(db, row.project))?.repo ?? null : null;
+        return json({ ...publicAsset(row), task_id: repoName && row.issue != null ? `${repoName}#${row.issue}` : null });
       } catch (e) {
         return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
       }
