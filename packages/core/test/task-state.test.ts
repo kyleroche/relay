@@ -11,7 +11,7 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate, MIGRATIONS_DIR } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
-import { backfillTaskState, BOARD_FAILED_MS, boardTasks, refreshTaskState } from "../src/db/task-state.ts";
+import { backfillTaskState, BOARD_FAILED_MS, boardTasks, refreshTaskState, type BoardRow } from "../src/db/task-state.ts";
 import { deriveStation, failureLine, IN_MOTION, taskTitle } from "../src/tasks/station.ts";
 import { requeueTask } from "../src/tasks/requeue.ts";
 import { approveTask } from "../src/tasks/review.ts";
@@ -216,12 +216,13 @@ describe("backfill", () => {
         await old.query("INSERT INTO tasks (id, project, repo, issue, created_by, lane) VALUES ('acme/demo#1', 'demo', 'acme/demo', 1, 'human:kyle', 'claude'), ('acme/demo#2', 'demo', 'acme/demo', 2, 'bot:grok', 'codex')");
         await old.query("INSERT INTO events (ts, kind, actor, project, repo, issue, summary, payload) VALUES ($1, 'issue.opened', 'human:kyle', 'demo', 'acme/demo', 1, 'Add dark mode', '{}'), ($2, 'run.started', 'runner:mini', 'demo', 'acme/demo', 1, 'claude on mini', '{}'), ($3, 'task.created', 'bot:grok', 'demo', 'acme/demo', 2, 'acme/demo#2: Fix the footer', '{}')", [ago(3 * M), ago(2 * M), ago(M)]);
         const log: string[] = [];
-        expect(await migrate(old, { log: (s) => log.push(s) })).toBeGreaterThanOrEqual(10);
-        expect(log.some((l) => l.includes("cached the state of 2 tasks"))).toBe(true);
-        const rows = await old.query("SELECT id, state, station, title, runner FROM tasks ORDER BY id");
+        expect(await migrate(old, { log: (s) => log.push(s) })).toBeGreaterThanOrEqual(12);
+        // 010's backfill and 012's refold would both run; the runner keeps the later one, after every migration landed
+        expect(log.filter((l) => l.includes("cached the state of 2 tasks"))).toHaveLength(1);
+        const rows = await old.query("SELECT id, state, station, title, runner, asset_id FROM tasks ORDER BY id");
         expect(rows).toEqual([
-          { id: "acme/demo#1", state: "running", station: "Running", title: "Add dark mode", runner: "runner:mini" },
-          { id: "acme/demo#2", state: "queued", station: "Queue", title: "Fix the footer", runner: null },
+          { id: "acme/demo#1", state: "running", station: "Running", title: "Add dark mode", runner: "runner:mini", asset_id: null },
+          { id: "acme/demo#2", state: "queued", station: "Queue", title: "Fix the footer", runner: null, asset_id: null },
         ]);
       } finally {
         await old.close();
@@ -246,9 +247,12 @@ interface OracleRow {
   title: string;
   error: string | null;
   cost: number | null;
+  asset_id: string | null;
+  asset_kind: string | null;
+  asset_version: number | null;
 }
-async function oracleBoard(h: Db, now: number, doneLimit: number): Promise<OracleRow[]> {
-  const rows = await repo.listTasks(h, { limit: 200 });
+async function oracleBoard(h: Db, now: number, doneLimit: number, project?: string): Promise<OracleRow[]> {
+  const rows = (await repo.listTasks(h, { limit: 200 })).filter((r) => !project || r.project === project);
   const views = await Promise.all(
     rows.map(async (row) => {
       const [events, claims] = await Promise.all([repo.taskEvents(h, row), repo.taskClaims(h, row.id)]);
@@ -269,6 +273,9 @@ async function oracleBoard(h: Db, now: number, doneLimit: number): Promise<Oracl
         title: taskTitle(row, events),
         error: status.state === "failed" ? failureLine(events) ?? null : null,
         cost: status.usage?.cost_equiv ?? null,
+        asset_id: status.asset?.id ?? null,
+        asset_kind: status.asset?.kind ?? null,
+        asset_version: status.asset?.version ?? null,
       } satisfies OracleRow;
     }),
   );
@@ -328,6 +335,13 @@ describe("boardTasks: the one-query read", () => {
       expect((await repo.claimNext(h, { workerId: worker.id, lanes: ["codex"], leaseMs: 6 * M, now: NOW - 6 * M }))?.task.id).toBe(vanished.id);
       await w(vanished, "run.started", { ts: ago(5 * M) });
       await repo.expireLeases(h, NOW);
+      // a production: the deliverable is an asset on the issue, in review with its thumbnail
+      await repo.upsertProject(h, { slug: "nightfall", repo: "acme/productions" });
+      const cut = await mk("claude", "nightfall", "acme/productions");
+      await w(cut, "run.started", { ts: ago(3 * M), actor: "runner:studio" });
+      const teaser = await repo.createAsset(h, { project: "nightfall", issue: cut.issue, title: "Teaser", kind: "video", mime: "video/mp4", size: 9, sha256: "e".repeat(64), storageKey: "nightfall/T/t.mp4", thumbKey: "nightfall/T/thumb.jpg", createdBy: "runner:studio" });
+      await h.query("UPDATE events SET ts = $2 WHERE kind = 'asset.uploaded' AND payload->>'asset_id' = $1", [teaser.id, ago(2 * M)]);
+      await refreshTaskState(h, cut.id, NOW);
 
       let count = 0;
       const counting: Db = { ...h, query: (sql, params) => (count++, h.query(sql, params)) };
@@ -339,7 +353,7 @@ describe("boardTasks: the one-query read", () => {
       const rows = await boardTasks(counting, { now: NOW, limit: 200, doneLimit: 1 });
       const snapshotQueries = count;
 
-      const after: OracleRow[] = rows.map((r) => ({
+      const project = (r: BoardRow): OracleRow => ({
         id: r.id,
         state: r.state,
         station: r.station,
@@ -352,8 +366,25 @@ describe("boardTasks: the one-query read", () => {
         title: r.title ?? `#${r.issue}`,
         error: r.last_error,
         cost: r.cost,
-      }));
+        asset_id: r.asset_id,
+        asset_kind: r.asset_kind,
+        asset_version: r.asset_version,
+      });
+      const after = rows.map(project);
       expect(after).toEqual(before);
+      expect(rows.find((r) => r.id === cut.id)).toMatchObject({ state: "review", station: "PR", since: ago(2 * M), asset_id: teaser.id, asset_kind: "video", asset_version: 1, asset_thumb_key: "nightfall/T/thumb.jpg", project_repo: "acme/productions", pr: null });
+      expect(rows.filter((r) => r.asset_id).map((r) => r.id)).toEqual([cut.id]);
+
+      // the project filter: the same rows, narrowed, in both branches of the union
+      const onlyOther = await boardTasks(h, { now: NOW, limit: 200, doneLimit: 1, project: "other" });
+      expect(onlyOther.map(project)).toEqual(await oracleBoard(h, NOW, 1, "other"));
+      expect(onlyOther.map((r) => r.id)).toEqual([running.id]);
+      const onlyDemo = await boardTasks(h, { now: NOW, limit: 200, doneLimit: 1, project: "demo" });
+      expect(onlyDemo.map(project)).toEqual(await oracleBoard(h, NOW, 1, "demo"));
+      expect(onlyDemo.map((r) => r.id)).not.toContain(running.id);
+      expect(onlyDemo.map((r) => r.id)).not.toContain(cut.id);
+      expect(onlyDemo.some((r) => r.state === "done")).toBe(true);
+      expect(await boardTasks(h, { now: NOW, project: "nobody" })).toEqual([]);
       const station = Object.fromEntries(after.map((t) => [t.id, t.station]));
       expect(station).toEqual({
         "acme/demo#1": "Queue",
@@ -367,6 +398,7 @@ describe("boardTasks: the one-query read", () => {
         [sentBack.id]: "Queue",
         [cloud.id]: "Running",
         [vanished.id]: "Queue",
+        [cut.id]: "PR",
       });
       expect(after.find((t) => t.id === failedFresh.id)?.error).toBe("tests failed");
       expect(after.find((t) => t.id === pr.id)?.cost).toBe(0.5);
@@ -374,8 +406,8 @@ describe("boardTasks: the one-query read", () => {
       expect(after.map((t) => t.id)).not.toContain(doneOld.id);
       expect(after.map((t) => t.id)).not.toContain(failedOld.id);
 
-      // 13 tasks: the old path ran one list plus events and claims per task; the new one runs one query
-      expect(oracleQueries).toBe(1 + 2 * 13);
+      // 14 tasks: the old path ran one list plus events and claims per task; the new one runs one query
+      expect(oracleQueries).toBe(1 + 2 * 14);
       expect(snapshotQueries).toBe(1);
       console.log(`board read over ${n} tasks: ${oracleQueries} queries before, ${snapshotQueries} after`);
     } finally {

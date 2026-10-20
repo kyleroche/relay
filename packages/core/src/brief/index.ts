@@ -159,14 +159,19 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
   for (const name of order) {
     let text = "";
     if (name === "review") {
-      // notes a reviewer left with "Request changes" on this issue's PR (tasks/review.ts); the next run must address them
+      // notes a reviewer left with "Request changes" on this issue's PR, or by rejecting the asset it delivered
+      // (tasks/review.ts reviewNotes); the next run must address them
       if (project && opts.issue?.number != null) {
         const notes = await reviewNotes(db, { repo: project.repo ?? "", project: project.slug, issue: opts.issue.number });
         if (notes.length) {
+          const last = notes.at(-1)!;
+          const lead = last.asset
+            ? `A reviewer rejected the asset delivered for #${opts.issue.number}. Address every point below and deliver a new version on the same issue (upload it with --replaces ${last.asset} so it becomes the next version).`
+            : `A reviewer sent the pull request for #${opts.issue.number} back. Address every point below; the branch and PR already exist and this run replaces the branch.`;
           text =
             heading("Review feedback") +
-            `A reviewer sent the pull request for #${opts.issue.number} back. Address every point below; the branch and PR already exist and this run replaces the branch.\n\n` +
-            notes.map((n) => `- ${n.at.slice(0, 16)} ${n.by}${n.pr ? ` on PR #${n.pr}` : ""}:\n  ${n.note.trim().replace(/\n/g, "\n  ")}`).join("\n") +
+            `${lead}\n\n` +
+            notes.map((n) => `- ${n.at.slice(0, 16)} ${n.by}${n.pr ? ` on PR #${n.pr}` : n.asset ? ` on asset ${n.asset}` : ""}:\n  ${n.note.trim().replace(/\n/g, "\n  ")}`).join("\n") +
             "\n";
         }
       }

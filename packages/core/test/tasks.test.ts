@@ -87,6 +87,46 @@ describe("task state derivation", () => {
     expect(out.state).toBe("done");
     expect(out.summary).toBe("pr.merged");
   });
+
+  it("the asset path: asset.uploaded is review with the asset, a rejection queues it with the note, a new version answers it, an approval is done", () => {
+    const uploaded = (id: string, version: number, minute: number) => ev("asset.uploaded", { ts: at(minute), actor: "runner:studio", payload: { asset_id: id, kind: "video", mime: "video/mp4", version } });
+    const reviewed = (id: string, decision: string, minute: number, note: string | null = null) => ev("asset.reviewed", { ts: at(minute), actor: "human:maya", payload: { asset_id: id, decision, note, version: 1 } });
+    const events = [ev("issue.labeled", { ts: at(0), lane: "claude" }), ev("run.started", { ts: at(1), actor: "runner:studio" })];
+    expect(deriveTaskStatus(task, events).state).toBe("running");
+    expect(deriveTaskStatus(task, events).asset).toBeNull();
+
+    events.push(uploaded("A1", 1, 2));
+    const s1 = deriveTaskStatus(task, events);
+    expect(s1.state).toBe("review");
+    expect(s1.asset).toEqual({ id: "A1", kind: "video", version: 1 });
+    expect(s1.pr).toBeNull();
+    // the run that produced it finishes afterwards: still in review
+    events.push(ev("run.finished", { ts: at(3), actor: "runner:studio", payload: { conclusion: "success" } }));
+    expect(deriveTaskStatus(task, events).state).toBe("review");
+
+    events.push(reviewed("A1", "rejected", 4, "Cut the first two seconds."));
+    const s2 = deriveTaskStatus(task, events);
+    expect(s2.state).toBe("queued");
+    expect(s2.review).toEqual({ decided: "changes_requested", by: "human:maya", at: at(4), note: "Cut the first two seconds." });
+    expect(s2.asset).toEqual({ id: "A1", kind: "video", version: 1 });
+
+    events.push(ev("run.started", { ts: at(5), actor: "runner:studio" }), uploaded("A2", 2, 6));
+    const s3 = deriveTaskStatus(task, events);
+    expect(s3.state).toBe("review");
+    expect(s3.asset).toEqual({ id: "A2", kind: "video", version: 2 });
+    expect(s3.review.decided).toBeNull(); // the new version answers the rejection
+
+    events.push(reviewed("A2", "approved", 7));
+    const s4 = deriveTaskStatus(task, events);
+    expect(s4.state).toBe("done");
+    expect(s4.review).toMatchObject({ decided: "approved", by: "human:maya" });
+    expect(s4.merged_at).toBeNull(); // nothing merged: the deliverable was an asset
+    // GitHub's issue.closed, written when the site closed the issue, agrees
+    events.push(ev("issue.closed", { ts: at(8) }));
+    expect(deriveTaskStatus(task, events).state).toBe("done");
+    // a payload without an id (an older writer) still moves the state
+    expect(deriveTaskStatus(task, [ev("asset.uploaded", { ts: at(1), payload: {} })])).toMatchObject({ state: "review", asset: null });
+  });
 });
 
 function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: string; body: string; labels: string[] }>; labelled: string[] } {
@@ -119,6 +159,23 @@ function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: st
 }
 
 describe("openTask", () => {
+  it("adds production:<slug> only when the project's repository is shared by another project", async () => {
+    const gh = fakeGitHub();
+    await repo.upsertProject(db, { slug: "nightfall", repo: "acme/productions" });
+    const solo = await openTask(db, gh, { project: "nightfall", title: "Teaser cut", lane: "claude", actor: "human:kyle" });
+    expect(gh.created.at(-1)?.labels).toEqual(["agent:claude"]);
+    expect(solo.task.project).toBe("nightfall");
+
+    await repo.upsertProject(db, { slug: "daybreak", repo: "acme/productions" });
+    const shared = await openTask(db, gh, { project: "daybreak", title: "Opening shot", lane: "claude", priority: "high", actor: "human:kyle" });
+    expect(gh.created.at(-1)?.labels).toEqual(["agent:claude", "priority:high", "production:daybreak"]);
+    expect(shared.events[0]?.payload.labels).toContain("production:daybreak");
+    expect(shared.task.repo).toBe("acme/productions");
+    // a code repo of its own stays as it was
+    await openTask(db, gh, { project: "demo", title: "Plain", lane: "codex", actor: "human:kyle" });
+    expect(gh.created.at(-1)?.labels).toEqual(["agent:codex"]);
+  });
+
   it("opens the issue with the lane label, records the task and both events, and is idempotent on the key", async () => {
     const gh = fakeGitHub();
     const r1 = await openTask(db, gh, { project: "demo", title: "Add dark mode", body: "Please.", lane: "codex", priority: "high", idempotency_key: "grok-1", actor: "bot:grok" });

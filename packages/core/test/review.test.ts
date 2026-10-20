@@ -271,3 +271,54 @@ describe("requestChanges", () => {
     expect(comments[0]?.body.startsWith("relay: changes requested by bot:grok:")).toBe(true);
   });
 });
+
+describe("the asset path", () => {
+  it("an asset on the issue puts the task in review; a rejection queues it with the note in the brief; a new version and an approval finish it", async () => {
+    const { task: t } = await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 401, createdBy: "human:kyle", lane: "claude", title: "Teaser cut" });
+    await repo.writeEvent(db, { kind: "run.started", actor: "runner:studio", project: "demo", repo: "acme/demo", issue: 401, lane: "claude", summary: "claude on studio" });
+    const a1 = await repo.createAsset(db, { project: "demo", issue: 401, title: "Teaser cut", kind: "video", mime: "video/mp4", size: 10, sha256: "a".repeat(64), storageKey: "demo/A1/teaser.mp4", thumbKey: "demo/A1/thumb.jpg", createdBy: "runner:studio" });
+    // the event names the repo (the project's), so the task's fold sees it
+    const uploaded = (await repo.taskEvents(db, t)).find((e) => e.kind === "asset.uploaded");
+    expect(uploaded).toMatchObject({ repo: "acme/demo", issue: 401, payload: { asset_id: a1.id, kind: "video", version: 1 } });
+    let view = await repo.taskView(db, t);
+    expect(view.state).toBe("review");
+    expect(view.asset).toEqual({ id: a1.id, kind: "video", version: 1 });
+    expect(view.pr).toBeNull();
+    // the cache carries the asset and its thumbnail key for the board
+    const cached = await db.query("SELECT state, asset_id, asset_kind, asset_version, asset_thumb_key FROM tasks WHERE id = $1", [t.id]);
+    expect(cached[0]).toEqual({ state: "review", asset_id: a1.id, asset_kind: "video", asset_version: 1, asset_thumb_key: "demo/A1/thumb.jpg" });
+
+    await repo.reviewAsset(db, a1.id, { decision: "rejected", by: "human:maya", note: "Cut the first two seconds; the logo lands late." });
+    view = await repo.taskView(db, t);
+    expect(view.state).toBe("queued");
+    expect(view.review).toMatchObject({ decided: "changes_requested", by: "human:maya", note: "Cut the first two seconds; the logo lands late." });
+    expect(await reviewNotes(db, t)).toMatchObject([{ by: "human:maya", pr: null, asset: a1.id, note: "Cut the first two seconds; the logo lands late." }]);
+    const brief = await compileBrief(db, { project: "demo", intent: "cut the teaser", issue: { number: 401, title: "Teaser cut" }, lane: "claude", maxTokens: 3000 });
+    expect(brief.text.startsWith("## Review feedback")).toBe(true);
+    expect(brief.text).toContain("rejected the asset delivered for #401");
+    expect(brief.text).toContain(`--replaces ${a1.id}`);
+    expect(brief.text).toContain("Cut the first two seconds");
+
+    const a2 = await repo.newVersion(db, a1.id, { kind: "video", mime: "video/mp4", size: 12, sha256: "b".repeat(64), storageKey: "demo/A2/teaser.mp4", createdBy: "runner:studio" });
+    view = await repo.taskView(db, t);
+    expect(view.state).toBe("review");
+    expect(view.asset).toEqual({ id: a2.id, kind: "video", version: 2 });
+    expect(view.review.decided).toBeNull();
+    expect((await db.query("SELECT asset_id, asset_thumb_key FROM tasks WHERE id = $1", [t.id]))[0]).toEqual({ asset_id: a2.id, asset_thumb_key: null });
+
+    await repo.reviewAsset(db, a2.id, { decision: "approved", by: "human:maya" });
+    view = await repo.taskView(db, t);
+    expect(view.state).toBe("done");
+    expect(view.review).toMatchObject({ decided: "approved", by: "human:maya" });
+    expect((await db.query("SELECT state, station FROM tasks WHERE id = $1", [t.id]))[0]).toEqual({ state: "done", station: "Merged" });
+  });
+
+  it("a loose asset (no issue) and an asset of a project without a repository touch no task and carry no repo", async () => {
+    await repo.upsertProject(db, { slug: "scratch" });
+    const loose = await repo.createAsset(db, { project: "demo", title: "Moodboard", kind: "image", mime: "image/png", size: 1, sha256: "c".repeat(64), storageKey: "demo/L/m.png", createdBy: "human:kyle" });
+    const noRepo = await repo.createAsset(db, { project: "scratch", issue: 5, title: "Sketch", kind: "image", mime: "image/png", size: 1, sha256: "d".repeat(64), storageKey: "scratch/S/s.png", createdBy: "human:kyle" });
+    const rows = await repo.listEvents(db, { kind: "asset.uploaded", limit: 50 });
+    expect(rows.find((e) => e.payload.asset_id === loose.id)?.repo).toBeNull();
+    expect(rows.find((e) => e.payload.asset_id === noRepo.id)?.repo).toBeNull();
+  });
+});

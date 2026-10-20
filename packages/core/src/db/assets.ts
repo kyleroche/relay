@@ -6,6 +6,7 @@
 import { type Db, iso, num } from "./client.ts";
 import { writeEvent } from "./events.ts";
 import { addDecision } from "./memory.ts";
+import { getProject } from "./projects.ts";
 import { ulid } from "../util.ts";
 
 export type AssetKind = "image" | "video" | "audio" | "pdf" | "html" | "file";
@@ -125,6 +126,16 @@ export class AssetNotFoundError extends Error {
   }
 }
 
+/**
+ * The repository an asset's events name: the project's repo when the asset sits on an issue or PR, so the row reaches
+ * the task's fold (deriveTaskStatus keys on repo + issue; the asset path in docs/ARCHITECTURE.md "A task's life").
+ * Null for a loose asset, or a project without a repository.
+ */
+async function repoOf(db: Db, row: Pick<AssetRow, "project" | "issue" | "pr">): Promise<string | null> {
+  if (!row.project || (row.issue == null && row.pr == null)) return null;
+  return (await getProject(db, row.project))?.repo ?? null;
+}
+
 async function insertAsset(db: Db, a: CreateAssetInput, version: number, parentId: string | null): Promise<AssetRow> {
   const id = a.id ?? ulid();
   const r = await db.query(
@@ -141,6 +152,7 @@ async function insertAsset(db: Db, a: CreateAssetInput, version: number, parentI
     kind: "asset.uploaded",
     actor: a.createdBy,
     project: row.project,
+    repo: await repoOf(db, row),
     issue: row.issue,
     pr: row.pr,
     summary: version > 1 ? `${row.title} (v${version})` : row.title,
@@ -237,7 +249,9 @@ export interface ReviewInput {
 
 /**
  * Approve or reject. Writes `asset.reviewed` (note in the summary); a rejection also sets an expiry and records the
- * note as a project decision (source `review`, source_ref = asset id) so the next attempt's brief includes it.
+ * note as a project decision (source `review`, source_ref = asset id) so the next attempt's brief includes it. On an
+ * asset that is a task's deliverable (it sits on the issue) the same row is the task's review: approved is `done`,
+ * rejected is `queued` with the note under "Review feedback" in the next run's brief (tasks/review.ts `reviewNotes`).
  */
 export async function reviewAsset(db: Db, id: string, r: ReviewInput): Promise<AssetRow> {
   return db.transaction(async (tx) => {
@@ -254,6 +268,7 @@ export async function reviewAsset(db: Db, id: string, r: ReviewInput): Promise<A
       kind: "asset.reviewed",
       actor: r.by,
       project: row.project,
+      repo: await repoOf(tx, row),
       issue: row.issue,
       pr: row.pr,
       summary: `${verb}: ${row.title}${r.note ? ` — ${r.note}` : ""}`,
@@ -276,6 +291,7 @@ export async function publishAsset(db: Db, id: string, publicUrl: string, opts: 
       kind: "asset.published",
       actor: opts.by ?? row.created_by,
       project: row.project,
+      repo: await repoOf(tx, row),
       issue: row.issue,
       pr: row.pr,
       url: publicUrl,

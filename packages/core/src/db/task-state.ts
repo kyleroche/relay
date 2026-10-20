@@ -2,8 +2,9 @@
  * The task state cache (migration 010). The feed is the source of truth and `deriveTaskStatus` + `deriveStation` the
  * only derivation; this module runs that fold for ONE task after a write that can change it and stores the result on
  * the task row (`state`, `station`, `since`, `pr`, `pr_url`, `preview_state`, `preview_url`, `runner`, `last_error`,
- * `cost`, `title`). Readers that show many tasks at once (the board, `boardTasks` below) read the columns in one query
- * instead of folding every task on every call.
+ * `cost`, `title`, and since migration 012 the asset the task delivered: `asset_id`, `asset_kind`, `asset_version`,
+ * `asset_thumb_key`). Readers that show many tasks at once (the board, `boardTasks` below) read the columns in one
+ * query instead of folding every task on every call.
  *
  * Who calls `refreshTaskState`: `writeEvent` for a row that names a task (repo + issue, or a `preview.*` row matched
  * by PR or branch), `createTask`, and the claim writes in db/workers.ts (`claimNext`, `releaseClaim`, `expireLeases`).
@@ -34,6 +35,12 @@ export interface TaskStateCache {
   cost: number | null;
   /** The title the feed supplied, when the row had none; null when nothing names the issue. */
   title: string | null;
+  /** The latest asset uploaded on the issue (the asset path), or null for a PR task. */
+  asset_id: string | null;
+  asset_kind: string | null;
+  asset_version: number | null;
+  /** The asset's thumbnail key in the store, from the assets row; `materializeTask` leaves it null and `refreshTaskState` fills it. */
+  asset_thumb_key: string | null;
 }
 
 /** The fold, pure: what `refreshTaskState` writes for a task given its events and claims. */
@@ -55,6 +62,10 @@ export function materializeTask(task: TaskRow, events: EventRow[], claims: Claim
     last_error: status.state === "failed" ? failureLine(events) ?? null : null,
     cost: status.usage?.cost_equiv ?? null,
     title: title === `#${task.issue}` ? null : title,
+    asset_id: status.asset?.id ?? null,
+    asset_kind: status.asset?.kind ?? null,
+    asset_version: status.asset?.version ?? null,
+    asset_thumb_key: null,
   };
 }
 
@@ -65,11 +76,16 @@ export async function refreshTaskState(db: Db, id: string, now: number = Date.no
   const task = toTask(r[0]);
   const [events, claims] = await Promise.all([taskEvents(db, task), taskClaims(db, task.id)]);
   const m = materializeTask(task, events, claims, now);
+  if (m.asset_id) {
+    const a = await db.query<{ thumb_key: string | null }>("SELECT thumb_key FROM assets WHERE id = $1", [m.asset_id]);
+    m.asset_thumb_key = a[0]?.thumb_key ?? null;
+  }
   await db.query(
     `UPDATE tasks SET state = $2, station = $3, since = $4::timestamptz, pr = $5, pr_url = $6, preview_state = $7, preview_url = $8, runner = $9,
-                      last_error = $10, cost = $11, title = coalesce(title, $12), state_updated_at = $13::timestamptz
+                      last_error = $10, cost = $11, title = coalesce(title, $12), state_updated_at = $13::timestamptz,
+                      asset_id = $14, asset_kind = $15, asset_version = $16, asset_thumb_key = $17
      WHERE id = $1`,
-    [id, m.state, m.station, m.since, m.pr, m.pr_url, m.preview_state, m.preview_url, m.runner, m.last_error, m.cost, m.title, new Date(now).toISOString()],
+    [id, m.state, m.station, m.since, m.pr, m.pr_url, m.preview_state, m.preview_url, m.runner, m.last_error, m.cost, m.title, new Date(now).toISOString(), m.asset_id, m.asset_kind, m.asset_version, m.asset_thumb_key],
   );
   return m;
 }
@@ -134,6 +150,10 @@ const toBoardRow = (r: Record<string, unknown>): BoardRow => ({
   runner: (r.runner as string | null) ?? null,
   last_error: (r.last_error as string | null) ?? null,
   cost: r.cost == null ? null : num(r.cost),
+  asset_id: (r.asset_id as string | null) ?? null,
+  asset_kind: (r.asset_kind as string | null) ?? null,
+  asset_version: r.asset_version == null ? null : num(r.asset_version),
+  asset_thumb_key: (r.asset_thumb_key as string | null) ?? null,
   project_repo: (r.project_repo as string | null) ?? null,
 });
 
@@ -143,29 +163,36 @@ export const BOARD_FAILED_MS = 7 * 24 * 3_600_000;
 /**
  * The tasks the board shows, in one query over the cache: everything in motion (queued, held, claimed, running,
  * review) and the failed ones of the last `BOARD_FAILED_MS`, newest `since` first up to `limit`; plus the `doneLimit`
- * most recently merged. A row whose cache is empty is filled in and the query run again, so the first read after the
- * migration is complete. Lease expiry is the caller's: run `expireLeases` first when the result should not show a
- * vanished worker's lease as live.
+ * most recently merged; `project` narrows both to one project slug (the board's filter). A row whose cache is empty is
+ * filled in and the query run again, so the first read after the migration is complete. Lease expiry is the caller's:
+ * run `expireLeases` first when the result should not show a vanished worker's lease as live.
  */
-export async function boardTasks(db: Db, opts: { now?: number; limit?: number; doneLimit?: number } = {}): Promise<BoardRow[]> {
+export async function boardTasks(db: Db, opts: { now?: number; limit?: number; doneLimit?: number; project?: string } = {}): Promise<BoardRow[]> {
   const now = opts.now ?? Date.now();
   const limit = opts.limit ?? 300;
   const doneLimit = opts.doneLimit ?? 10;
   const cols = `${TASK_COLS.split(", ")
     .map((c) => `t.${c}`)
-    .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost, p.repo AS project_repo`;
+    .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost,
+    t.asset_id, t.asset_kind, t.asset_version, t.asset_thumb_key, p.repo AS project_repo`;
+  const params: unknown[] = [new Date(now - BOARD_FAILED_MS).toISOString(), limit, doneLimit];
+  let scope = "";
+  if (opts.project) {
+    params.push(opts.project);
+    scope = `AND t.project = $${params.length}`;
+  }
   const select = async () =>
     db.query(
       `(SELECT ${cols} FROM tasks t LEFT JOIN projects p ON p.slug = t.project
-        WHERE t.state IS NULL
+        WHERE (t.state IS NULL
            OR t.state IN ('queued', 'held', 'claimed', 'running', 'review')
-           OR (t.state = 'failed' AND t.since > $1::timestamptz)
+           OR (t.state = 'failed' AND t.since > $1::timestamptz)) ${scope}
         ORDER BY t.since DESC NULLS FIRST, t.created_at DESC, t.id DESC LIMIT $2)
        UNION ALL
        (SELECT ${cols} FROM tasks t LEFT JOIN projects p ON p.slug = t.project
-        WHERE t.state = 'done'
+        WHERE t.state = 'done' ${scope}
         ORDER BY t.since DESC, t.created_at DESC, t.id DESC LIMIT $3)`,
-      [new Date(now - BOARD_FAILED_MS).toISOString(), limit, doneLimit],
+      params,
     );
   let rows = await select();
   const empty = rows.filter((r) => r.state == null);

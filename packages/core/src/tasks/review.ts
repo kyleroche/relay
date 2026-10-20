@@ -176,16 +176,38 @@ export async function requestChanges(db: Db, github: GitHubClient | undefined, t
   return { task: await taskView(db, task), events };
 }
 
-/** The notes reviewers left on a task's PRs, oldest first, for the brief and the task page. */
-export async function reviewNotes(db: Db, task: Pick<TaskRow, "repo" | "project" | "issue">, limit = 5): Promise<Array<{ by: string; at: string; note: string; pr: number | null }>> {
+/** One note a reviewer left on a task: on its PR (`task.changes_requested`) or on the asset it delivered (a rejected `asset.reviewed`). */
+export interface ReviewNote {
+  by: string;
+  at: string;
+  note: string;
+  pr: number | null;
+  /** The asset id when the note rejected an asset version; null for a PR note. */
+  asset: string | null;
+}
+
+/**
+ * The notes reviewers left on a task, oldest first, for the brief and the task page: "Request changes" on its PR
+ * (`task.changes_requested`, payload.note) and rejections of the asset it delivered (`asset.reviewed` with
+ * payload.decision rejected, db/assets.ts), so a production's next run reads why the last cut was sent back.
+ */
+export async function reviewNotes(db: Db, task: Pick<TaskRow, "repo" | "project" | "issue">, limit = 5): Promise<ReviewNote[]> {
   const r = await db.query(
-    `SELECT actor, ts, pr, payload FROM events WHERE kind = 'task.changes_requested' AND issue = $3 AND (repo = $1 OR (repo IS NULL AND project = $2)) ORDER BY ts DESC, id DESC LIMIT $4`,
+    `SELECT actor, ts, pr, payload FROM events
+     WHERE (kind = 'task.changes_requested' OR (kind = 'asset.reviewed' AND payload->>'decision' = 'rejected'))
+       AND issue = $3 AND (repo = $1 OR (repo IS NULL AND project = $2)) ORDER BY ts DESC, id DESC LIMIT $4`,
     [task.repo, task.project, task.issue, limit],
   );
   return r
     .map((x) => {
       const payload = (typeof x.payload === "string" ? JSON.parse(x.payload) : x.payload ?? {}) as Record<string, unknown>;
-      return { by: x.actor as string, at: x.ts instanceof Date ? x.ts.toISOString() : String(x.ts), pr: x.pr == null ? null : Number(x.pr), note: typeof payload.note === "string" ? payload.note : "" };
+      return {
+        by: x.actor as string,
+        at: x.ts instanceof Date ? x.ts.toISOString() : String(x.ts),
+        pr: x.pr == null ? null : Number(x.pr),
+        note: typeof payload.note === "string" ? payload.note : "",
+        asset: typeof payload.asset_id === "string" ? payload.asset_id : null,
+      };
     })
     .filter((n) => n.note)
     .reverse();

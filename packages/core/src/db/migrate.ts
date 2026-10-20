@@ -11,14 +11,22 @@ import { runtimePaths } from "../runtime.ts";
 import { type Log, noopLog } from "../util.ts";
 
 /**
- * Work a migration needs done in TypeScript once its SQL is in: keyed by version, run after the version is recorded.
- * 010 adds the task state cache; the backfill folds every existing task once so no reader meets an empty row.
+ * Work a migration needs done in TypeScript once its SQL is in: keyed by version, run once every pending migration
+ * has been applied (so the code runs against the schema it was written for, never an intermediate one). 010 adds the
+ * task state cache; the backfill folds every existing task once so no reader meets an empty row. 012 adds the asset
+ * columns to that cache and refolds every task to fill them; when both land in one run, 012's pass is the only one.
  */
-const AFTER_APPLY: Record<number, (db: Db, log: Log) => Promise<void>> = {
-  10: async (db, log) => {
-    const n = await backfillTaskState(db);
-    if (n) log(`schema: cached the state of ${n} task${n === 1 ? "" : "s"}`);
-  },
+interface AfterApply {
+  run: (db: Db, log: Log) => Promise<void>;
+  /** An earlier hook this one subsumes when both are pending. */
+  replaces?: number;
+}
+const cachedLog = (log: Log, n: number): void => {
+  if (n) log(`schema: cached the state of ${n} task${n === 1 ? "" : "s"}`);
+};
+const AFTER_APPLY: Record<number, AfterApply> = {
+  10: { run: async (db, log) => cachedLog(log, await backfillTaskState(db)) },
+  12: { run: async (db, log) => cachedLog(log, await backfillTaskState(db, { all: true })), replaces: 10 },
 };
 
 /** `migrations/` beside this module (packages/core/src/db in a checkout, dist/ in the bundle), else where the running layout keeps them. */
@@ -63,6 +71,7 @@ export async function migrate(db: Db, opts: { log?: Log; dir?: string } = {}): P
   const log = opts.log ?? noopLog;
   const have = await currentVersion(db);
   let applied = have;
+  const landed: number[] = [];
   for (const m of loadMigrations(opts.dir)) {
     if (m.version <= have) continue;
     log(`schema: applying ${String(m.version).padStart(3, "0")}_${m.name}`);
@@ -74,8 +83,10 @@ export async function migrate(db: Db, opts: { log?: Log; dir?: string } = {}): P
         [JSON.stringify(m.version)],
       );
     });
-    await AFTER_APPLY[m.version]?.(db, log);
+    landed.push(m.version);
     applied = m.version;
   }
+  const replaced = new Set(landed.map((v) => AFTER_APPLY[v]?.replaces).filter((v): v is number => v != null));
+  for (const v of landed) if (!replaced.has(v)) await AFTER_APPLY[v]?.run(db, log);
   return applied;
 }
