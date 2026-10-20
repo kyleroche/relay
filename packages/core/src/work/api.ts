@@ -3,7 +3,12 @@
  * own database (a laptop with no site, or the tests); `httpWorkApi` talks to a hosted site over `/api/v1` with one
  * bearer token carrying `work:claim` and `memory:read`. The token goes in the Authorization header only.
  */
+import { readFile } from "node:fs/promises";
+import { basename } from "node:path";
+import { ingestFile } from "../assets/ingest.ts";
+import { openAssetStore, type AssetStore } from "../assets/store.ts";
 import { compileBrief, type BriefIssue } from "../brief/index.ts";
+import { listAssets, type AssetRow } from "../db/assets.ts";
 import type { Db } from "../db/client.ts";
 import type { EventRow } from "../db/events.ts";
 import type { Doorbell, WorkerInput, WorkerView } from "../db/workers.ts";
@@ -31,12 +36,50 @@ export interface WorkApi {
   /** The memory envelope for a task (summary, preferences, decisions, guidance), or "" when memory has nothing. */
   brief(req: BriefRequest): Promise<{ text: string; tokens: number }>;
   workers(): Promise<WorkerView[]>;
+  /** The assets already on an issue, newest first (the nodes lane chains a new output onto the last version of the same node). */
+  assetsForIssue(project: string, issue: number, limit?: number): Promise<IssueAsset[]>;
+  /**
+   * Ingest a file the run produced as an asset on the issue (the nodes lane). Locally through `ingestFile`; on a site
+   * through the multipart `POST /api/v1/assets` with the worker's token, which must carry `assets:write`.
+   */
+  uploadAsset(input: UploadAssetInput): Promise<IssueAsset>;
 }
+
+export interface UploadAssetInput {
+  path: string;
+  filename?: string;
+  project: string;
+  issue: number;
+  title: string;
+  description?: string;
+  /** The asset this one supersedes; the new row becomes its next version. */
+  replaces?: string | null;
+  /** The creator locally; a site records the token's owner instead. */
+  createdBy: string;
+  tags?: string[];
+}
+
+export interface IssueAsset {
+  id: string;
+  title: string;
+  version: number;
+  kind: string;
+  mime: string;
+  size: number;
+  status: string;
+  tags: string[];
+  /** A view URL when the store can serve one (a site), else null. */
+  url: string | null;
+}
+
+const issueAssetOf = (a: AssetRow, url: string | null = null): IssueAsset => ({ id: a.id, title: a.title, version: a.version, kind: a.kind, mime: a.mime, size: a.size, status: a.status, tags: a.tags, url });
 
 export interface LocalWorkApiOptions {
   github?: GitHubClient | undefined;
   /** Deliver outbound webhooks for the events written (default true). */
   dispatch?: boolean;
+  /** Where uploaded assets go (default: the machine's own store, `openAssetStore()`). */
+  store?: AssetStore;
 }
 
 export function localWorkApi(db: Db, opts: LocalWorkApiOptions = {}): WorkApi {
@@ -44,8 +87,27 @@ export function localWorkApi(db: Db, opts: LocalWorkApiOptions = {}): WorkApi {
     if (opts.dispatch === false) return;
     for (const e of events) await dispatchEvent(db, e).catch(() => {});
   };
+  let store: AssetStore | undefined = opts.store;
   return {
     mode: "local",
+    async assetsForIssue(project, issue, limit = 50) {
+      return (await listAssets(db, { project, issue, limit })).map((a) => issueAssetOf(a));
+    },
+    async uploadAsset(input) {
+      store ??= openAssetStore();
+      const row = await ingestFile(db, store, {
+        path: input.path,
+        ...(input.filename ? { filename: input.filename } : {}),
+        project: input.project,
+        issue: input.issue,
+        title: input.title,
+        description: input.description ?? null,
+        replaces: input.replaces ?? null,
+        createdBy: input.createdBy,
+        tags: input.tags ?? [],
+      });
+      return issueAssetOf(row);
+    },
     async register(input) {
       const r = await registerWorkerServer(db, input);
       await after(r.events);
@@ -81,13 +143,13 @@ export interface HttpWorkApiOptions {
 export function httpWorkApi(opts: HttpWorkApiOptions): WorkApi {
   const site = normalizeSite(opts.site);
   const doFetch: HttpFetch = opts.fetch ?? ((u, i) => fetch(u, i));
-  async function rest<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>): Promise<T> {
+  async function rest<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>, raw?: { bytes: Uint8Array<ArrayBuffer>; contentType: string }): Promise<T> {
     const url = new URL(`${site}/api/v1${path}`);
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
     const res = await doFetch(url.toString(), {
       method,
-      headers: { authorization: `Bearer ${opts.token}`, accept: "application/json", "user-agent": "relay-work", ...(body !== undefined ? { "content-type": "application/json" } : {}) },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      headers: { authorization: `Bearer ${opts.token}`, accept: "application/json", "user-agent": "relay-work", ...(raw ? { "content-type": raw.contentType } : body !== undefined ? { "content-type": "application/json" } : {}) },
+      ...(raw ? { body: raw.bytes } : body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     const text = await res.text();
     let parsed: unknown;
@@ -140,5 +202,38 @@ export function httpWorkApi(opts: HttpWorkApiOptions): WorkApi {
       const r = await rest<{ workers: WorkerView[] }>("GET", "/workers");
       return r.workers;
     },
+    async assetsForIssue(project, issue, limit = 50) {
+      const r = await rest<{ assets: Array<AssetRow & { url?: string | null }> }>("GET", "/assets", undefined, { project, issue, limit });
+      return (r.assets ?? []).map((a) => issueAssetOf(a, a.url ?? null));
+    },
+    async uploadAsset(input) {
+      const bytes = await readFile(input.path);
+      const filename = input.filename ?? basename(input.path);
+      const fields: Record<string, string> = { project: input.project, issue: String(input.issue), title: input.title };
+      if (input.description) fields.description = input.description;
+      if (input.replaces) fields.replaces = input.replaces;
+      if (input.tags?.length) fields.tags = input.tags.join(",");
+      const { body, contentType } = multipart(fields, { name: "file", filename, bytes });
+      const a = await rest<AssetRow & { url?: string | null }>("POST", "/assets", undefined, undefined, { bytes: body, contentType });
+      return issueAssetOf(a, a.url ?? null);
+    },
   };
+}
+
+/** A multipart/form-data body with text fields and one file part, as the site's `POST /api/v1/assets` reads it. */
+export function multipart(fields: Record<string, string>, file: { name: string; filename: string; bytes: Uint8Array; contentType?: string }): { body: Uint8Array<ArrayBuffer>; contentType: string } {
+  const boundary = `----relay-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const parts: Uint8Array[] = [];
+  const enc = (s: string) => Buffer.from(s, "utf8");
+  for (const [k, v] of Object.entries(fields)) parts.push(enc(`--${boundary}\r\ncontent-disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+  parts.push(enc(`--${boundary}\r\ncontent-disposition: form-data; name="${file.name}"; filename="${file.filename.replace(/["\r\n]/g, "_")}"\r\ncontent-type: ${file.contentType ?? "application/octet-stream"}\r\n\r\n`));
+  parts.push(file.bytes, enc(`\r\n--${boundary}--\r\n`));
+  // a fresh buffer, so the body is a Uint8Array over its own ArrayBuffer (what fetch's BodyInit is typed as)
+  const body = new Uint8Array(parts.reduce((n, p) => n + p.byteLength, 0));
+  let at = 0;
+  for (const p of parts) {
+    body.set(p, at);
+    at += p.byteLength;
+  }
+  return { body, contentType: `multipart/form-data; boundary=${boundary}` };
 }

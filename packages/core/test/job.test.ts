@@ -63,6 +63,10 @@ function fakeHost(): GitHost & { prs: PrRef[]; comments: string[]; created: Arra
       comments.push(body);
       return "https://github.com/acme/demo/pull/1#issuecomment-1";
     },
+    async commentIssue(_repo, issue, body) {
+      comments.push(body);
+      return `https://github.com/acme/demo/issues/${issue}#issuecomment-1`;
+    },
   };
 }
 

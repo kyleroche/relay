@@ -116,6 +116,18 @@ export interface ReleaseInput {
   gate?: Pick<GateVerdict, "score" | "reasons" | "grader" | "model"> | null;
   /** The gate's own model call, when one ran (with any outcome): written as a `step.usage` row on lane `gate`. */
   gate_usage?: RunUsage | null;
+  /**
+   * Further `step.usage` rows the run earned, each on its own lane: the nodes lane reports one per output model
+   * (`video`, `image`, `audio`; `lanes/nodes.ts`). Written as given, tokens or not, since media models bill per output.
+   */
+  extra_usage?: ExtraUsage[] | null;
+}
+
+/** A usage row with its own lane and a note of how it was priced. */
+export interface ExtraUsage extends RunUsage {
+  lane: string;
+  summary?: string;
+  payload?: Record<string, unknown>;
 }
 
 export interface ReleaseResult {
@@ -283,6 +295,31 @@ export async function releaseServer(db: Db, taskId: string, input: ReleaseInput)
       url: `https://github.com/${task.repo}/issues/${task.issue}`,
       payload: { tool: g.tool, worker: worker.id, claim: claim.id, mode: "gate", verdict: input.outcome === "held" ? "hold" : "clear" },
       dedupe_key: `usage:${claim.id}:gate`,
+    });
+    if (e) events.push(e);
+  }
+  // per-model rows a run reports on top of its own (the nodes lane: one per output model, on lane video | image | audio)
+  for (const [i, x] of (input.extra_usage ?? []).slice(0, 32).entries()) {
+    const e = await writeEvent(db, {
+      kind: "step.usage",
+      actor: `agent:${lane ?? x.tool}`,
+      project: task.project,
+      repo: task.repo,
+      issue: task.issue,
+      pr: input.pr ?? null,
+      lane: x.lane,
+      model: x.model,
+      subscription: x.subscription,
+      tokens_in: x.tokens_in,
+      tokens_out: x.tokens_out,
+      cache_read: x.cache_read,
+      cache_write: x.cache_write,
+      cost_equiv: x.cost_equiv,
+      duration_ms: x.duration_ms,
+      summary: (x.summary ?? `${x.lane} ${x.model ?? x.tool}: ${x.tokens_in + x.cache_read} in / ${x.tokens_out} out`).slice(0, 500),
+      url: input.pr_url ?? `https://github.com/${task.repo}/issues/${task.issue}`,
+      payload: { tool: x.tool, ...(x.payload ?? {}), worker: worker.id, claim: claim.id },
+      dedupe_key: `usage:${claim.id}:extra:${i}`,
     });
     if (e) events.push(e);
   }
