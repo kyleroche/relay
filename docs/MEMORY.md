@@ -215,7 +215,8 @@ against the site answered.
 
 Not available in site mode (they need the database on the machine): `relay capture` (the session-end hook exits
 quietly; use `relay decide`), `relay decide --global`, `relay sql`, `relay init`, `relay onboard`, `relay models`,
-`relay project *` and `relay asset *`. They fail with one line saying so. `relay setup --no-site` returns to local
+`relay project digest|summarize|show` and `relay asset *`. They fail with one line saying so (`relay project add
+<slug> --repo owner/name` and `relay project list` go through the site). `relay setup --no-site` returns to local
 mode, for the CLI, the hooks and the MCP server alike.
 
 ## Working with memory by hand
