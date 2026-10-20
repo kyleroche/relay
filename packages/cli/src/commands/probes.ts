@@ -4,7 +4,8 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
-import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
+import { existsSync } from "node:fs";
+import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -82,7 +83,7 @@ export async function loginCheck(tool: ProbeTool, bin: string): Promise<Check> {
   return { status: "warn", name, detail: "grok CLI reports no login state; `relay probe grok:<model>` is the real test (run: grok login)" };
 }
 
-/** Presence and login checks for every vendor CLI, in doctor's order. */
+/** Presence and login checks for every vendor CLI, in doctor's order, then the Griptape Nodes engine (`nodes`). */
 export async function probeTools(): Promise<Check[]> {
   const checks: Check[] = [];
   for (const tool of PROBE_TOOLS) {
@@ -94,7 +95,44 @@ export async function probeTools(): Promise<Check[]> {
     checks.push({ status: "ok", name: `cli:${tool}`, detail: bin });
     checks.push(await loginCheck(tool, bin));
   }
+  checks.push(await nodesCheck());
   return checks;
+}
+
+export const NODES_INSTALL_HINT = "install Griptape Nodes from https://docs.griptapenodes.com (the `griptape-nodes` command, a uv tool), then run it once so its config and libraries exist";
+/** Vendor keys the engine's generation nodes read; the probe reports which names are set, never a value. */
+export const NODES_KEY_NAMES = ["GT_CLOUD_API_KEY", "ARK_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY", "ELEVENLABS_API_KEY"] as const;
+
+/**
+ * The `nodes` line of `relay doctor`, and what makes `relay work` serve the nodes lane: `griptape-nodes` on PATH, its
+ * version, a config it can read (the engine drops the whole config file when one field fails its schema, and then runs
+ * with defaults: that is a warn, with the fix), the workspace directory, the interpreter the shim will run under, and
+ * the vendor key names present in this environment.
+ */
+export async function nodesCheck(env: NodeJS.ProcessEnv = process.env): Promise<Check> {
+  const name = "nodes";
+  const bin = onPath("griptape-nodes") ?? onPath("gtn");
+  if (!bin) return { status: "warn", name, detail: `not on PATH; ${NODES_INSTALL_HINT}` };
+  const python = findNodesPython(env);
+  if (!python) return { status: "warn", name, detail: `${bin} is on PATH but no Python can import the engine (no uv venv behind it); ${NODES_INSTALL_HINT}` };
+  const [ver, cfg] = await Promise.all([run(bin, ["--no-update", "--version"], 60_000), run(bin, ["--no-update", "config", "show"], 60_000)]);
+  const version = /v?(\d+\.\d+\.\d+[\w.-]*)/.exec(ver.stdout)?.[1];
+  const problems: string[] = [];
+  if (!version) problems.push("`griptape-nodes --version` gave no version");
+  let workspace: string | undefined;
+  try {
+    const j = JSON.parse(cfg.stdout.trim().slice(cfg.stdout.indexOf("{"))) as { workspace_directory?: string };
+    workspace = j.workspace_directory;
+  } catch {
+    problems.push("`griptape-nodes config show` did not print JSON");
+  }
+  const invalid = /Error validating config file/i.test(cfg.stderr + ver.stderr);
+  if (invalid) problems.push("the engine's config file fails its schema, so the engine runs with defaults (no libraries, a cwd workspace); open Griptape Nodes once or fix ~/.config/griptape_nodes/griptape_nodes_config.json; relay's shim registers the workflow's libraries itself meanwhile");
+  if (workspace && !existsSync(workspace)) problems.push(`workspace ${workspace} does not exist`);
+  const keys = NODES_KEY_NAMES.filter((k) => !!env[k]);
+  const detail = `${bin}${version ? ` v${version}` : ""}; python ${python[0]}${python.length > 1 ? " (uv tool run)" : ""}; workspace ${workspace ?? "unknown"}; keys set: ${keys.length ? keys.join(", ") : "none"}${problems.length ? `; ${problems.join("; ")}` : ""}`;
+  // an invalid config is a warn the lane still serves (the shim registers libraries itself); no version is a fail
+  return { status: !version ? "fail" : problems.length ? "warn" : "ok", name, detail };
 }
 
 /**
@@ -235,8 +273,9 @@ export function metersCheck(home: string, now: number = Date.now()): Check {
 
 /**
  * The lanes this machine can serve, from its logins: `claude` when Claude Code is logged in, `codex` when the codex
- * CLI is logged in or fx has a Codex login, `grok` when the grok CLI is present or fx has a Grok login. `gh` must be
- * logged in for any lane (clones, pushes and PRs run as it).
+ * CLI is logged in or fx has a Codex login, `grok` when the grok CLI is present or fx has a Grok login, `nodes` when
+ * the Griptape Nodes engine is installed (`nodesCheck`, ok or warn). `gh` must be logged in for any lane (clones,
+ * pushes, PRs and issue comments run as it).
  */
 export function lanesFromChecks(checks: Check[]): { lanes: string[]; reasons: string[] } {
   const by = new Map(checks.map((c) => [c.name, c]));
@@ -253,6 +292,9 @@ export function lanesFromChecks(checks: Check[]): { lanes: string[]; reasons: st
   else reasons.push("codex: no codex or fx login");
   if (by.get("cli:grok")?.status === "ok" || fx.includes("grok")) lanes.push("grok");
   else reasons.push("grok: no grok CLI or fx login");
+  const nodes = by.get("nodes");
+  if (nodes && nodes.status !== "fail") lanes.push("nodes");
+  else reasons.push(`nodes: ${nodes ? nodes.detail.split(";")[0] : "griptape-nodes not installed"}`);
   return { lanes, reasons };
 }
 

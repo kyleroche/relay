@@ -5,7 +5,7 @@
  *             packages/mcp/bin/relay-mcp.mjs, packages/cli/templates, packages/core/src/db/migrations
  *   package   the published `@kyleroche/relay`: dist/relay.js bundles core, mcp and the CLI; beside it sit
  *             dist/hooks/*.mjs, dist/relay-mcp.js, dist/migrations/*.sql, dist/container/ (the worker image's
- *             Dockerfile and entry script), and templates/ at the package root
+ *             Dockerfile and entry script), dist/python/ (the Griptape Nodes shim), and templates/ at the package root
  *
  * Anything that records a path to a relay file (the hook installers, the template copier, the migration loader)
  * asks here instead of counting `..` from its own location, because in the bundle every module shares one
@@ -36,6 +36,9 @@ export interface RuntimePaths {
   migrationsDir: string;
   /** The worker image's build context: Dockerfile and relay-entry (`relay work --isolation container`). */
   containerDir: string;
+  /** The Python scripts relay starts under other interpreters: `run_workflow.py`, the Griptape Nodes shim (`lanes/nodes.ts`). */
+  pythonDir: string;
+  runWorkflowScript: string;
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -56,6 +59,8 @@ function packageAt(root: string): RuntimePaths {
     templatesDir: join(root, "templates"),
     migrationsDir: join(dist, "migrations"),
     containerDir: join(dist, "container"),
+    pythonDir: join(dist, "python"),
+    runWorkflowScript: join(dist, "python", "run_workflow.py"),
   };
 }
 
@@ -74,6 +79,8 @@ function checkoutAt(root: string): RuntimePaths {
     templatesDir: join(root, "packages", "cli", "templates"),
     migrationsDir: join(root, "packages", "core", "src", "db", "migrations"),
     containerDir: join(root, "packages", "cli", "container"),
+    pythonDir: join(root, "packages", "cli", "python"),
+    runWorkflowScript: join(root, "packages", "cli", "python", "run_workflow.py"),
   };
 }
 

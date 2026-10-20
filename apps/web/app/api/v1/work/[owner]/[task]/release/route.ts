@@ -1,4 +1,4 @@
-import { releaseServer, type RunUsage } from "@relay/core";
+import { releaseServer, type ExtraUsage, type RunUsage } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
 import { dispatchAfter } from "@/lib/dispatch";
@@ -37,13 +37,29 @@ function usageOf(v: unknown): RunUsage | null {
   };
 }
 
+/** The per-model rows the nodes lane reports (`extra_usage`): a usage each with its own lane, summary and payload. */
+function extraUsageOf(v: unknown): ExtraUsage[] | null {
+  if (!Array.isArray(v)) return null;
+  const out: ExtraUsage[] = [];
+  for (const item of v.slice(0, 32)) {
+    const u = usageOf(item);
+    const lane = u && item && typeof item === "object" ? str((item as Record<string, unknown>).lane) : undefined;
+    if (!u || !lane) continue;
+    const rec = item as Record<string, unknown>;
+    const payload = rec.payload && typeof rec.payload === "object" && !Array.isArray(rec.payload) ? (rec.payload as Record<string, unknown>) : undefined;
+    out.push({ ...u, lane, ...(str(rec.summary) ? { summary: str(rec.summary)! } : {}), ...(payload ? { payload } : {}) });
+  }
+  return out;
+}
+
 /**
  * operationId: releaseWork. Path: /work/{owner}/{repo}%23{issue}/release. Body: { worker_id, outcome: finished | failed |
- * released | held, conclusion?, summary?, error?, pr?, pr_url?, duration_ms?, usage?, gate?, gate_usage? }. Ends the
- * worker's lease and writes run.finished (with the PR) or run.failed, plus one step.usage row from `usage`. `released`
- * only frees the lease (the task is queued again). `held` frees it and writes task.held from `gate` (the injection gate
- * flagged the text; the task waits for a release). `gate_usage` is the gate's own model call, a step.usage row on lane
- * `gate`. 409 when the worker holds no live claim.
+ * released | held, conclusion?, summary?, error?, pr?, pr_url?, duration_ms?, usage?, gate?, gate_usage?, extra_usage? }.
+ * Ends the worker's lease and writes run.finished (with the PR) or run.failed, plus one step.usage row from `usage`.
+ * `released` only frees the lease (the task is queued again). `held` frees it and writes task.held from `gate` (the
+ * injection gate flagged the text; the task waits for a release). `gate_usage` is the gate's own model call, a
+ * step.usage row on lane `gate`. `extra_usage` is a list of further rows, each with its own lane: the nodes lane reports
+ * one per output model (video, image, audio). 409 when the worker holds no live claim.
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
@@ -74,6 +90,7 @@ export const POST = api<Ctx>(
         usage: usageOf(body.usage),
         gate: gateOf(body.gate),
         gate_usage: usageOf(body.gate_usage),
+        extra_usage: extraUsageOf(body.extra_usage),
       });
       dispatchAfter(r.events);
       return json({ claim: r.claim, events: r.events.map((e) => ({ id: e.id, kind: e.kind })) });

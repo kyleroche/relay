@@ -29,7 +29,7 @@ beforeAll(async () => {
   // the fake /api/v1: same contract as apps/web/app/api/v1/*, served by the local client
   apiFetch = async (url, init) => {
     const u = new URL(url);
-    const body = init.body ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
+    const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : undefined;
     calls.push({ method: init.method, path: u.pathname + u.search, body });
     if (init.headers.authorization !== `Bearer ${TOKEN}`) return problem(401, "Unauthorized", "Unknown token.", u.pathname);
     if (u.pathname === "/mcp") {

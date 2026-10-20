@@ -14,7 +14,8 @@ import type { WorkerRow } from "../db/workers.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { GitHubStatus, RelayClient, WhoAmI } from "./types.ts";
 
-export type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string }) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>;
+/** The fetch the clients use; the body is JSON text, or raw bytes for a multipart upload (`httpWorkApi().uploadAsset`). */
+export type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string | Uint8Array<ArrayBuffer> }) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>;
 
 export interface HttpClientOptions {
   site: string;

@@ -291,7 +291,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         project: z.string().optional(),
         kind: z.string().optional(),
         actor: z.string().optional(),
-        lane: z.enum(["claude", "codex", "grok"]).optional(),
+        lane: z.enum(TASK_LANES).optional(),
         limit: z.number().int().min(1).max(200).optional(),
         before: z.string().datetime({ offset: true }).optional(),
         after: z.string().datetime({ offset: true }).optional(),

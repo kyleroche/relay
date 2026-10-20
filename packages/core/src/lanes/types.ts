@@ -1,6 +1,7 @@
 import type { Ledger, LedgerEntry } from "../ledger/ledger.ts";
 
-export type LaneName = "plan" | "review" | "code" | "3d" | "triage" | "digest" | "video" | "probe" | "gate";
+/** `video`, `image` and `audio` are what the nodes lane records per output model (`lanes/nodes.ts`); the rest are prompt lanes. */
+export type LaneName = "plan" | "review" | "code" | "3d" | "triage" | "digest" | "video" | "image" | "audio" | "probe" | "gate";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
 
 export interface LaneRequest {

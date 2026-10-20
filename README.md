@@ -77,6 +77,7 @@ relay never asks for a token. Log in to each tool you own, on each machine that 
 | Codex | `codex login`, or `fx login codex` | ChatGPT |
 | Grok Build | `grok login`, or `fx login grok` | SuperGrok |
 | GitHub | `gh auth login` | any |
+| Griptape Nodes (the `nodes` lane: video, image and audio workflows) | install the engine from [docs.griptapenodes.com](https://docs.griptapenodes.com); the vendor keys the workflow uses stay in that machine's environment | pay per output |
 
 `relay doctor` tells you which ones it found. Machines without a login simply do not get that lane's label.
 

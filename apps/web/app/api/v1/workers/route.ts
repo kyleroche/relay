@@ -1,4 +1,4 @@
-import { registerWorkerServer, repo, WORKER_NAME } from "@relay/core";
+import { isWorkerLane, registerWorkerServer, repo, WORKER_LANES, WORKER_NAME } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -32,7 +32,7 @@ export const POST = api(
     const name = str(body.name);
     if (!name || !WORKER_NAME.test(name)) return problem(400, "Bad Request", "name is required: 1-64 characters, letters, digits, dot, dash, underscore.", instance, { parameter: "name" });
     const lanes = strList(body.lanes) ?? [];
-    if (lanes.some((l) => !["claude", "codex", "grok"].includes(l))) return problem(400, "Bad Request", "lanes must be among claude, codex, grok.", instance, { parameter: "lanes" });
+    if (lanes.some((l) => !isWorkerLane(l))) return problem(400, "Bad Request", `lanes must be among ${WORKER_LANES.join(", ")}.`, instance, { parameter: "lanes" });
     try {
       const r = await registerWorkerServer(await getDb(), { name, host: str(body.host) ?? "", lanes, labels: strList(body.labels) ?? [], version: str(body.version) ?? "" });
       dispatchAfter(r.events);

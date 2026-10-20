@@ -68,6 +68,7 @@ import {
   laneRunner,
   localWorkApi,
   LOGIN_CALLBACK_PORTS,
+  WORKER_LANES,
   LOGIN_PROVIDERS,
   LOGIN_TIMEOUT_MS,
   MAX_IDLE_MS,
@@ -131,7 +132,7 @@ export interface WorkDeps {
 
 const defaultSpawn = (words: string[]): ChildProcess => spawn(words[0]!, words.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
 
-const LANES = ["claude", "codex", "grok"];
+const LANES: readonly string[] = WORKER_LANES;
 const list = (s: string | undefined): string[] => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 export const workLogPath = (): string => join(relayHome(), "work.log");
 

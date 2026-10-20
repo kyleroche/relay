@@ -76,3 +76,22 @@ export function costEquiv(e: LedgerEntry): number {
   if (!p) return e.cost_equiv ?? 0;
   return (e.tokens_in * p.in + e.tokens_out * p.out + (e.cache_read ?? 0) * p.cacheRead + (e.cache_write ?? 0) * p.cacheWrite) / 1_000_000;
 }
+
+/**
+ * Media models bill per output, not per token: a price per generated image, per second of video or audio, or both.
+ * The nodes lane (`lanes/nodes.ts`) prices each output model it recognises from here; a model that is not listed is
+ * recorded with `cost_equiv: 0` and `payload.cost_unknown: true`, so the ledger shows the run without inventing a
+ * number. Add a row only from the vendor's own price page (the official-sources rule applies to prices too).
+ */
+export const MEDIA_PRICES: Record<string, { perOutput?: number; perSecond?: number }> = {};
+
+/** The USD cost of `count` outputs totalling `seconds` from a media model, or undefined when the model is not priced. */
+export function mediaCost(model: string | null | undefined, usage: { count: number; seconds?: number | null }): number | undefined {
+  if (!model) return undefined;
+  const p = MEDIA_PRICES[model];
+  if (!p) return undefined;
+  let cost = 0;
+  if (p.perOutput) cost += p.perOutput * usage.count;
+  if (p.perSecond && usage.seconds) cost += p.perSecond * usage.seconds;
+  return cost;
+}

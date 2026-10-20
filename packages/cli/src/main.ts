@@ -71,7 +71,7 @@ program
 
 program
   .command("doctor")
-  .description("Report Node version, which CLIs are installed and logged in, the lanes this machine can serve, whether Claude's OS sandbox is available, the container worker tier (macOS), whether the database or site is reachable, how this machine authenticates, which mode the installed MCP server runs in, and (site mode) which linked repos still lack the GitHub App")
+  .description("Report Node version, which CLIs are installed and logged in, whether the Griptape Nodes engine is here (the nodes lane), the lanes this machine can serve, whether Claude's OS sandbox is available, the container worker tier (macOS), whether the database or site is reachable, how this machine authenticates, which mode the installed MCP server runs in, and (site mode) which linked repos still lack the GitHub App")
   .action(async () => {
     const checks: Check[] = [];
     const major = Number(process.versions.node.split(".")[0]);

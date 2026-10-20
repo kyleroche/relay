@@ -17,8 +17,12 @@ import type { GitHubClient } from "../github/client.ts";
 import { ulid } from "../util.ts";
 import { heldEvent, precheckTask } from "./gate.ts";
 
-/** Worker lanes execute on a machine that ran `relay work`; cloud lanes are dispatched by the site to the vendor's hosted tier. */
-export const WORKER_LANES = ["claude", "codex", "grok"] as const;
+/**
+ * Worker lanes execute on a machine that ran `relay work`; cloud lanes are dispatched by the site to the vendor's hosted
+ * tier. `nodes` is the Griptape Nodes lane: a worker with the engine installed runs the workflow the issue's manifest
+ * names and uploads the outputs as assets on the issue (no branch, no PR; `lanes/nodes.ts`, docs/WORKERS.md).
+ */
+export const WORKER_LANES = ["claude", "codex", "grok", "nodes"] as const;
 export const CLOUD_LANES = ["claude-cloud", "codex-cloud"] as const;
 export const TASK_LANES = [...WORKER_LANES, ...CLOUD_LANES] as const;
 export type WorkerLane = (typeof WORKER_LANES)[number];

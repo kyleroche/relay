@@ -12,20 +12,22 @@
  * flow runs in tests against a bare repository with RELAY_FAKE_LANES=1.
  */
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { findOnPath } from "../github/client.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
 import { runCodex } from "../lanes/codex.ts";
 import { runFx } from "../lanes/fx.ts";
 import { runGrok } from "../lanes/grok.ts";
+import { nodesUsageEvents, runNodes, type NodesRequest, type NodesResult } from "../lanes/nodes.ts";
 import { SANDBOX_UNAVAILABLE } from "../lanes/sandbox.ts";
 import type { LaneRequest, LaneResult } from "../lanes/types.ts";
 import { gateText, gradeTask, type GateVerdict } from "../tasks/gate.ts";
+import { ManifestError, parseNodesManifest, type NodesManifest } from "../tasks/manifest.ts";
 import { type Log, noopLog } from "../util.ts";
-import type { WorkApi } from "./api.ts";
-import type { ClaimResult, ClaimedIssue, RunUsage } from "./server.ts";
+import type { IssueAsset, WorkApi } from "./api.ts";
+import type { ClaimResult, ClaimedIssue, ExtraUsage, RunUsage } from "./server.ts";
 
 export const USAGE_MARKER = "<!-- relay:usage -->";
 export const DEFAULT_JOB_TIMEOUT_MS = 60 * 60_000;
@@ -91,9 +93,13 @@ export interface GitHost {
   findPr(repo: string, branch: string): Promise<PrRef | undefined>;
   createPr(repo: string, input: { base: string; head: string; title: string; body: string }): Promise<PrRef>;
   comment(repo: string, pr: number, body: string): Promise<string | undefined>;
+  /** A comment on the issue itself (the nodes lane has no PR). */
+  commentIssue(repo: string, issue: number, body: string): Promise<string | undefined>;
 }
 
 export type LaneRunner = (req: LaneRequest, lane: string) => Promise<LaneResult & { tool: string }>;
+/** The nodes lane's runner (`runNodes` by default; tests inject one that writes files without the engine). */
+export type NodesRunner = (req: NodesRequest) => Promise<NodesResult>;
 
 /** The injection gate a job runs before its lane (`gradeTask` by default; tests inject a verdict). */
 export type TaskGrader = (text: string, ctx: { project: string; task: string; env: NodeJS.ProcessEnv }) => Promise<GateVerdict>;
@@ -119,6 +125,8 @@ export interface JobOptions {
   home?: string;
   gitHost?: GitHost;
   lane?: LaneRunner;
+  /** The Griptape Nodes runner for `nodes` tasks (lanes/nodes.ts). */
+  nodes?: NodesRunner;
   /** The injection gate (tasks/gate.ts); `RELAY_GATE=off` in the worker's environment skips its model call. */
   gate?: TaskGrader;
   timeoutMs?: number;
@@ -146,6 +154,10 @@ export interface JobResult {
   summary: string;
   error?: string;
   durationMs: number;
+  /** The nodes lane: the assets the run uploaded on the issue. */
+  assets?: IssueAsset[];
+  /** The nodes lane: the per-model rows reported with the release. */
+  extraUsage?: ExtraUsage[];
 }
 
 const run = (bin: string, args: string[], opts: { cwd?: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; input?: string } = {}): Promise<{ code: number; stdout: string; stderr: string }> =>
@@ -255,6 +267,10 @@ export function ghHost(opts: { gh?: string; git?: string } = {}): GitHost {
       const out = await must(gh, ["pr", "comment", String(pr), "--repo", repo, "--body-file", "-"], { input: body });
       return out.trim() || undefined;
     },
+    async commentIssue(repo, issue, body) {
+      const out = await must(gh, ["issue", "comment", String(issue), "--repo", repo, "--body-file", "-"], { input: body });
+      return out.trim() || undefined;
+    },
   };
 }
 
@@ -352,6 +368,119 @@ export function usageComment(i: { lane: string; issue: number; text: string; usa
   return `## Summary from the ${i.lane} lane\n\n${i.text.slice(0, 6000)}\n\n${USAGE_MARKER}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`;
 }
 
+/** The nodes lane's issue comment: the assets it uploaded, then the usage block (`mode: nodes`, one line per output model). */
+export function nodesComment(i: { issue: number; workflow: string; assets: IssueAsset[]; result: Pick<NodesResult, "engineVersion" | "durationMs" | "usage" | "nodesRun" | "warning">; claim: string }): string {
+  const lines = [`## Outputs from the nodes lane`, "", `Workflow \`${i.workflow}\` ran on Griptape Nodes ${i.result.engineVersion} in ${Math.round(i.result.durationMs / 1000)}s and produced ${i.assets.length} asset${i.assets.length === 1 ? "" : "s"}:`, ""];
+  for (const a of i.assets) lines.push(`- ${a.url ? `[${a.title}](${a.url})` : a.title} (${a.kind}, ${fmtBytes(a.size)}, v${a.version}, \`${a.id}\`)`);
+  if (i.result.warning) lines.push("", `Note: ${i.result.warning}`);
+  const models = i.result.usage.map((u) => `${u.lane}: ${u.model ?? "unknown model"} x${u.outputs}${u.costKnown ? ` $${u.costEquiv.toFixed(2)}` : " (cost unknown)"}`);
+  if (models.length) lines.push("", `Models: ${models.join("; ")}.`);
+  const block = {
+    relay: "step.usage",
+    lane: "nodes",
+    mode: "nodes",
+    tool: "griptape-nodes",
+    model: i.result.usage.find((u) => u.model)?.model ?? "unknown",
+    issue: i.issue,
+    outputs: i.assets.length,
+    nodes_run: i.result.nodesRun.map((n) => n.type),
+    duration_ms: i.result.durationMs,
+    cost_equiv: Number(i.result.usage.reduce((s, u) => s + u.costEquiv, 0).toFixed(4)),
+    source: "relay-work",
+    claim: i.claim,
+  };
+  return `${lines.join("\n")}\n\n${USAGE_MARKER}\n\`\`\`json\n${JSON.stringify(block)}\n\`\`\`\n`;
+}
+
+const fmtBytes = (n: number): string => (n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : n >= 1024 ? `${Math.round(n / 1024)} KB` : `${n} B`);
+
+/** The tag that ties an asset to the end-node parameter it came from, so a re-run supersedes the right version. */
+export const nodesOutputTag = (node: string, parameter: string): string => `nodes:${node}/${parameter}`;
+
+/** The outcome of the nodes stage, folded into the job's report. */
+interface NodesStage {
+  ok: boolean;
+  summary: string;
+  error?: string;
+  assets: IssueAsset[];
+  usage: RunUsage;
+  extraUsage: ExtraUsage[];
+}
+
+/**
+ * The nodes lane's job body: parse the manifest, resolve the workflow inside the clone, run the engine through the
+ * adapter, upload every output as an asset on the issue (a new version of the last asset from the same end-node
+ * parameter when there is one), and comment on the issue. No branch is pushed and no PR is opened.
+ */
+async function runNodesStage(i: { claim: ClaimResult; issue: ClaimedIssue; dir: string; host: GitHost; api: WorkApi; runner: NodesRunner; env: NodeJS.ProcessEnv; timeoutMs: number; workerName: string; log: Log }): Promise<NodesStage> {
+  const { task } = i.claim;
+  const empty: RunUsage = { tool: "griptape-nodes", model: null, subscription: null, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost_equiv: 0, duration_ms: 0 };
+  let manifest: NodesManifest;
+  try {
+    manifest = parseNodesManifest(i.issue.body);
+  } catch (e) {
+    const msg = e instanceof ManifestError ? e.message : String(e);
+    return { ok: false, summary: `no runnable manifest: ${msg}`, error: msg, assets: [], usage: empty, extraUsage: [] };
+  }
+  // the workflow must be a file inside the clone (the manifest is user text; `..` is refused by the parser, a symlink by the realpath check)
+  const workflow = resolve(i.dir, manifest.workflow);
+  const root = realpathSync(i.dir);
+  const real = existsSync(workflow) ? realpathSync(workflow) : workflow;
+  const rel = relative(root, real);
+  if (!existsSync(workflow) || rel.startsWith("..") || rel.startsWith(sep) || resolve(root, rel) !== real) {
+    const msg = `workflow ${manifest.workflow} is not a file in ${task.repo}`;
+    return { ok: false, summary: msg, error: msg, assets: [], usage: empty, extraUsage: [] };
+  }
+  const outDir = join(i.dir, ".relay-nodes-out");
+  i.log(`${task.id}: running ${manifest.workflow} on Griptape Nodes`);
+  const r = await i.runner({ workflow, inputs: manifest.inputs, ...(manifest.outputs ? { outputs: manifest.outputs } : {}), outDir, cwd: i.dir, env: i.env, timeoutMs: i.timeoutMs, ...(manifest.model ? { model: manifest.model } : {}), project: task.project, task: task.id });
+  const usage: RunUsage = { ...empty, model: r.usage.find((u) => u.model)?.model ?? null, cost_equiv: Number(r.usage.reduce((s, u) => s + u.costEquiv, 0).toFixed(6)), duration_ms: r.durationMs };
+  const extraUsage: ExtraUsage[] = nodesUsageEvents(r.usage, { engineVersion: r.engineVersion, workflow: manifest.workflow, task: task.id }).map((e) => ({
+    tool: "griptape-nodes",
+    lane: e.lane!,
+    model: e.model ?? null,
+    subscription: null,
+    tokens_in: 0,
+    tokens_out: 0,
+    cache_read: 0,
+    cache_write: 0,
+    cost_equiv: e.cost_equiv ?? 0,
+    duration_ms: e.duration_ms ?? 0,
+    summary: e.summary,
+    payload: e.payload ?? {},
+  }));
+  if (!r.ok) {
+    const err = (r.error ?? "the engine did not finish").slice(0, 300);
+    if (r.raw?.stderr) i.log(`${task.id}: engine stderr tail: ${r.raw.stderr.slice(-1500)}`);
+    return { ok: false, summary: `the workflow failed: ${err}`, error: err, assets: [], usage, extraUsage };
+  }
+  if (!r.outputs.length) {
+    const msg = `produced no output${r.warning ? ` (${r.warning})` : ""}`;
+    return { ok: false, summary: msg, error: msg.slice(0, 300), assets: [], usage, extraUsage };
+  }
+  // chain each output onto the last asset from the same end-node parameter, so the issue's asset keeps its version history
+  const previous = await i.api.assetsForIssue(task.project, task.issue).catch(() => [] as IssueAsset[]);
+  const latestByTag = new Map<string, IssueAsset>();
+  for (const a of previous) for (const t of a.tags) if (t.startsWith("nodes:") && !latestByTag.has(t)) latestByTag.set(t, a);
+  const assets: IssueAsset[] = [];
+  const counts = new Map<string, number>();
+  for (const o of r.outputs) {
+    const tag = nodesOutputTag(o.node, o.parameter);
+    const n = (counts.get(tag) ?? 0) + 1;
+    counts.set(tag, n);
+    const key = n === 1 ? tag : `${tag}#${n}`;
+    const parent = latestByTag.get(key);
+    const version = parent ? parent.version + 1 : 1;
+    const title = `${i.issue.title || `#${task.issue}`} v${version}${n > 1 ? ` (${n})` : ""}`;
+    const tags = [task.project, ...(manifest.stage ? [manifest.stage] : []), o.node, key];
+    i.log(`${task.id}: uploading ${basename(o.path)} (${o.mime}, ${fmtBytes(o.bytes)}) as "${title}"${parent ? ` replacing ${parent.id}` : ""}`);
+    const a = await i.api.uploadAsset({ path: o.path, project: task.project, issue: task.issue, title, replaces: parent?.id ?? null, createdBy: `runner:${i.workerName}`, tags, description: `${o.node}.${o.parameter} from ${manifest.workflow}${o.provider_job_id ? ` (job ${o.provider_job_id})` : ""}` });
+    assets.push(a);
+  }
+  await i.host.commentIssue(task.repo, task.issue, nodesComment({ issue: task.issue, workflow: manifest.workflow, assets, result: r, claim: i.claim.claim.id }));
+  return { ok: true, summary: `produced ${assets.length} output${assets.length === 1 ? "" : "s"}: ${assets.map((a) => a.title).join(", ")}`.slice(0, 300), assets, usage, extraUsage };
+}
+
 /**
  * Run one claimed task to a pull request (or a reported failure). Never throws for a lane or git failure: those are
  * reported as `failed` and returned. Throws only when the report itself cannot be delivered.
@@ -373,6 +502,8 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
   let verdict: GateVerdict | undefined;
   let pr: PrRef | undefined;
   let summary = "";
+  let assets: IssueAsset[] | undefined;
+  let extraUsage: ExtraUsage[] | undefined;
   const report = async (outcome: JobResult["outcome"], extra: { error?: string; conclusion?: string }): Promise<JobResult> => {
     const durationMs = Date.now() - t0;
     await opts.api.release(task.id, {
@@ -386,6 +517,7 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
       duration_ms: durationMs,
       usage,
       ...(gateUsage ? { gate_usage: gateUsage } : {}),
+      ...(extraUsage?.length ? { extra_usage: extraUsage } : {}),
       ...(outcome === "held" && verdict ? { gate: { score: verdict.score, reasons: verdict.reasons, grader: verdict.grader, model: verdict.model } } : {}),
     });
     if (!opts.keep) rmSync(dir, { recursive: true, force: true });
@@ -394,6 +526,8 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
     if (extra.error) out.error = extra.error;
     if (gateUsage) out.gateUsage = gateUsage;
     if (verdict) out.gate = verdict;
+    if (assets) out.assets = assets;
+    if (extraUsage?.length) out.extraUsage = extraUsage;
     log(`${task.id}: ${outcome}${pr ? ` ${pr.url}` : ""}${extra.error ? ` (${extra.error})` : ""} in ${Math.round(durationMs / 1000)}s`);
     return out;
   };
@@ -420,6 +554,17 @@ export async function runJob(claim: ClaimResult, opts: JobOptions): Promise<JobR
       return await report("held", { error: summary.slice(0, 300) });
     }
     await opts.api.start(task.id, { worker_id: opts.workerId, branch, ...(opts.host ? { host: opts.host } : {}) });
+
+    if (lane === "nodes") {
+      // the production path: the workflow in the clone runs on the engine and its outputs become assets on the issue (docs/WORKERS.md, "The nodes lane")
+      const stage = await runNodesStage({ claim, issue, dir, host, api: opts.api, runner: opts.nodes ?? runNodes, env: cleanEnv(), timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, workerName: opts.workerName, log });
+      usage = stage.usage;
+      extraUsage = stage.extraUsage;
+      assets = stage.assets;
+      summary = stage.summary;
+      log(`${task.id}: ${stage.summary}`);
+      return stage.ok ? await report("finished", { conclusion: "success" }) : await report("failed", { error: stage.error ?? stage.summary.slice(0, 300) });
+    }
 
     let brief = "";
     try {
