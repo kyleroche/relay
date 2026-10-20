@@ -1,10 +1,20 @@
-import type { BoardRow, TaskState, TaskView } from "@relay/core";
+import type { BoardRow, TaskState, TaskView, WorkerLane } from "@relay/core";
 import type { EventKind } from "./events.ts";
 
 export type { TaskState, TaskView };
 
-/** One card on the board: the task row plus its cached state (packages/core/src/db/task-state.ts), no fold per task. */
-export type BoardTask = BoardRow;
+/**
+ * One card on the board: the task row plus its cached state (packages/core/src/db/task-state.ts), no fold per task,
+ * with the asset's thumbnail signed for this response when the deliverable is an asset.
+ */
+export type BoardTask = BoardRow & { asset_thumb_url: string | null };
+
+/** What the board reads: the newest tasks in motion, the newest merged, optionally one project's. */
+export interface BoardOptions {
+  limit?: number;
+  doneLimit?: number;
+  project?: string;
+}
 
 export interface TaskListOptions {
   project?: string;
@@ -14,7 +24,8 @@ export interface TaskListOptions {
 
 export type ActorKind = "human" | "bot" | "runner" | "agent";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
-export type Lane = "claude" | "codex" | "grok";
+/** The worker lanes, core's `WORKER_LANES` (packages/core/src/tasks/create.ts): one place to add a lane. */
+export type Lane = WorkerLane;
 
 /** One row of the `events` table (see packages/core/src/db/schema.sql). */
 export interface FeedEvent {
@@ -59,7 +70,8 @@ export interface FeedOptions {
 
 export interface ProjectSummary {
   slug: string;
-  repo: string;
+  /** owner/name, or null for a project registered without a repository (`relay project add <slug>` with a path only). */
+  repo: string | null;
   stack: string | null;
   summary: string | null;
   lastActivity: string | null;
@@ -245,8 +257,8 @@ export interface DataSource {
   getWorkers(): Promise<Worker[]>;
   /** Tasks with their derived state, newest first (one fold per task; the API and the feed header use it with small limits). */
   getTasks(opts?: TaskListOptions): Promise<TaskView[]>;
-  /** The board's cards in one query over the state cache: everything in motion, failed within a week, the newest merged. */
-  getBoard(opts?: { limit?: number; doneLimit?: number }): Promise<BoardTask[]>;
+  /** The board's cards in one query over the state cache: everything in motion, failed within a week, the newest merged; `project` narrows it. */
+  getBoard(opts?: BoardOptions): Promise<BoardTask[]>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
   getAssets(opts?: AssetListOptions): Promise<Asset[]>;

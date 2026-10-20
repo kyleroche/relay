@@ -75,10 +75,23 @@ the worker lanes for people who already operate them.
    effort), releases a live claim, writes `task.requeued` (`queued`) and rings the doorbell; the next run starts over
    from the base branch and reuses an open PR. That is how a task opened on a cloud lane nobody wired, or one whose
    worker vanished, gets to a machine without waiting for a GitHub webhook that may never arrive.
+   **The asset path.** A production (a film: script, characters, shots, voice-over, the cut) is a relay project with
+   no checkout, registered with `relay project add <slug> --repo owner/name`; several productions share one GitHub
+   repository used only for issues, and `openTask` adds a `production:<slug>` label on such a shared repo so the
+   webhook can tell whose issue it is (the task row first, the label second, the repository's name last;
+   `apps/web/lib/webhooks/project.ts`). The deliverable of such a task is an asset on the issue, not a PR: the run
+   uploads it to the library (`asset.uploaded`, with the project's repo on the row so the task's fold sees it) and
+   the task is `review` with `asset` set; the board and the task page show the thumbnail, the kind and the version
+   where a PR would be. Approve writes `asset.reviewed` approved: the task is `done` and the site closes the issue
+   (GitHub's `issue.closed` agrees). Reject needs a note: `asset.reviewed` rejected queues the task again, the note
+   is a project decision and the next run's brief carries it under "Review feedback" with the id to `--replaces`;
+   the next version lands on the same issue and answers it. `approveTask` / `requestChanges` are for PRs and never
+   see an asset; the asset review (`reviewAsset`) is the decision on both the library page and the card.
 7. Every step above is a row in the feed. The task's state is never written by hand: after each of these writes
    (an event naming the task, a claim taken, released or expired, the row created) relay folds the task's rows once and
    caches the result on the task row (`tasks.state`, `station`, `since`, `pr`, `preview_*`, `runner`, `last_error`,
-   `cost`; migration 010, `packages/core/src/db/task-state.ts`). Readers that show many tasks at once (the board,
+   `cost`; migration 010, and the asset it delivered, `asset_id`, `asset_kind`, `asset_version`, `asset_thumb_key`,
+   migration 012; `packages/core/src/db/task-state.ts`). Readers that show many tasks at once (the board,
    `relay task ls --state`, `relay_task_list(state)`) read those columns; a single task's view still folds
    its rows, so the two can never disagree for long, and a row the cache never saw is folded and filled on first read.
 

@@ -224,17 +224,26 @@ export const mockSource: DataSource = {
     return out.slice(0, opts.limit ?? 100);
   },
 
-  /** The board from the same folded tasks: the cache columns a database would hold, derived here. */
+  /** The board from the same folded tasks: the cache columns a database would hold, derived here; `project` narrows it. */
   async getBoard(opts = {}) {
-    const all = await this.getTasks({ limit: 500 });
-    const row = (t: TaskView): BoardTask => ({
-      ...t,
-      station: stationOf(t, []),
-      since: t.updated_at ?? t.created_at,
-      last_error: t.state === "failed" ? t.run_summary : null,
-      cost: t.usage?.cost_equiv ?? null,
-      project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
-    });
+    const all = await this.getTasks({ limit: 500, ...(opts.project ? { project: opts.project } : {}) });
+    const assets = dataset().assets;
+    const row = (t: TaskView): BoardTask => {
+      const asset = t.asset ? assets.find((a) => a.id === t.asset?.id) : undefined;
+      return {
+        ...t,
+        station: stationOf(t, []),
+        since: t.updated_at ?? t.created_at,
+        last_error: t.state === "failed" ? t.run_summary : null,
+        cost: t.usage?.cost_equiv ?? null,
+        asset_id: t.asset?.id ?? null,
+        asset_kind: t.asset?.kind ?? null,
+        asset_version: t.asset?.version ?? null,
+        asset_thumb_key: null,
+        asset_thumb_url: asset?.thumb_url ?? null,
+        project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
+      };
+    };
     const live = all.filter((t) => t.state !== "done").slice(0, opts.limit ?? 300);
     const done = all.filter((t) => t.state === "done").slice(0, opts.doneLimit ?? 10);
     return [...live, ...done].map(row);

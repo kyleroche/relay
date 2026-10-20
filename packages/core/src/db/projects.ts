@@ -58,6 +58,15 @@ export async function listProjects(db: Db): Promise<ProjectRow[]> {
   return (await db.query(`SELECT ${projectCols} FROM projects ORDER BY slug`)).map(toProject);
 }
 
+/**
+ * Every project on one repository, by slug. One repo is usually one project; a productions repo (issues only, one
+ * project per production) has several, and then an issue's project is told by its task row or a `production:<slug>`
+ * label (tasks/create.ts). Case-insensitive, as GitHub names are.
+ */
+export async function projectsOnRepo(db: Db, repo: string): Promise<ProjectRow[]> {
+  return (await db.query(`SELECT ${projectCols} FROM projects WHERE lower(repo) = lower($1) ORDER BY slug`, [repo])).map(toProject);
+}
+
 export async function setProjectSummary(db: Db, slug: string, summary: string, tokens: number): Promise<void> {
   await db.query("UPDATE projects SET summary = $2, summary_tokens = $3, updated_at = now() WHERE slug = $1", [slug, summary, tokens]);
 }

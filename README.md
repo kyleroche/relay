@@ -61,6 +61,12 @@ install link when it is not (without it the repo's issues, labels, PRs and previ
 each stage and one cost line, and a second run with nothing changed makes no model calls. `--refresh` rewrites the
 summary after memory changes; `--no-digest` skips the model steps; `--no-events` skips the GitHub App check.
 
+A project without a checkout, such as a film production whose tasks end in an asset rather than a pull request, is
+registered with `npx @kyleroche/relay project add <slug> --repo owner/name`; several productions can share one
+issues-only repository, and the board filters by project (`/?project=<slug>`). The asset lands on the issue, and the
+card shows it with Approve and Reject where a PR card shows Approve-and-merge ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
+"A task's life").
+
 ## Link your model accounts
 
 relay never asks for a token. Log in to each tool you own, on each machine that will run work:

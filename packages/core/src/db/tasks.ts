@@ -2,8 +2,9 @@
  * Tasks are GitHub issues with a relay id. The row holds identity (project, repo, issue, who created it and the
  * idempotency key) and the title; the state a bot asks about is DERIVED from the feed by `deriveTaskStatus`, so the
  * table can never disagree with what GitHub and the runners actually did. Since migration 010 the row also carries a
- * CACHE of that fold (`state`, `station`, `since`, the PR, the preview, the runner: db/task-state.ts), rewritten after
- * every write that can change the task, so lists and the board read one query instead of folding every history.
+ * CACHE of that fold (`state`, `station`, `since`, the PR, the preview, the runner, and since 012 the asset the task
+ * delivered: db/task-state.ts), rewritten after every write that can change the task, so lists and the board read
+ * one query instead of folding every history.
  */
 import { type Db, iso, num } from "./client.ts";
 import { EVENT_COLS, toEvent, type EventRow } from "./events.ts";
@@ -51,6 +52,13 @@ export interface TaskReview {
   note: string | null;
 }
 
+/** The asset a task delivered, as the board and the task page name it; the row itself is in `assets` (db/assets.ts). */
+export interface TaskAsset {
+  id: string;
+  kind: string;
+  version: number;
+}
+
 export interface TaskStatus {
   state: TaskState;
   /** `runner:<name>` of the runner that last claimed the task, when one did. */
@@ -73,6 +81,12 @@ export interface TaskStatus {
   review: TaskReview;
   /** When the PR was merged (pr.merged from GitHub, or task.approved when relay merged it). */
   merged_at: string | null;
+  /**
+   * The latest asset uploaded on the task's issue (`asset.uploaded`'s asset_id, kind and version), when the
+   * deliverable is an asset rather than a pull request (a production task; docs/ARCHITECTURE.md "A task's life");
+   * null while nothing was uploaded.
+   */
+  asset: TaskAsset | null;
   /** ts and kind of the latest event, or null when the feed has nothing yet. */
   updated_at: string | null;
   last_kind: string | null;
@@ -206,6 +220,11 @@ export function previewMatches(task: Pick<TaskRow, "issue">, e: EventRow, prs: R
  *   task.requeued -> queued (an operator put it back, perhaps on another lane; tasks/requeue.ts)
  *   task.held -> held (the injection gate flagged the issue text; not claimable until released; tasks/gate.ts)
  *   task.released -> queued (a person or a tokens:write bot released the hold)
+ * The asset path, for a task whose deliverable is a media asset on the issue rather than a PR (a production):
+ *   asset.uploaded -> review (the asset is `asset`: id, kind, version; a new version answers an earlier rejection)
+ *   asset.reviewed -> done when payload.decision is approved (the site closes the issue; issue.closed confirms it),
+ *                     queued when rejected (the note is the review, and the next run's brief carries it)
+ * Everything applies in timestamp order, so a run.started after a rejection is running, as on the PR path.
  * A task with no events yet is queued (relay opened the issue with its lane label).
  *
  * Claims (docs/WORKERS.md) add one step. A live lease on a queued task makes it `claimed`. A lease that ended
@@ -228,6 +247,7 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
   let run_summary: string | null = null;
   let usage = null as TaskUsage | null;
   let merged_at: string | null = null;
+  let asset: TaskAsset | null = null;
   let review: TaskReview = { decided: null, by: null, at: null, note: null };
   // previews are matched against every PR the task ever had, whichever order the webhooks arrived in
   const prs = new Set<number>();
@@ -335,6 +355,26 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
       case "task.released":
         state = "queued";
         break;
+      case "asset.uploaded": {
+        // the deliverable landed in the library (db/assets.ts): the task waits for a decision on it, like a PR
+        const id = payloadStr(e, "asset_id");
+        const version = Number(e.payload.version);
+        if (id) asset = { id, kind: payloadStr(e, "kind") ?? "file", version: Number.isFinite(version) && version > 0 ? version : 1 };
+        state = "review";
+        if (review.decided === "changes_requested") review = { decided: null, by: null, at: null, note: null }; // a new version answers the rejection
+        break;
+      }
+      case "asset.reviewed": {
+        const decision = payloadStr(e, "decision");
+        if (decision === "approved") {
+          state = "done";
+          review = { decided: "approved", by: e.actor, at: e.ts, note: payloadStr(e, "note") };
+        } else if (decision === "rejected") {
+          state = "queued";
+          review = { decided: "changes_requested", by: e.actor, at: e.ts, note: payloadStr(e, "note") };
+        }
+        break;
+      }
       default:
         break;
     }
@@ -371,6 +411,7 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
     preview_state,
     review,
     merged_at,
+    asset,
     updated_at: last?.ts ?? null,
     last_kind: last?.kind ?? null,
     events: own.length,

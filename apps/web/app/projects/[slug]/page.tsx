@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   if (!p) return { title: "Project not found" };
   return {
     title: p.slug,
-    description: p.summary ?? `relay project ${p.slug} (${p.repo})`,
+    description: p.summary ?? `relay project ${p.slug}${p.repo ? ` (${p.repo})` : ""}`,
     alternates: { canonical: `/projects/${p.slug}` },
   };
 }
@@ -50,14 +50,20 @@ export default async function ProjectPage({ params }: Props) {
         <div className="mt-2 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="min-w-0">
             <h1 className="text-2xl font-semibold tracking-tight">{p.slug}</h1>
-            <a
-              href={`https://github.com/${p.repo}`}
-              className="mt-1 inline-flex items-center gap-1 font-mono text-sm text-muted-foreground hover:text-primary"
-              rel="noopener noreferrer"
-              target="_blank"
-            >
-              {p.repo} <ArrowUpRight className="size-3.5" />
-            </a>
+            {p.repo ? (
+              <a
+                href={`https://github.com/${p.repo}`}
+                className="mt-1 inline-flex items-center gap-1 font-mono text-sm text-muted-foreground hover:text-primary"
+                rel="noopener noreferrer"
+                target="_blank"
+              >
+                {p.repo} <ArrowUpRight className="size-3.5" />
+              </a>
+            ) : (
+              <p className="mt-1 text-sm text-muted-foreground" title={`relay project add ${p.slug} --repo owner/name gives it one`}>
+                no repository
+              </p>
+            )}
             {p.summary && <p className="mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">{p.summary}</p>}
           </div>
           <dl className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-1">

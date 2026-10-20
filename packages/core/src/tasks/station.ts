@@ -5,11 +5,12 @@
  *
  *   queued  -> Queue        claimed -> Claimed        running -> Running
  *   held    -> Queue        (the injection gate holds it at the first stop; the flow task carries `held: true`)
- *   review  -> PR       while no preview is ready (none, building, or failed)
+ *   review  -> PR       while no preview is ready (none, building, or failed); an asset in review sits here too
  *           -> Preview  once the preview is ready and nobody has weighed in
  *           -> Review   once a person or bot engaged: a pr.review on GitHub, or relay's merge was refused
  *                       (task.merge_failed) after an approval, so a decision sits with someone
  *   done    -> Merged       failed  -> Failed (the siding under Running)
+ *                           (an approved asset is Merged as well: the vocabulary is the line's, the state is `done`)
  *
  * `since` is when the task entered that station: the timestamp of the last event that moved it there, so the dwell
  * timer under a pill says how long it has waited at *this* stop rather than how long the task has existed.
@@ -65,7 +66,11 @@ function latest(events: StationEvent[], pick: (e: StationEvent) => boolean): str
 }
 
 const QUEUE_KINDS = new Set(["issue.labeled", "issue.opened", "task.created", "pr.closed", "task.changes_requested", "task.requeued", "task.held", "task.released"]);
-const PUSH_KINDS = new Set(["pr.opened"]);
+/** The pushes that put a deliverable in front of a reviewer: a PR, or an asset uploaded on the issue (the asset path). */
+const PUSH_KINDS = new Set(["pr.opened", "asset.uploaded"]);
+const assetDecision = (e: StationEvent, decision: "approved" | "rejected"): boolean => e.kind === "asset.reviewed" && e.payload?.decision === decision;
+/** The rows that put a task (back) in the queue, including a rejected asset. */
+const queueMove = (e: StationEvent): boolean => QUEUE_KINDS.has(e.kind) || assetDecision(e, "rejected");
 
 /**
  * Which station a task sits at. `review` is split by the preview and by whether someone has engaged since the last
@@ -102,7 +107,7 @@ export function stationSince(task: StationInput, station: Station, events: Stati
   let ts: string | null = null;
   switch (station) {
     case "Queue":
-      ts = latest(events, (e) => QUEUE_KINDS.has(e.kind));
+      ts = latest(events, queueMove);
       break;
     case "Claimed":
       ts = opts.claimedAt ?? null;
@@ -120,7 +125,7 @@ export function stationSince(task: StationInput, station: Station, events: Stati
       ts = latest(events, (e) => e.kind === "pr.review" || e.kind === "task.merge_failed");
       break;
     case "Merged":
-      ts = task.merged_at ?? latest(events, (e) => e.kind === "pr.merged" || e.kind === "issue.closed" || (e.kind === "task.approved" && e.payload?.merged === true));
+      ts = task.merged_at ?? latest(events, (e) => e.kind === "pr.merged" || e.kind === "issue.closed" || (e.kind === "task.approved" && e.payload?.merged === true) || assetDecision(e, "approved"));
       break;
     case "Failed":
       ts = latest(events, (e) => e.kind === "run.failed" || finishedBad(e));

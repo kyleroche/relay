@@ -2,11 +2,12 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { AutoRefresh } from "@/components/board/auto-refresh";
 import { Board } from "@/components/board/board";
+import { ProjectFilter } from "@/components/board/project-filter";
 import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
-import { dataMode, getAssets, getBoard, getWorkers } from "@/lib/data";
+import { dataMode, getAssets, getBoard, getProjects, getWorkers } from "@/lib/data";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
 
 /** The board: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -17,9 +18,14 @@ export const BOARD_METADATA: Metadata = {
   alternates: { canonical: "/" },
 };
 
-export async function BoardPage({ all }: { all?: string } = {}) {
+export async function BoardPage({ all, project }: { all?: string; project?: string } = {}) {
   const db = dataMode() === "db";
-  const [tasks, workers, pending] = await Promise.all([getBoard({ limit: 300, doneLimit: 10 }), getWorkers(), getAssets({ status: "pending", limit: 50 })]);
+  const [tasks, workers, pending, projects] = await Promise.all([
+    getBoard({ limit: 300, doneLimit: 10, ...(project ? { project } : {}) }),
+    getWorkers(),
+    getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
+    getProjects(),
+  ]);
   const now = Date.now();
   const live = workers.filter((w) => !w.retired);
   const online = live.filter((w) => w.status !== "offline").length;
@@ -27,6 +33,7 @@ export async function BoardPage({ all }: { all?: string } = {}) {
   const waiting = tasks.filter((t) => t.state === "review" || t.state === "held").length;
   const moving = tasks.filter((t) => t.state === "queued" || t.state === "claimed" || t.state === "running").length;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const known = project ? projects.some((p) => p.slug === project) : true;
 
   return (
     <>
@@ -37,8 +44,9 @@ export async function BoardPage({ all }: { all?: string } = {}) {
             <h1 className="sr-only">Board</h1>
             <HomeTabs active="board" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges, request changes sends it back with your note, release lifts a hold. The board refreshes itself.
+              Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges a PR or accepts an asset, request changes or reject sends it back with your note, release lifts a hold. The board refreshes itself.
             </p>
+            <ProjectFilter projects={projects} current={project} className="mt-2" />
           </div>
           <div className="flex flex-col items-start gap-3 sm:items-end">
             {db && <ReviewPrompt prompt={REVIEW_AGENT_PROMPT} />}
@@ -53,7 +61,7 @@ export async function BoardPage({ all }: { all?: string } = {}) {
                   {waiting > 0 ? <span className="text-warn">{plural(waiting, "task")}</span> : plural(0, "task")}
                   <span className="text-muted-foreground"> · </span>
                   {pending.length > 0 ? (
-                    <Link href="/assets?status=pending" className="text-warn underline underline-offset-4">
+                    <Link href={project ? `/assets?status=pending&project=${encodeURIComponent(project)}` : "/assets?status=pending"} className="text-warn underline underline-offset-4">
                       {plural(pending.length, "asset")}
                     </Link>
                   ) : (
@@ -74,12 +82,17 @@ export async function BoardPage({ all }: { all?: string } = {}) {
         </div>
         {!db && <DemoNotice className="mt-3" />}
       </section>
-      {db && tasks.length === 0 && (
+      {db && tasks.length === 0 && !project && (
         <EmptyState title="No tasks yet" command={`relay task create --title "…" --lane claude`} className="mb-4">
           A task is a GitHub issue with an agent:* label. Open one with the command, the relay_task_create tool, or by labelling an issue; it appears in Queue here.
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} />
+      {tasks.length === 0 && project && (
+        <EmptyState title={known ? `No tasks in ${project}` : `No project ${project}`} command={known ? `relay task create --project ${project} --title "…" --lane claude` : `relay project add ${project} --repo owner/name`} className="mb-4">
+          {known ? "Nothing in motion, failed this week or merged for this project. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
+        </EmptyState>
+      )}
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} />
     </>
   );
 }

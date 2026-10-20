@@ -70,6 +70,17 @@ export const MOCK_PROJECTS: MockProject[] = [
     digest: { digested: 58, total: 122 },
     lanes: ["claude"],
   },
+  {
+    // a production: no checkout, its issues live in a repo shared with other productions (production:nightfall
+    // labels tell them apart), and a task's deliverable is an asset on the issue rather than a pull request
+    slug: "nightfall",
+    repo: "acme/productions",
+    stack: "Griptape Nodes · Seedance · ElevenLabs",
+    check_cmd: "",
+    summary: "A four-minute short: a lighthouse keeper's last night before the automation. Script and characters approved; shots and the teaser cut in progress.",
+    digest: { digested: 0, total: 0 },
+    lanes: ["claude"],
+  },
 ];
 
 const LANE_MODEL: Record<Lane, { model: string; subscription: Subscription }> = {
@@ -256,20 +267,21 @@ export const MOCK_ASSET_SEEDS: MockAssetSeed[] = [
   },
   {
     id: "01K7A0MOCKASSET0000000002A",
-    project: "studio-app",
-    issue: 73,
-    title: "Onboarding flow walkthrough",
-    description: "Screen recording of the new three-step onboarding on iPad, exported from the simulator.",
+    // the deliverable of the nightfall production's task (issue 12, below): the card on the board is this asset
+    project: "nightfall",
+    issue: 12,
+    title: "Teaser, 20-second cut",
+    description: "First cut of the teaser from the approved shots: cold open on the harbour, title card at 0:14, end on the lighthouse.",
     kind: "video",
     mime: "video/mp4",
     size: 18_422_911,
-    width: 1668,
-    height: 2388,
-    duration_ms: 42_600,
+    width: 1920,
+    height: 1080,
+    duration_ms: 20_400,
     status: "pending",
     created_by: "runner:studio",
     hoursAgo: 3.2,
-    tags: ["onboarding"],
+    tags: ["stage:cut", "teaser"],
   },
   {
     id: "01K7A0MOCKASSET0000000003A",
@@ -743,6 +755,20 @@ function build(now: number): Dataset {
     url: null,
     payload: { guidance_count: 96, skill_count: 3 },
   });
+
+  // The nightfall production's task: a run on the claude lane whose deliverable is the teaser cut (the video asset
+  // seeded above lands on issue 12 at 3.2 h ago, from the asset loop below), so the board carries one asset card.
+  {
+    const p = MOCK_PROJECTS.find((x) => x.slug === "nightfall") as MockProject;
+    const issue = 12;
+    const base = { project: p.slug, repo: p.repo, issue, pr: null, subscription: null, url: `https://github.com/${p.repo}/issues/${issue}` };
+    push({ ...base, ts: new Date(now - 4 * H).toISOString(), kind: "issue.opened", actor: HUMAN, lane: null, model: null, summary: "Teaser: 20-second cut from the approved shots", payload: { via: "relay_task_create", labels: ["agent:claude", "production:nightfall", "stage:cut"] } });
+    push({ ...base, ts: new Date(now - 4 * H + 2 * MIN).toISOString(), kind: "issue.labeled", actor: HUMAN, lane: "claude", model: null, summary: "Labelled agent:claude", payload: { label: "agent:claude" } });
+    const started = now - 3.9 * H;
+    push({ ...base, ts: new Date(started).toISOString(), kind: "run.started", actor: RUNNER, lane: "claude", model: LANE_MODEL.claude.model, summary: `Claimed #${issue} on claude lane, nodes engine ready`, url: null, payload: { worktree: null } });
+    push({ ...base, ts: new Date(now - 3.5 * H).toISOString(), kind: "step.usage", actor: RUNNER, lane: "claude", model: LANE_MODEL.claude.model, subscription: LANE_MODEL.claude.subscription, tokens_in: 18_400, tokens_out: 2_100, cache_read: 9_000, cache_write: 0, cost_equiv: costEquiv(LANE_MODEL.claude.model, 18_400, 2_100, 9_000, 0), duration_ms: 1_320_000, summary: "Assemble the cut from the shot list · render", url: null, payload: { step: 1, exit: 0 } });
+    push({ ...base, ts: new Date(now - 3.1 * H).toISOString(), kind: "run.finished", actor: RUNNER, lane: "claude", model: LANE_MODEL.claude.model, duration_ms: now - 3.1 * H - started, summary: "Rendered the 20 s cut and uploaded it to the library for review", payload: { exit: 0, steps: 1, conclusion: "success" } });
+  }
 
   // Assets and the events their lifecycle wrote.
   const assets = mockAssets(now);

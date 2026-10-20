@@ -18,6 +18,7 @@ function show(t: TaskView): void {
   console.log(`${t.id}  ${t.state}${t.lane ? `  lane ${t.lane}` : ""}${t.runner ? `  ${t.runner}` : ""}`);
   console.log(`issue: ${t.issue_url}${t.pr_url ? `\npr:    ${t.pr_url}` : ""}${t.branch ? `\nbranch: ${t.branch}` : ""}`);
   if (t.preview_url || t.preview_state !== "none") console.log(`preview: ${t.preview_state}${t.preview_url ? ` ${t.preview_url}` : ""}`);
+  if (t.asset) console.log(`asset: ${t.asset.kind} v${t.asset.version} ${t.asset.id} (relay asset review ${t.asset.id} --approve|--reject)`);
   if (t.run_summary) console.log(`run:   ${t.run_summary.slice(0, 200)}`);
   if (t.usage) console.log(`usage: ${t.usage.runs} run${t.usage.runs === 1 ? "" : "s"}, ${t.usage.tokens_in + t.usage.cache_read} in / ${t.usage.tokens_out} out, $${t.usage.cost_equiv.toFixed(2)} equiv${t.usage.model ? ` (${t.usage.model})` : ""}`);
   if (t.review.decided) console.log(`review: ${t.review.decided.replace("_", " ")} by ${t.review.by} ${t.review.at?.slice(0, 16) ?? ""}${t.review.note ? `: ${t.review.note.split("\n")[0]?.slice(0, 120)}` : ""}`);

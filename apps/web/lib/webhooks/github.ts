@@ -4,7 +4,9 @@
  * `issue_comment` deliveries carrying the runner's usage block go through `githubEvents`, which
  * may yield two rows (step.usage and, in review mode, pr.review).
  */
+import { isWorkerLane, WORKER_LANES } from "@relay/core";
 import type { Lane, NewEvent } from "@/lib/types";
+import { resolveProject, type TaskProjectLookup } from "./project.ts";
 import { parseUsageComment, senderTrusted, usageEvents } from "./usage.ts";
 
 type Json = Record<string, unknown>;
@@ -19,9 +21,14 @@ function actorOf(payload: Json): string {
   return `human:${login}`;
 }
 
+/** The worker lanes as a regex alternative, so a lane added to core's WORKER_LANES is read here without another edit. */
+const LANE_ALT = WORKER_LANES.join("|");
+const LANE_LABEL = new RegExp(`^agent:(${LANE_ALT})$`);
+const RELAY_BRANCH = new RegExp(`^relay\\/(?:(${LANE_ALT})-(\\d+)|(\\d+)-(${LANE_ALT}))(?:$|[-/])`);
+
 function laneOf(label: string | undefined): Lane | null {
-  const m = /^agent:(claude|codex|grok)$/.exec(label ?? "");
-  return (m?.[1] as Lane | undefined) ?? null;
+  const m = LANE_LABEL.exec(label ?? "");
+  return m?.[1] && isWorkerLane(m[1]) ? m[1] : null;
 }
 
 function laneFromLabels(labels: unknown): Lane | null {
@@ -38,7 +45,7 @@ function laneFromLabels(labels: unknown): Lane | null {
  * still read). Null for any other branch.
  */
 function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number } | null {
-  const m = /^relay\/(?:(claude|codex|grok)-(\d+)|(\d+)-(claude|codex|grok))(?:$|[-/])/.exec(branch ?? "");
+  const m = RELAY_BRANCH.exec(branch ?? "");
   if (!m) return null;
   const lane = (m[1] ?? m[4]) as Lane;
   const issue = Number(m[2] ?? m[3]);
@@ -70,8 +77,18 @@ function linkedIssue(pr: Json): number | null {
   return relayBranch(get<string>(pr, "head.ref"))?.issue ?? null;
 }
 
-/** Every row a delivery produces. Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`. */
-export async function githubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
+/**
+ * Every row a delivery produces, with its project resolved (`resolveProject`: the task row, a `production:<slug>`
+ * label, the repository's name). Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`.
+ */
+export async function githubEvents(eventName: string, payload: Json, deliveryId: string, deps: { taskProject?: TaskProjectLookup } = {}): Promise<NewEvent[]> {
+  const rows = await rawGithubEvents(eventName, payload, deliveryId);
+  const labels = get(payload, "issue.labels") ?? get(payload, "pull_request.labels");
+  const repoName = get<string>(payload, "repository.name") ?? null;
+  return Promise.all(rows.map(async (e) => ({ ...e, project: await resolveProject({ repo: e.repo ?? null, issue: e.issue ?? null, labels, repoName }, deps.taskProject) })));
+}
+
+async function rawGithubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
   if (eventName === "issue_comment") {
     const action = get<string>(payload, "action");
     if (action !== "created" && action !== "edited") return [];
@@ -99,6 +116,7 @@ export async function githubEvents(eventName: string, payload: Json, deliveryId:
   return one ? [one] : [];
 }
 
+/** One delivery as a row, project = the repository's name (`githubEvents` resolves the shared-repo cases). */
 export function normalizeGitHub(eventName: string, payload: Json, deliveryId: string): NewEvent | null {
   const repo = get<string>(payload, "repository.full_name") ?? null;
   const project = get<string>(payload, "repository.name") ?? null;

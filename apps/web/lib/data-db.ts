@@ -15,7 +15,7 @@ import { repo, type AssetRow } from "@relay/core";
 
 type EventRow = repo.EventRow;
 type ModelRow = repo.ModelRow;
-import { getStore, taskUrl, toAsset, toVersion } from "./assets.ts";
+import { getStore, taskUrl, toAsset, toVersion, viewUrl } from "./assets.ts";
 import { getDb } from "./db.ts";
 import type { EventKind } from "./events.ts";
 import { composeMeters } from "./meters.ts";
@@ -105,7 +105,7 @@ export const dbSource: DataSource = {
         const s = byslug.get(p.slug);
         return {
           slug: p.slug,
-          repo: p.repo ?? "",
+          repo: p.repo,
           stack: p.stack,
           summary: p.summary,
           lastActivity: s?.last_activity ?? p.updated_at,
@@ -244,12 +244,16 @@ export const dbSource: DataSource = {
     return repo.listTaskViews(await getDb(), opts);
   },
 
-  /** Expired leases are released first so a vanished worker's task reads `queued`, as the fold would have said. */
+  /**
+   * Expired leases are released first so a vanished worker's task reads `queued`, as the fold would have said. A card
+   * whose deliverable is an asset gets its thumbnail signed here (VIEW_TTL, like the library's cards).
+   */
   async getBoard(opts = {}): Promise<BoardTask[]> {
     const db = await getDb();
     const now = Date.now();
     await repo.expireLeases(db, now);
-    return repo.boardTasks(db, { now, ...opts });
+    const rows = await repo.boardTasks(db, { now, ...opts });
+    return Promise.all(rows.map(async (r) => ({ ...r, asset_thumb_url: await viewUrl(r.asset_thumb_key) })));
   },
 
   async getModels(): Promise<ModelInfo[]> {

@@ -48,7 +48,9 @@ export async function POST(req: NextRequest) {
     events = outcome.events;
     registered = outcome.registered;
   } else {
-    events = await githubEvents(eventName, payload, delivery);
+    // a shared (productions) repo: the task row names the issue's project before the label or the repo name does
+    const taskProject = dataMode() === "db" ? async (repoName: string, issue: number) => (await repo.getTask(await getDb(), repo.taskId(repoName, issue)))?.project : undefined;
+    events = await githubEvents(eventName, payload, delivery, { ...(taskProject ? { taskProject } : {}) });
   }
   if (!events.length) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });
 
@@ -79,7 +81,9 @@ async function recordLabelledTask(e: NewEvent): Promise<void> {
       return;
     }
     const db = await getDb();
-    const project = (await repo.listProjects(db)).find((p) => p.repo === e.repo);
+    // on a shared repo, the project the delivery resolved to (a production: label); else whichever project has the repo
+    const candidates = await repo.projectsOnRepo(db, e.repo);
+    const project = candidates.find((p) => p.slug === e.project) ?? candidates[0];
     if (!project) return;
     const title = typeof e.payload?.title === "string" ? e.payload.title : null;
     await repo.createTask(db, { project: project.slug, repo: e.repo, issue: e.issue, createdBy: e.actor, lane: e.lane, title });
