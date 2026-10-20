@@ -4,6 +4,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CLOUD_LANES, heldInfo, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
 type EventRow = core.EventRow;
+import { Thumb } from "@/components/assets/asset-card";
+import { AssetReviewActions } from "@/components/assets/asset-review-actions";
+import { AssetViewer } from "@/components/assets/asset-viewer";
+import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { ReleaseAction } from "@/components/tasks/release-action";
@@ -13,13 +17,15 @@ import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
 import { SectionHeading } from "@/components/ui/section-heading";
-import { dataMode, getFeed, getTasks } from "@/lib/data";
+import { dataMode, getAsset, getFeed, getTasks } from "@/lib/data";
 import { toFeedEvent } from "@/lib/data-db";
 import { getDb } from "@/lib/db";
 import { fmtAgo, fmtCost, fmtDuration, fmtTokens } from "@/lib/format";
 import { requireSession } from "@/lib/session";
 import { taskTitle } from "@/lib/tasks";
 import { viewerTimeZone } from "@/lib/tz-server";
+import type { AssetDetail } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
 type Props = { params: Promise<{ owner: string; repo: string; n: string }> };
 
@@ -54,7 +60,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: l ? `${l.task.id}: ${l.title}` : "Task not found", robots: { index: false } };
 }
 
-const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed"]);
+const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed", "asset.uploaded", "asset.reviewed"]);
 /** States a task can be requeued from on this page: anything but done. A queued task is requeued to move it to another lane. */
 const REQUEUE_STATES = new Set(["queued", "running", "failed", "review", "claimed"]);
 
@@ -62,7 +68,8 @@ const REQUEUE_STATES = new Set(["queued", "running", "failed", "review", "claime
  * One task, top to bottom: the issue (title, id, lane, state, worker), the Held card while the injection gate holds
  * it (score, reasons, Release and Requeue), the preview as the primary element when there
  * is one, the decision buttons while the task is in review (and Requeue whenever the task is in flight or stuck), the
- * PR, the run's summary and cost, the review history and
+ * asset the task delivered when its deliverable is one (the viewer, the versions, Approve / Reject; the asset path in
+ * docs/ARCHITECTURE.md "A task's life"), the PR, the run's summary and cost, the review history and
  * every feed row about the task. Everything of record is on GitHub; this page reads the feed and acts through the
  * same core functions the API and the MCP tools use.
  */
@@ -72,6 +79,7 @@ export default async function TaskPage({ params }: Props) {
   const [l, tz] = await Promise.all([load(p), viewerTimeZone()]);
   if (!l) notFound();
   const { task: t, events, title } = l;
+  const asset: AssetDetail | null = t.asset ? await getAsset(t.asset.id) : null;
   const now = Date.now();
   const history = events.filter((e) => REVIEW_KINDS.has(e.kind)).slice(-12).reverse();
   const inReview = t.state === "review";
@@ -183,7 +191,9 @@ export default async function TaskPage({ params }: Props) {
             <SectionHeading id="decide-h">Decide</SectionHeading>
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
               {inReview
-                ? `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"}; Request changes sends your note to the next run.`
+                ? t.asset
+                  ? "The deliverable is the asset in the card below: Approve accepts it and closes the issue; Reject sends your note to the next run. Requeue starts over on a lane."
+                  : `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"}; Request changes sends your note to the next run.`
                 : t.lane?.endsWith("-cloud")
                   ? "A cloud lane holds this task; if that lane is not wired, requeue it on a worker lane."
                   : t.state === "failed"
@@ -199,9 +209,67 @@ export default async function TaskPage({ params }: Props) {
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2">
-              {inReview && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
+              {inReview && !t.asset && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
               <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
             </div>
+          </section>
+        )}
+
+        {asset && (
+          <section aria-labelledby="asset-h" className="rounded-lg border bg-card p-4">
+            <SectionHeading
+              id="asset-h"
+              action={
+                <Link href={`/assets/${asset.asset.id}`} className="inline-flex items-center gap-0.5 text-primary underline underline-offset-4">
+                  Open in the library <ArrowUpRight className="size-3" aria-hidden="true" />
+                </Link>
+              }
+            >
+              Asset <AssetStatusBadge status={asset.asset.status} />
+            </SectionHeading>
+            <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+              <span className="text-foreground">{asset.asset.title}</span>
+              <span className="font-mono">v{asset.asset.version}</span>
+              <span>{asset.asset.kind}</span>
+              <span className="font-mono">{asset.asset.mime}</span>
+              <span>
+                by <ActorChip actor={asset.asset.created_by} className="align-middle" />
+              </span>
+            </p>
+            <div className="mt-3">
+              <AssetViewer asset={asset.asset} />
+            </div>
+            {asset.versions.length > 1 && (
+              <ol className="mt-3 flex gap-2 overflow-x-auto pb-1" aria-label="Versions">
+                {asset.versions.map((v) => {
+                  const current = v.id === asset.asset.id;
+                  return (
+                    <li key={v.id} className="shrink-0">
+                      <Link href={`/assets/${v.id}`} aria-current={current ? "page" : undefined} className={cn("flex w-28 flex-col gap-1 rounded-md border p-1.5 transition-colors hover:border-primary/50", current && "border-primary ring-1 ring-primary")}>
+                        <Thumb asset={{ thumb_url: v.thumb_url, kind: asset.asset.kind, title: asset.asset.title, url: null }} className="aspect-[16/10] rounded-sm" />
+                        <span className="flex items-center justify-between font-mono text-[11px]">
+                          <span>v{v.version}</span>
+                          <span className="text-muted-foreground">{fmtAgo(v.created_at, now)}</span>
+                        </span>
+                        <AssetStatusBadge status={v.status} className="w-fit" />
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
+            {asset.asset.review_note && (
+              <p className="mt-3 rounded bg-muted p-2 text-xs">
+                <span className="text-muted-foreground">{asset.asset.status === "rejected" ? "Rejected" : "Reviewed"} by </span>
+                {asset.asset.reviewed_by && <ActorChip actor={asset.asset.reviewed_by} className="align-middle" />}
+                <span className="mt-1 block whitespace-pre-wrap font-mono">{asset.asset.review_note}</span>
+              </p>
+            )}
+            {asset.asset.status === "pending" && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 border-t pt-3">
+                <AssetReviewActions assetId={asset.asset.id} version={asset.asset.version} canWrite={dataMode() === "db"} />
+              </div>
+            )}
           </section>
         )}
 
@@ -213,7 +281,7 @@ export default async function TaskPage({ params }: Props) {
                 #{t.pr} <ArrowUpRight className="size-3.5" aria-hidden="true" />
               </a>
             ) : (
-              <p className="mt-1 text-sm text-muted-foreground">{t.state === "queued" || t.state === "claimed" || t.state === "running" ? "Opens when the run finishes." : "None."}</p>
+              <p className="mt-1 text-sm text-muted-foreground">{t.asset ? "None: the deliverable is the asset above." : t.state === "queued" || t.state === "claimed" || t.state === "running" ? "Opens when the run finishes." : "None."}</p>
             )}
             {t.merged_at && (
               <p className="mt-1 text-xs text-ok">
@@ -294,7 +362,7 @@ export default async function TaskPage({ params }: Props) {
                     )}
                   </p>
                   <p className="mt-1">{e.kind === "task.merge_failed" ? <span className="text-muted-foreground">merge refused</span> : e.summary}</p>
-                  {e.kind === "task.changes_requested" && typeof e.payload.note === "string" && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
+                  {(e.kind === "task.changes_requested" || e.kind === "asset.reviewed") && typeof e.payload.note === "string" && e.payload.note && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
                   {e.kind === "task.requeued" && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
                   {e.kind === "task.held" && Array.isArray(e.payload.reasons) && e.payload.reasons.length > 0 && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{(e.payload.reasons as unknown[]).map(String).join("\n")}</p>}
                   {e.kind === "task.released" && typeof e.payload.note === "string" && e.payload.note && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}

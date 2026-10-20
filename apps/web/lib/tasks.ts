@@ -9,8 +9,8 @@ export const STATE_HINT: Record<TaskState, string> = {
   held: "The injection gate flagged the issue text as instructions aimed at the agent; no worker runs it until someone reads it and releases it.",
   claimed: "A worker holds the lease and is cloning the repository.",
   running: "The lane is working in a fresh clone on the worker.",
-  review: "A pull request is open. Look at the preview, then approve or request changes.",
-  done: "Merged (by an approval here or on GitHub) or the issue was closed.",
+  review: "A pull request is open, or an asset was delivered on the issue. Look at the preview or the asset, then approve, or send it back with a note.",
+  done: "Merged (by an approval here or on GitHub), the asset was approved, or the issue was closed.",
   failed: "The lane exited with an error, made no changes, or timed out; the run's summary says what happened.",
 };
 

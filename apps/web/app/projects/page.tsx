@@ -41,7 +41,7 @@ export default async function ProjectsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h2 className="truncate text-base font-medium">{p.slug}</h2>
-                  <p className="truncate font-mono text-xs text-muted-foreground">{p.repo}</p>
+                  {p.repo ? <p className="truncate font-mono text-xs text-muted-foreground">{p.repo}</p> : <p className="text-xs text-muted-foreground">no repository</p>}
                 </div>
                 {p.lastActivity ? <RelTime iso={p.lastActivity} now={now} className="shrink-0 text-xs text-muted-foreground" /> : <span className="shrink-0 text-xs text-muted-foreground">no activity</span>}
               </div>

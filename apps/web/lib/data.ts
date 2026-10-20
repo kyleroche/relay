@@ -9,7 +9,7 @@
 import { dbSource } from "./data-db.ts";
 import { mockSource } from "./data-mock.ts";
 import { dataMode } from "./mode.ts";
-import type { AssetListOptions, AssetReview, DataSource, FeedOptions, NewEvent, TaskListOptions, UsageWindow } from "./types.ts";
+import type { AssetListOptions, AssetReview, BoardOptions, DataSource, FeedOptions, NewEvent, TaskListOptions, UsageWindow } from "./types.ts";
 
 export { SITE_URL, REPO_URL } from "./site.ts";
 export { dataMode, publicReadEnabled, type DataMode } from "./mode.ts";
@@ -24,7 +24,7 @@ export const getProject = (slug: string) => source().getProject(slug);
 export const getUsage = (window: UsageWindow) => source().getUsage(window);
 export const getWorkers = () => source().getWorkers();
 export const getTasks = (opts?: TaskListOptions) => source().getTasks(opts);
-export const getBoard = (opts?: { limit?: number; doneLimit?: number }) => source().getBoard(opts);
+export const getBoard = (opts?: BoardOptions) => source().getBoard(opts);
 export const getModels = () => source().getModels();
 export const writeEvent = (event: NewEvent) => source().writeEvent(event);
 export const getAssets = (opts?: AssetListOptions) => source().getAssets(opts);

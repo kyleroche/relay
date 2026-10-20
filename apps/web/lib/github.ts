@@ -45,7 +45,12 @@ export async function commentUploaded(repo: string | null | undefined, asset: As
   return gh("POST", `/repos/${repo}/issues/${n}/comments`, { body });
 }
 
-/** The decision, and on rejection the issue is reopened so the next attempt picks the note up from its brief. */
+/**
+ * The decision. On an asset that sits on an issue (a task's deliverable, docs/ARCHITECTURE.md "A task's life", the
+ * asset path) the issue follows it: closed as completed on approval (GitHub's `issue.closed` then agrees with the
+ * task's `done`), reopened on rejection so the next attempt picks the note up from its brief. Best effort, like the
+ * comment: the review is already recorded.
+ */
 export async function commentReviewed(repo: string | null | undefined, asset: Asset): Promise<boolean> {
   const n = target(asset);
   if (!repo || !n) return false;
@@ -53,11 +58,11 @@ export async function commentReviewed(repo: string | null | undefined, asset: As
   const body = [
     `**relay asset** [${asset.title}](${SITE_URL}/assets/${asset.id}) (v${asset.version}) was **${rejected ? "rejected" : "approved"}** by \`${asset.reviewed_by ?? "a reviewer"}\`.`,
     asset.review_note ? `\n> ${asset.review_note}` : "",
-    rejected ? "\nThe note is recorded as a project decision; the next attempt will see it in its brief." : "",
+    rejected ? "\nThe note is recorded as a project decision; the next attempt will see it in its brief." : asset.issue ? "\nThe issue is closed: this asset is its deliverable." : "",
     "",
     `<!-- relay:asset ${asset.id} ${asset.status} -->`,
   ].join("\n");
   const ok = await gh("POST", `/repos/${repo}/issues/${n}/comments`, { body });
-  if (rejected && asset.issue) await gh("PATCH", `/repos/${repo}/issues/${asset.issue}`, { state: "open" });
+  if (asset.issue) await gh("PATCH", `/repos/${repo}/issues/${asset.issue}`, rejected ? { state: "open" } : { state: "closed", state_reason: "completed" });
   return ok;
 }
