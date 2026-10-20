@@ -59,7 +59,13 @@ export async function installationEvents(eventName: string, payload: Json, deliv
     return out;
   }
 
-  const existing = new Map((await repo.listProjects(deps.db)).filter((p) => p.repo).map((p) => [p.repo!.toLowerCase(), p.slug]));
+  // one slug per repo; when several projects share one (a productions repo) the one named after the repo stands for it
+  const existing = new Map<string, string>();
+  for (const p of await repo.listProjects(deps.db)) {
+    if (!p.repo) continue;
+    const key = p.repo.toLowerCase();
+    if (!existing.has(key) || p.slug.toLowerCase() === key.split("/")[1]) existing.set(key, p.slug);
+  }
 
   for (const r of connected) {
     let slug = existing.get(r.full_name.toLowerCase()) ?? null;
