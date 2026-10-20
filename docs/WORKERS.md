@@ -33,9 +33,11 @@ embedded PGlite file), which is how the tests run and how a single laptop can se
 | `claude` | `claude auth status` reports logged in | `claude -p --permission-mode acceptEdits --allowedTools <CODE_TOOLS> --disallowedTools <CODE_DISALLOWED_TOOLS> --settings <sandbox> --max-turns 40`, no MCP servers, no user settings; Bash runs in Claude Code's OS sandbox ("What a job may run" below) |
 | `codex` | `codex login status` is logged in, or `fx status` lists a Codex login | `codex exec --json --sandbox workspace-write -c agents.enabled=false` (or `fx ask --auto` when only fx is installed) |
 | `grok` | the `grok` CLI is on PATH, or `fx status` lists a Grok login | `grok -p --output-format json --no-subagents --no-plan --permission-mode acceptEdits` (or fx) |
+| `nodes` | the Griptape Nodes engine is installed (`griptape-nodes` on PATH with its uv venv; `relay doctor`'s `nodes` line) | `run_workflow.py` under the engine's own Python: the workflow the issue's manifest names, headless; outputs become assets on the issue, no PR ("The nodes lane" below) |
 
-`gh` must be logged in for any lane: the clone, the push and the PR run as that account (`gh auth login`, then
-`gh auth setup-git`). Force the set with `--lanes claude,codex`; a machine without a lane's login must not serve it.
+`gh` must be logged in for any lane: the clone, the push and the PR (or, for `nodes`, the issue comment) run as that
+account (`gh auth login`, then `gh auth setup-git`). Force the set with `--lanes claude,codex`; a machine without a
+lane's login must not serve it.
 Models come from `RELAY_MODEL_CLAUDE` (`opus` by default), `RELAY_MODEL_CODEX`, `RELAY_MODEL_GROK`. No lane ever runs
 with permission checks bypassed, and the job's environment (`cleanEnv`) drops any `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `XAI_API_KEY`, `GH_TOKEN` or `GITHUB_TOKEN` so the run cannot slip onto a key instead of the
@@ -166,7 +168,10 @@ rules handle that:
 6. `git push --force-with-lease -u origin <branch>`; `gh pr create --title "<lane>: <title>" --body "Closes #N"`
    (or the existing PR is reused); one comment with the lane's summary and the `<!-- relay:usage -->` block.
 7. `release` reports the outcome, the PR, the lane's usage and the gate's (`gate_usage`, a second `step.usage` row on
-   lane `gate`). The clone is deleted (`--keep` keeps it).
+   lane `gate`), and `extra_usage` when the lane earned more rows (the nodes lane, one per output model). The clone
+   is deleted (`--keep` keeps it).
+
+A `nodes` task replaces steps 3 to 6 with the engine run and the asset uploads ("The nodes lane" below).
 
 The usage block in the PR comment is marked `"source": "relay-work"`; the GitHub webhook shows it to humans but does
 not count it again, because the release already wrote the `step.usage` row. One worker runs one job at a time by
@@ -190,6 +195,65 @@ The worker is done when `release` is reported; the rest is the review step (`pac
 
 A bot may decide only when its token holds `tasks:write`, and never on a PR its own lane produced; a merge GitHub
 refuses (conflicts, required checks) is `task.merge_failed` with GitHub's reason, and the task stays in review.
+
+### The nodes lane
+
+A `nodes` task is a production step, not a code change: the issue names a [Griptape Nodes](https://docs.griptapenodes.com)
+workflow in the task's repository, a worker with the engine installed runs it headless, and whatever the workflow's
+end nodes produced (video, images, audio) lands as assets on the issue. No branch is pushed and no PR is opened; the
+task goes to review through its assets.
+
+**What the worker needs.** The engine (`griptape-nodes`, installed as a uv tool; `relay doctor` prints a `nodes` line
+with the version, the interpreter the shim will run under, the workspace and which vendor key names are set, and
+`relay work` serves the lane when that line is not a failure), `gh` logged in (the clone and the issue comment), and
+the vendor keys the workflow's nodes read, in that machine's environment (`GT_CLOUD_API_KEY`, `ARK_API_KEY`,
+`OPENAI_API_KEY`, ...; the probe reports names only, never values). In site mode the worker's token must carry
+`assets:write` and `assets:read` for the upload; `relay setup --site` asks for both by default. A machine whose engine
+config fails its schema still serves the lane: the doctor line says so, and relay's shim registers the workflow's
+libraries itself (from `RELAY_NODES_LIBRARIES`, the user config read raw, or the engine's synced library directory).
+`RELAY_NODES_PYTHON` points the shim at a specific interpreter when the launcher's venv is not the one to use.
+
+**The manifest** is a fenced block in the issue body (JSON, or the YAML subset `packages/core/src/tasks/manifest.ts`
+reads: nested mappings, `- ` lists, inline `[a, b]`, JSON values, quoted or bare scalars):
+
+```relay-nodes
+workflow: workflows/cutscene.py        # repo-relative, must end in .py, no `..`
+inputs:                                # { <start node>: { <parameter>: value } }, the engine's flow input
+  Start Flow:
+    prompt: "A rain-slicked street at night"
+    duration: 8
+outputs: [End Flow]                    # optional: only these end nodes become assets (default: every end node);
+                                       # text parameters are kept only for listed nodes
+model: bytedance/seedance-2.0          # optional: the model id for the usage rows when relay does not know the node type
+stage: cutscene                        # optional: a tag on the assets
+```
+
+**What a run does.** The clone and the injection gate are the same as every lane; then, instead of the prompt:
+
+1. The manifest is parsed from the issue body (a missing or malformed block is a failed run whose summary says what
+   to fix) and the workflow is resolved inside the clone (a path outside it is refused).
+2. `packages/cli/python/run_workflow.py` (shipped as `dist/python/`) runs under the engine's interpreter with the
+   workflow, the inputs as a JSON file and an output directory, under the job's time limit. The engine's own output
+   goes to stderr; stdout ends with one JSON document: `{ ok, outputs: [{ node, parameter, path, mime, bytes,
+   seconds?, provider_job_id? }], nodes_run: [{ node, type, library }], engine_version, seconds, error? }`. URL
+   artifacts are downloaded, blob artifacts written, lists walked; an end node's control and status parameters are
+   skipped.
+3. Every output file is ingested as an asset on the issue (`runner:<worker>` as creator; on a site, through the
+   multipart `POST /api/v1/assets`), titled `<issue title> v<n>` and tagged with the project, the `stage`, the node
+   name and `nodes:<node>/<parameter>`. A re-run supersedes the last asset with the same `nodes:` tag, so each output
+   keeps a version history on the issue.
+4. One issue comment lists the assets with links and carries the `<!-- relay:usage -->` block (`mode: nodes`).
+5. `release` reports `run.finished` ("produced N outputs: ...") or `run.failed` ("produced no output", the engine's
+   error, or the manifest problem), the run's usage, and `extra_usage`: one `step.usage` row per output model.
+
+**Costs.** The engine calls the vendors with the machine's keys, so a run is paid use. relay records one `step.usage`
+per output model on lane `video`, `image` or `audio` (by what came out), tokens 0, the model from the node type it ran
+(`NODE_MODELS` in `packages/core/src/lanes/nodes.ts`: Seedance, Seedream, OpenAI image, Gemini image, ElevenLabs),
+else the manifest's `model`, else null. The cost comes from `MEDIA_PRICES` in `packages/core/src/ledger/ledger.ts`
+when the model is priced there (per output, per second, or both; rows come from the vendor's own price page only);
+otherwise `cost_equiv` is 0 and the row's payload says `cost_unknown: true`. `relay lane nodes --workflow <file>
+--inputs '<json>' [--out <dir>] [--outputs "End Flow"] [--model <id>]` runs the same shim by hand and writes the same
+rows to this machine's ledger (local mode).
 
 ### Requeue: back to the queue, perhaps on another lane
 
@@ -438,6 +502,9 @@ GitHub; it is optional. docs/RUNNERS.md has the once-per-vendor setup and the li
 ## Troubleshooting
 
 - `relay work` says *no lanes to serve*: `relay doctor` shows which login is missing; log in, or force with `--lanes`.
+- A `nodes` run fails with *the workflow needs libraries the engine does not have*: open Griptape Nodes once on that
+  machine so it installs them, or set `RELAY_NODES_LIBRARIES` to the `griptape_nodes_library.json` paths. The
+  `nodes` doctor line warns when the engine's config file fails its schema (the engine then runs with defaults).
 - A task stays `queued`: no online worker serves its lane, or its project requires labels no worker has
   (`relay task get <id>`; the workers page lists lanes and labels per worker).
 - A task flips `running` → `queued`: the worker lost its lease mid-run (asleep, offline, killed). The next claim starts
