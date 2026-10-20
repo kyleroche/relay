@@ -22,6 +22,7 @@ export const DOCS: DocEntry[] = [
   { slug: "architecture", title: "Architecture", description: "The five rules, the pieces, and a task's life. The source of truth for design.", file: "docs/ARCHITECTURE.md" },
   { slug: "api", title: "API and MCP", description: "The public read API under /api/v1, rate limits, errors, scopes, and the MCP server at /mcp.", file: null },
   { slug: "assets", title: "Assets", description: "Private media storage with versions and an approve-or-reject review loop; the HTTP, MCP and CLI surfaces over it.", file: "docs/ASSETS.md" },
+  { slug: "productions", title: "Productions", description: "Running a short on relay: one tracker repo, a project per production, the nodes lane that runs a Griptape Nodes workflow, assets as the deliverable, approve or reject on the board.", file: "docs/PRODUCTIONS.md" },
   { slug: "workers", title: "Workers", description: "How a machine becomes a worker with relay work: lanes from logins, the claim and lease protocol, what a job does, the service files, and cloud lanes.", file: "docs/WORKERS.md" },
   { slug: "feed", title: "The feed", description: "Every event kind, where it comes from, the worker's usage comment, the ledger view, and the outbound webhook contract.", file: "docs/FEED.md" },
   { slug: "memory", title: "Memory", description: "Decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and site mode for machines without the database.", file: "docs/MEMORY.md" },

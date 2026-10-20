@@ -26,6 +26,7 @@ Zero-browser path: an operator runs `relay invite create --for <you> --scopes â€
 - [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, sign-in, token lifetimes and revocation, what the consent page shows, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and the `relay_*` MCP tools
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
+- [Productions](docs/PRODUCTIONS.md): running a short: one tracker repo, a project per production, the `nodes` lane (a Griptape Nodes workflow run headless), assets as the deliverable, approve or reject on the board
 - [Feed](docs/FEED.md): event kinds, sources, the ledger view, and the outbound webhook contract (payload, signature)
 - [Connect in one step](docs/INTEGRATIONS.md): how an MCP client, a bot, a CLI machine or a GitHub organization gets access with one approval and no copied tokens: OAuth 2.1 with consent, the device flow, invite codes, the GitHub App, the tools, the webhook contract, and a Grok Bot walkthrough
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it

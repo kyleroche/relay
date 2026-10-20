@@ -109,7 +109,7 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 
 ## Where to read more
 
-`AGENTS.md` at the repo root is written for agents and is the source of truth for commands and conventions; `docs/ARCHITECTURE.md` holds the five rules and a task's life; `docs/WORKERS.md` is how a machine becomes a worker and what a job does.
+`AGENTS.md` at the repo root is written for agents and is the source of truth for commands and conventions; `docs/ARCHITECTURE.md` holds the five rules and a task's life; `docs/WORKERS.md` is how a machine becomes a worker and what a job does; `docs/PRODUCTIONS.md` is how a short (script, characters, shots, voice-over, cut) runs on relay: one tracker repo, `relay project add <slug> --repo <owner>/<tracker>` per production, tasks on the `nodes` lane with a ```relay-nodes manifest, assets reviewed on the board.
 
 ## A clean machine, what the first install hits
 

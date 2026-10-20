@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
-import { TASK_LANES, TASK_PRIORITIES, TASK_STATES, isTaskState, type TaskLane, type TaskPriority, type TaskView } from "@relay/core";
+import { MANIFEST_FENCE, manifestFromValue, parseManifestText, TASK_LANES, TASK_PRIORITIES, TASK_STATES, isTaskState, type TaskLane, type TaskPriority, type TaskView } from "@relay/core";
 import { log, openReady, resolveProject } from "./_common.ts";
 
 function line(t: TaskView): string {
@@ -37,17 +37,23 @@ export function registerTask(program: Command): void {
     .option("--project <slug>", "project slug (default: the linked project of the cwd)")
     .option("--body <text>", "issue body (markdown)")
     .option("--body-file <path>", "read the body from a file ('-' for stdin)")
+    .option("--manifest <path>", "a relay-nodes manifest (JSON or YAML: workflow, inputs, outputs, model, stage) appended to the body as the fenced block the nodes lane runs")
     .option("--priority <p>", `one of ${TASK_PRIORITIES.join(", ")}`)
     .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
     .option("--cwd <path>")
     .option("--json")
     .description("Open a task: a GitHub issue with agent:<lane> (and priority:<p>) labels")
-    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
+    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; manifest?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
       if (!(TASK_LANES as readonly string[]).includes(o.lane)) throw new Error(`--lane must be one of ${TASK_LANES.join(", ")}`);
       if (o.priority && !(TASK_PRIORITIES as readonly string[]).includes(o.priority)) throw new Error(`--priority must be one of ${TASK_PRIORITIES.join(", ")}`);
       const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
       if (!ref.slug) throw new Error("no project: pass --project or run relay link in the repo");
-      const body = o.bodyFile ? readFileSync(o.bodyFile === "-" ? 0 : o.bodyFile, "utf8") : o.body ?? "";
+      let body = o.bodyFile ? readFileSync(o.bodyFile === "-" ? 0 : o.bodyFile, "utf8") : o.body ?? "";
+      if (o.manifest) {
+        const text = readFileSync(o.manifest, "utf8");
+        manifestFromValue(parseManifestText(text)); // throws ManifestError with the line to fix before anything is opened
+        body = `${body.trimEnd()}\n\n\`\`\`${MANIFEST_FENCE}\n${text.trim()}\n\`\`\`\n`;
+      }
       const h = await openReady();
       try {
         const r = await h.client.createTask({ project: ref.slug, title: o.title, body, lane: o.lane as TaskLane, ...(o.priority ? { priority: o.priority as TaskPriority } : {}), idempotency_key: o.key ?? null });

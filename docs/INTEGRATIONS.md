@@ -355,6 +355,19 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
 11. **Stay connected.** Every day `grant_type=refresh_token` gives a new pair. If the user revokes `oauth:grok-bot` on
     the Access page (`/access`), the next call is `401` and the bot starts again at step 1; nothing else changes.
 
+## Running a production
+
+The same bot, a short instead of a site (`docs/PRODUCTIONS.md` has the model). Scopes it needs on top of the four above: `assets:read`, `assets:review` (and `projects:write` if it opens productions itself).
+
+1. **Open the production.** `PUT /api/v1/projects/blackgate {"repo": "acme/productions"}` (or the operator runs `relay project add blackgate --repo acme/productions`). The tracker repo has the GitHub App; every production shares it.
+2. **Seed its memory.** `relay_decide({project: "blackgate", text: "Night exteriors are wet asphalt, sodium light, no lens flares"})`, `relay_prefer({scope: "project", scope_id: "blackgate", key: "style", value: "35mm, shallow focus, muted palette"})`. Every brief for a blackgate task carries them; `relay_guidance({model: "bytedance/seedance-2.5", query: "camera motion"})` is the vendor's own advice when the bot writes a prompt.
+3. **Subscribe.** `relay_webhook_subscribe({url, events: ["asset.uploaded", "asset.reviewed", "run.failed", "task.held"], project: "blackgate"})`.
+4. **Open the character pass.** `relay_task_create({project: "blackgate", lane: "nodes", title: "Reza: character reference", body: "<intent>\n\n```relay-nodes\nworkflow: blackgate/workflows/character-ref.py\ninputs:\n  Start Flow:\n    prompt: \"…\"\noutputs: [End Flow]\nstage: character\n```"})`. The body is data; the manifest is what the worker runs.
+5. **Hear back.** `asset.uploaded` → "the reference is up: <site>/assets/<id>" (`relay_asset_get` gives a signed URL good for an hour, for a preview in chat); `run.failed` → the summary says whether it was the manifest, the engine or a missing key; `task.held` → the gate stopped the issue text, a person reads it.
+6. **Decide on the person's word.** "Approve" → `relay_asset_review({id, decision: "approved"})`: the task is done and the issue closed. "Too dark, lose the flare" → `relay_asset_review({id, decision: "rejected", note: "Too dark; lose the lens flare, keep the sodium light"})`: the task is queued, the note is the next run's review feedback. The bot may then edit the manifest on the issue (GitHub, with its own access) before the next worker claims it. A bot never reviews an asset its own runs produced.
+7. **Open the shots once the character is approved.** One `relay_task_create` per shot with `stage: shot`, the approved reference's asset URL in the prompt where the workflow takes one; the bot sequences stages, relay does not (yet) block a shot on its character.
+8. **Answer "where are we".** `relay_task_list({project: "blackgate", state: "review"})` is what waits; `relay_asset_list({project: "blackgate", status: "pending"})` the same from the library's side; the board at `/?project=blackgate` for the person.
+
 ## Site mode for the CLI
 
 A laptop that should use the hosted relay rather than its own database runs `relay setup --site <site>` once
