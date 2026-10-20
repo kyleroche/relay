@@ -87,6 +87,8 @@ const LANE_MODEL: Record<Lane, { model: string; subscription: Subscription }> = 
   claude: { model: "anthropic/claude-fable-5-1", subscription: "max" },
   codex: { model: "openai/gpt-5.5", subscription: "codex" },
   grok: { model: "xai/grok-4.7", subscription: "grok" },
+  // the nodes lane bills per output through the vendor the workflow calls; the demo keeps it on claude lanes, so this is the type's due
+  nodes: { model: "bytedance/seedance-2.0", subscription: "gateway" },
 };
 const REVIEW_MODEL = { model: "anthropic/claude-opus-5", subscription: "max" as Subscription, lane: "claude" as Lane };
 
