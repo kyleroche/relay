@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@relay/core": "workspace:*",
-    "hono": "^4.9.0",
+    "hono": "^4.13.11",
     "@hono/node-server": "^1.19.0"
   },
   "license": "Apache-2.0"
