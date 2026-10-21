@@ -120,10 +120,17 @@ async function connectSite(o: SetupOpts): Promise<void> {
     } else if (o.invite) {
       log(`redeeming the invite at ${site}…`);
       fromResponse = await redeemInvite({ site, code: o.invite, clientName });
-    } else if (typeof o.site === "string" && current.token && current.site === site.replace(/\/+$/, "")) {
-      // same site, token already here: just re-check and save the URL
-      credential = { token: current.token, refreshToken: current.refreshToken ?? null, expiresAt: current.tokenExpiresAt ?? null, source: current.tokenSource ?? "manual", tokenName: current.tokenName ?? null };
     } else {
+      if (typeof o.site === "string" && current.token && current.site === site.replace(/\/+$/, "")) {
+        // same site, token already here: keep it when the site still accepts it; otherwise (revoked, expired past its
+        // refresh) fall through to a fresh device flow instead of saving a dead credential
+        const existing = await httpClient({ site, token: current.token }).health();
+        if (existing.ok) {
+          credential = { token: current.token, refreshToken: current.refreshToken ?? null, expiresAt: current.tokenExpiresAt ?? null, source: current.tokenSource ?? "manual", tokenName: current.tokenName ?? null };
+        } else log(`the stored token no longer works (${existing.detail}); asking for access again`);
+      }
+    }
+    if (!credential && !fromResponse) {
       log(`asking ${site} for access as ${clientName} (${scopes.join(", ")})`);
       fromResponse = await deviceFlow({
         site,
