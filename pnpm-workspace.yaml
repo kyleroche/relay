@@ -1,3 +1,17 @@
 packages:
   - packages/*
   - apps/*
+# pnpm 12: overrides live here (package.json "pnpm" is no longer read). Floors for advisories in transitive tooling deps.
+minimumReleaseAgeExclude:
+  - '@electric-sql/pglite-pgvector@0.0.13'
+  - '@electric-sql/pglite@0.5.12'
+overrides:
+  tinypool: '>=2.1.2'
+  source-map-js: '>=1.2.2'
+  esbuild: '>=0.28.1'
+  '@vitest/mocker': '>=4.1.11'
+  vite: '>=7.3.7'
+  zod: '>=4.6.6'
+# build scripts pnpm may run (pnpm 12 blocks the rest); esbuild downloads its binary in postinstall
+allowBuilds:
+  esbuild: true
