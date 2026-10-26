@@ -115,7 +115,12 @@ export async function nodesCheck(env: NodeJS.ProcessEnv = process.env): Promise<
   if (!bin) return { status: "warn", name, detail: `not on PATH; ${NODES_INSTALL_HINT}` };
   const python = findNodesPython(env);
   if (!python) return { status: "warn", name, detail: `${bin} is on PATH but no Python can import the engine (no uv venv behind it); ${NODES_INSTALL_HINT}` };
-  const [ver, cfg] = await Promise.all([run(bin, ["--no-update", "--version"], 60_000), run(bin, ["--no-update", "config", "show"], 60_000)]);
+  // engines before 0.100 take --no-update (skip the update check); newer ones reject the flag, so retry without it
+  const quiet = async (args: string[]) => {
+    const r = await run(bin, ["--no-update", ...args], 60_000);
+    return /No such option: --no-update/i.test(r.stderr + r.stdout) ? run(bin, args, 60_000) : r;
+  };
+  const [ver, cfg] = await Promise.all([quiet(["--version"]), quiet(["config", "show"])]);
   const version = /v?(\d+\.\d+\.\d+[\w.-]*)/.exec(ver.stdout)?.[1];
   const problems: string[] = [];
   if (!version) problems.push("`griptape-nodes --version` gave no version");
