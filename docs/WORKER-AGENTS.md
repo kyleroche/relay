@@ -4,7 +4,7 @@ This page is for the agent inside an app: a Mac app that digitizes artwork for e
 a laser cutter's driver, anything with its own agent and its own machine. It becomes a **relay worker** for a lane of
 its own (`embroidery`, later `laser`): it claims tasks a person or a bot opened, does the job, uploads the results as
 assets on the task's issue, and releases the claim. Everything below is done over the MCP server at `<site>/mcp`
-with one token. The runnable reference is [`examples/worker-agent`](../examples/worker-agent/README.md).
+with one token. The runnable reference is [`examples/worker-agent`](examples/worker-agent/README.md).
 
 ## What a worker is in relay
 

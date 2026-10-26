@@ -175,7 +175,7 @@ scopes, expiry, source.
 
 MCP endpoint: `POST <site>/mcp` (Streamable HTTP, stateless, `Authorization: Bearer <token>`). The REST twins live
 under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC 9457 `application/problem+json`.
-The `relay_work_*` rows at the end are the worker protocol for an app's own agent; [`docs/WORKER-AGENTS.md`](WORKER-AGENTS.md)
+The `relay_work_*` rows at the end are the worker protocol for an app's own agent; [`docs/WORKER-AGENTS.md`](docs/WORKER-AGENTS.md)
 walks through them in order.
 
 | Tool | REST | Scope | Does |
