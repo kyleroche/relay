@@ -197,7 +197,7 @@ describe("presigned uploads", () => {
     expect(verifyLocalSignedUrl(up, store).ok).toBe(false); // an upload token does not grant reads
     const view = await store.getSignedUrl(key, 60);
     expect(verifyLocalUploadUrl(view, store)).toEqual({ ok: false, reason: "not an upload url" });
-    expect(verifyLocalUploadUrl(up.replace(/sig=./, "sig=Z"), store).ok).toBe(false);
+    expect(verifyLocalUploadUrl(up.replace(/sig=(.)/, (_, c: string) => `sig=${c === "Z" ? "Y" : "Z"}`), store).ok).toBe(false); // always a different first character
     expect(verifyLocalUploadUrl(up, store, Date.now() + 120_000)).toEqual({ ok: false, reason: "expired" });
   });
 

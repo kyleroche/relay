@@ -566,7 +566,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (g) return g;
       if (!assetsHooks) return noStore();
       try {
-        const row = await finalizeFromKey(db, assetsHooks.store, { key, project, issue, pr, title, description, replaces: replaces ?? null, tags, createdBy: actor });
+        const row = await finalizeFromKey(db, assetsHooks.store, { key, project, issue, pr, title, description, replaces: replaces ?? null, tags, createdBy: externalActor(actor) });
         await assetsHooks.afterUpload?.(row);
         return json({ ...publicAsset(row), url: await viewUrl(row.storage_key) });
       } catch (e) {
@@ -595,8 +595,8 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         const before = await repo.getAsset(db, id);
         if (!before) return fail(`relay: no asset ${id}`);
         if (before.status !== "pending") return fail(`relay: asset ${id} is ${before.status}; only a pending asset can be reviewed`);
-        if (before.created_by === actor) return fail(`relay: ${actor} produced this asset and cannot review it; a person or another bot decides`);
-        const row = await repo.reviewAsset(db, id, { decision, by: actor, note: text });
+        if (before.created_by === externalActor(actor)) return fail(`relay: ${actor} produced this asset and cannot review it; a person or another bot decides`);
+        const row = await repo.reviewAsset(db, id, { decision, by: externalActor(actor), note: text });
         await assetsHooks?.afterReview?.(row);
         const repoName = row.project ? (await repo.getProject(db, row.project))?.repo ?? null : null;
         return json({ ...publicAsset(row), task_id: repoName && row.issue != null ? `${repoName}#${row.issue}` : null });

@@ -131,7 +131,7 @@ describe("the example worker loop", () => {
     const task = (await repo.taskView(db, (await repo.getTask(db, "acme/demo#95"))!))!;
     expect(task.state).toBe("review");
     const out = (await repo.getAsset(db, t3.result!.assets[0]!))!;
-    expect(out).toMatchObject({ issue: 95, title: "stitch-file", created_by: "token:oauth:example-worker" });
+    expect(out).toMatchObject({ issue: 95, title: "stitch-file", created_by: "bot:oauth:example-worker" });
     const text = (await store.read(out.storage_key)).toString();
     expect(text).toContain("artwork: Logo (image/svg+xml, v1)");
     expect(text).toContain("Badges are digitized at 130x180");
