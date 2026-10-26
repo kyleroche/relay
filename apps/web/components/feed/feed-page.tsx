@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { WORKER_LANES } from "@relay/core";
 import { Feed } from "@/components/feed/feed";
 import { HomeTabs } from "@/components/home-tabs";
 import { getAssets, getFeed, getProjects, getTasks, getWorkers } from "@/lib/data";
@@ -39,6 +40,8 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     viewerTimeZone(),
   ]);
   const actors = [...new Set(allRecent.map((e) => e.actor))].sort();
+  // the lane filter: the built-ins, then any other lane the recent events carry (an app's own lane once it has run)
+  const lanes = [...WORKER_LANES, ...[...new Set(allRecent.map((e) => e.lane).filter((l): l is string => Boolean(l) && !(WORKER_LANES as readonly string[]).includes(l as string)))].sort()];
   const today = new Date().toISOString().slice(0, 10);
   const todayCount = allRecent.filter((e) => e.ts.slice(0, 10) === today).length;
   const todayCost = allRecent.filter((e) => e.ts.slice(0, 10) === today).reduce((s, e) => s + e.cost_equiv, 0);
@@ -101,7 +104,7 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
           </dl>
         </div>
       </section>
-      <Feed events={events} projects={projects.map((p) => p.slug)} actors={actors} filters={filters} tz={tz} />
+      <Feed events={events} projects={projects.map((p) => p.slug)} lanes={lanes} actors={actors} filters={filters} tz={tz} />
     </>
   );
 }

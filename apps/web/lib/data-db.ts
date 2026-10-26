@@ -11,7 +11,7 @@
  *   writeEvent   -> repo.writeEvent (dedupe_key makes redeliveries a no-op)
  *   assets       -> repo.listAssets / getAsset / listVersions / reviewAsset / publishAsset through lib/assets.ts
  */
-import { repo, type AssetRow } from "@relay/core";
+import { repo, type AssetRow, isLaneName } from "@relay/core";
 
 type EventRow = repo.EventRow;
 type ModelRow = repo.ModelRow;
@@ -45,10 +45,9 @@ import type {
 const H = 3_600_000;
 const D = 24 * H;
 const WINDOW_MS: Record<UsageWindow, number> = { "5h": 5 * H, "7d": 7 * D, "30d": 30 * D };
-const LANES: Lane[] = ["claude", "codex", "grok"];
 const SUBSCRIPTIONS: Subscription[] = ["max", "codex", "grok", "gateway"];
 
-const asLane = (v: string | null): Lane | null => (LANES.includes(v as Lane) ? (v as Lane) : null);
+const asLane = (v: string | null): Lane | null => (v && isLaneName(v) ? v : null);
 const asSubscription = (v: string | null): Subscription | null => (SUBSCRIPTIONS.includes(v as Subscription) ? (v as Subscription) : null);
 
 export function toFeedEvent(e: EventRow): FeedEvent {

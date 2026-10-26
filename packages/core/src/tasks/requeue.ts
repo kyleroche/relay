@@ -20,7 +20,7 @@ import { bumpQueueVersion } from "../db/queue.ts";
 import { getTask, taskClaims, taskEvents, deriveTaskStatus, taskView, type TaskRow, type TaskStatus, type TaskView } from "../db/tasks.ts";
 import { getWorker, liveClaim, releaseClaim } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
-import { isTaskLane, TASK_LANES, type TaskLane } from "./create.ts";
+import { isLaneName, isTaskLane, laneLabelSpec, laneNameProblem, laneUnservedProblem } from "./create.ts";
 
 export class TaskRequeueError extends Error {
   constructor(
@@ -74,6 +74,8 @@ async function relabel(github: GitHubClient | undefined, repo: string, issue: nu
     }
     let added: string | null = null;
     if (!current.labels.includes(want)) {
+      // a registered worker's lane has no label from `relay link`: make it with relay's colour first (best effort)
+      if (!isTaskLane(lane)) await github.ensureLabel?.(repo, laneLabelSpec(lane)).catch(() => {});
       await github.addLabels(repo, issue, [want]);
       added = want;
     }
@@ -84,13 +86,18 @@ async function relabel(github: GitHubClient | undefined, repo: string, issue: nu
 }
 
 /**
- * The guard rail: the task exists, is not `done`, the lane (when given) is one relay knows, and the actor may do
- * this. Returns the task row and its derived status so the caller folds the events once.
+ * The guard rail: the task exists, is not `done`, the lane (when given) is a lane name that is built-in, cloud or
+ * served by a registered worker (the same rule as opening a task; tasks/create.ts), and the actor may do this.
+ * Returns the task row and its derived status so the caller folds the events once.
  */
 export async function assertRequeueable(db: Db, taskId: string, actor: string, opts: RequeueOptions): Promise<{ task: TaskRow; status: TaskStatus }> {
   const task = await getTask(db, taskId.trim());
   if (!task) throw new TaskRequeueError(`No task ${taskId}.`, 404);
-  if (opts.lane != null && opts.lane !== "" && !isTaskLane(opts.lane)) throw new TaskRequeueError(`lane must be one of ${TASK_LANES.join(", ")}.`, 400);
+  if (opts.lane != null && opts.lane !== "") {
+    if (!isLaneName(opts.lane)) throw new TaskRequeueError(`${laneNameProblem(opts.lane)}.`, 400);
+    const unserved = await laneUnservedProblem(db, opts.lane);
+    if (unserved) throw new TaskRequeueError(`${unserved}.`, 400);
+  }
   if (opts.reason && opts.reason.length > 2000) throw new TaskRequeueError("The reason must be at most 2000 characters.", 400);
   if (!actor.startsWith("human:") && opts.scopes && !opts.scopes.includes("tasks:write")) {
     throw new TaskRequeueError(`${actor} cannot requeue ${task.id}: its token lacks tasks:write. Who can: ${REQUEUERS_TEXT}.`, 403);
@@ -108,7 +115,7 @@ export async function assertRequeueable(db: Db, taskId: string, actor: string, o
 export async function requeueTask(db: Db, github: GitHubClient | undefined, taskId: string, actor: string, opts: RequeueOptions = {}): Promise<RequeueResult> {
   const { task, status } = await assertRequeueable(db, taskId, actor, opts);
   const previousLane = task.lane ?? status.lane;
-  const lane: string | null = opts.lane ? (opts.lane as TaskLane) : previousLane;
+  const lane: string | null = opts.lane || previousLane;
   const relaned = Boolean(lane && lane !== previousLane);
   if (relaned) await db.query("UPDATE tasks SET lane = $2 WHERE id = $1", [task.id, lane]);
   // the label on GitHub follows relay's row: on a re-lane always; otherwise only when the issue lacks its lane label

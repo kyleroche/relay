@@ -20,11 +20,10 @@ export interface FeedFilters {
   kind?: string;
 }
 
-const LANES = ["claude", "codex", "grok"];
-
 export function Feed({
   events: initial,
   projects,
+  lanes,
   actors,
   filters,
   tz,
@@ -32,6 +31,8 @@ export function Feed({
 }: {
   events: FeedEvent[];
   projects: string[];
+  /** The built-in lanes plus every lane the recent events carry (a registered worker's lane appears once it ran). */
+  lanes: string[];
   actors: string[];
   filters: FeedFilters;
   tz: string;
@@ -186,7 +187,7 @@ export function Feed({
           )}
         </div>
         <FilterSelect label="Project" value={filters.project} onChange={(v) => setFilter("project", v)} options={projects.map((p) => [p, p])} />
-        <FilterSelect label="Lane" value={filters.lane} onChange={(v) => setFilter("lane", v)} options={LANES.map((l) => [l, l])} />
+        <FilterSelect label="Lane" value={filters.lane} onChange={(v) => setFilter("lane", v)} options={lanes.map((l) => [l, l])} />
         <FilterSelect label="Actor" value={filters.actor} onChange={(v) => setFilter("actor", v)} options={actors.map((a) => [a, a])} />
         <FilterSelect
           label="Kind"

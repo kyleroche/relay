@@ -76,7 +76,11 @@ export interface WorkDeps {
 
 const defaultSpawn = (words: string[]): ChildProcess => spawn(words[0]!, words.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
 
+/** `relay work` runs the built-in adapters only; a lane an app serves is that app's to register (docs/WORKER-AGENTS.md). */
 const LANES: readonly string[] = WORKER_LANES;
+const assertBuiltinLanes = (lanes: readonly string[]): void => {
+  for (const l of lanes) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}. relay work runs the built-in lanes ${LANES.join(", ")}; an app that serves another lane registers itself (docs/WORKER-AGENTS.md)`);
+};
 const list = (s: string | undefined): string[] => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 export const workLogPath = (): string => join(relayHome(), "work.log");
 
@@ -250,7 +254,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       if (o.install || o.uninstall) return isolation === "container" ? containerInstallOrRemove(o) : installOrRemove(o);
       if (isolation === "container") return containerForeground();
       const lanes = o.lanes ? list(o.lanes) : undefined;
-      if (lanes) for (const l of lanes) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
+      if (lanes) assertBuiltinLanes(lanes);
       const jobs = Math.max(1, Number(o.jobs) || 1);
       const inside = inContainer();
       const host = (inside ? process.env[CONTAINER_WORKER_HOST_ENV] : undefined) || hostname();
@@ -698,7 +702,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
   }
 
   function installOrRemove(o: WorkOptions): void {
-    if (o.lanes) for (const l of list(o.lanes)) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
+    if (o.lanes) assertBuiltinLanes(list(o.lanes));
     const p = plan(o, deps);
     if (o.uninstall) {
       console.log(`would remove ${p.path}${existsSync(p.path) ? "" : " (not present)"}`);
@@ -831,7 +835,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
    * size over, so a `git pull` or a package upgrade is one command and no new device flow.
    */
   function containerInstall(o: WorkOptions, mode: "install" | "update"): void {
-    if (o.lanes) for (const l of list(o.lanes)) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}`);
+    if (o.lanes) assertBuiltinLanes(list(o.lanes));
     const { bin, service, listJson, stateNow } = containerHost();
     const host = hostname();
     const rp = runtimePaths();

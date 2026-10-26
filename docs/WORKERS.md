@@ -48,6 +48,16 @@ credential or `~/.harness`.
 preference: `relay prefer lane.labels gpu --scope project --scope-id <slug>` (or `--scope lane --scope-id claude`,
 narrowest wins). A task whose required labels the worker lacks is left for another worker.
 
+**Other lanes.** The four above are the built-in lanes, the only ones `relay work` runs. The registry itself is open:
+an app that does a craft of its own (an embroidery digitizer, a laser cutter's planner) registers itself as a worker
+over the same protocol with its own lane (`POST /api/v1/workers` with `lanes: ["embroidery"]`; later also `laser`),
+claims tasks on it, and returns assets on the issue rather than a PR, the way the `nodes` lane does. A lane name is
+`[a-z][a-z0-9-]{0,31}`; the issue carries `agent:<lane>`, which `openTask` creates on the repository the first time
+(`relay link` installs only the built-in labels). A task may be opened on such a lane once one worker, retired or
+not, has registered it; before that `relay task create --lane embroidery` is refused with the lanes that have a
+worker. The Requeue sheet lists these lanes under "Registered". How to write such a worker, and the MCP tools it
+uses, is docs/WORKER-AGENTS.md.
+
 ## The protocol
 
 Every step is a REST call under `/api/v1` with the bearer token; the same functions back the local mode.

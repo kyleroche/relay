@@ -6,6 +6,7 @@
  * The dataset lives on globalThis so dev-server HMR and the webhook routes share one copy.
  */
 import type { EventKind } from "./events.ts";
+import type { WorkerLane } from "@relay/core";
 import type {
   Asset,
   AssetKind,
@@ -26,7 +27,8 @@ export interface MockProject {
   check_cmd: string;
   summary: string;
   digest: { digested: number; total: number };
-  lanes: Lane[];
+  /** The demo runs the built-in lanes only. */
+  lanes: WorkerLane[];
 }
 
 export const MOCK_PROJECTS: MockProject[] = [
@@ -83,7 +85,7 @@ export const MOCK_PROJECTS: MockProject[] = [
   },
 ];
 
-const LANE_MODEL: Record<Lane, { model: string; subscription: Subscription }> = {
+const LANE_MODEL: Record<WorkerLane, { model: string; subscription: Subscription }> = {
   claude: { model: "anthropic/claude-fable-5-1", subscription: "max" },
   codex: { model: "openai/gpt-5.5", subscription: "codex" },
   grok: { model: "xai/grok-4.7", subscription: "grok" },
@@ -415,7 +417,7 @@ function build(now: number): Dataset {
 
   // 18 tasks spread over the last ~9 days, newest last. The last few are left in progress.
   const N = 18;
-  const taskPlan: Array<{ project: string; title: string; lane: Lane; startAgoMs: number; stage: number }> = [];
+  const taskPlan: Array<{ project: string; title: string; lane: WorkerLane; startAgoMs: number; stage: number }> = [];
   const projectsCycle = ["relay", "ledger-api", "atlas-site", "relay", "studio-app", "ledger-api", "atlas-site", "relay"];
   const titleIdx: Record<string, number> = { relay: 0, "atlas-site": 0, "ledger-api": 0, "studio-app": 0 };
   for (let i = 0; i < N; i++) {
@@ -425,7 +427,7 @@ function build(now: number): Dataset {
     titleIdx[project] = (titleIdx[project] as number) + 1;
     const p = MOCK_PROJECTS.find((x) => x.slug === project) as MockProject;
     // The two newest tasks run on the claude lane so the 5-hour meter has something to show.
-    const lane: Lane = i >= N - 2 ? "claude" : pick(p.lanes);
+    const lane: WorkerLane = i >= N - 2 ? "claude" : pick(p.lanes);
     // Spread: oldest ~9 days ago, newest 25 minutes ago (still running).
     const startAgoMs =
       i === N - 1

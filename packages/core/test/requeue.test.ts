@@ -28,6 +28,7 @@ const at = (minute: number) => `2026-10-16T10:${String(minute).padStart(2, "0")}
 function fakeGitHub(opts: { labels?: string[]; fail?: boolean } = {}) {
   const removed: string[] = [];
   const added: string[] = [];
+  const ensured: string[] = [];
   const boom = () => {
     throw new GitHubError("GitHub DELETE /repos/acme/demo/issues/1/labels/x: 502 bad gateway", 502);
   };
@@ -43,6 +44,10 @@ function fakeGitHub(opts: { labels?: string[]; fail?: boolean } = {}) {
     async removeLabel(_repo, _issue, label) {
       if (opts.fail) boom();
       removed.push(label);
+    },
+    async ensureLabel(_repo, label) {
+      if (opts.fail) boom();
+      ensured.push(`${label.name} ${label.color} ${label.description}`);
     },
     async getIssue(repo, n): Promise<GitHubIssue> {
       if (opts.fail) boom();
@@ -62,7 +67,7 @@ function fakeGitHub(opts: { labels?: string[]; fail?: boolean } = {}) {
     },
     async deleteBranch() {},
   };
-  return { gh, removed, added };
+  return { gh, removed, added, ensured };
 }
 
 const open = async (lane: string) => (await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: ++issue, createdBy: "bot:grok", lane })).task;
@@ -160,7 +165,8 @@ describe("requeueTask", () => {
     await expect(requeueTask(db, gh, t.id, "human:kyle")).rejects.toMatchObject({ status: 409, message: expect.stringMatching(/done/) } satisfies Partial<TaskRequeueError>);
     await expect(requeueTask(db, gh, "acme/demo#9999", "human:kyle")).rejects.toMatchObject({ status: 404 });
     const live = await open("claude");
-    await expect(requeueTask(db, gh, live.id, "human:kyle", { lane: "gemini" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/lane must be one of/) });
+    await expect(requeueTask(db, gh, live.id, "human:kyle", { lane: "gemini" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/no worker serves lane 'gemini'; lanes with a worker: none; built-in: claude, codex, grok, nodes/) });
+    await expect(requeueTask(db, gh, live.id, "human:kyle", { lane: "Gemini" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/lane 'Gemini' is not a lane name/) });
     await expect(requeueTask(db, gh, live.id, "bot:grok", { lane: "codex", scopes: ["tasks:read"] })).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/tasks:write/) });
     expect((await repo.getTask(db, live.id))?.lane).toBe("claude");
     // with the scope, or unrestricted (a local user), it goes through
@@ -181,5 +187,26 @@ describe("requeueTask", () => {
     expect(r2.task.state).toBe("queued");
     expect(r2.task.lane).toBe("codex");
     expect(r2.events[0]?.payload.github).toMatchObject({ relabelled: false, error: expect.stringMatching(/No GitHub credential/) });
+  });
+});
+
+describe("requeue onto a registered worker's lane", () => {
+  it("is refused until a worker serves the lane, then moves the task and makes the label", async () => {
+    const t = await open("claude");
+    const { gh, added, removed, ensured } = fakeGitHub({ labels: ["agent:claude"] });
+    await expect(requeueTask(db, gh, t.id, "human:kyle", { lane: "laser" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/no worker serves lane 'laser'/) });
+    expect((await repo.getTask(db, t.id))?.lane).toBe("claude");
+
+    await repo.registerWorker(db, { name: "cutter", lanes: ["laser"] });
+    const r = await requeueTask(db, gh, t.id, "human:kyle", { lane: "laser", reason: "the hoop is busy" });
+    expect(r.task.lane).toBe("laser");
+    expect(await state(await repo.getTask(db, t.id) as repo.TaskRow)).toBe("queued");
+    expect(removed).toEqual(["agent:claude"]);
+    expect(added).toEqual(["agent:laser"]);
+    expect(ensured).toEqual(["agent:laser 8A2BE2 relay: served by the laser worker"]);
+    // and back to a built-in lane: no ensureLabel, relay link installed that label
+    await requeueTask(db, gh, t.id, "human:kyle", { lane: "codex" });
+    expect(ensured.length).toBe(1);
+    expect(added).toEqual(["agent:laser", "agent:codex"]);
   });
 });

@@ -10,16 +10,19 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 
 /**
  * "Requeue": put the task back in the queue, optionally on another lane. A sheet that opens from a button, like the
- * other forms (DESIGN.md, item 7): the lane (worker lanes first, the cloud lanes under their own heading because
- * nothing dispatches them until the operator wires them) and an optional reason. The same core call as
+ * other forms (DESIGN.md, item 7): the lane (the built-in worker lanes first, then the lanes registered workers serve
+ * beyond those, from core's `knownLanes` and fetched once by the page, then the cloud lanes under their own heading
+ * because nothing dispatches them until the operator wires them) and an optional reason. The same core call as
  * `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`. Renders into the parent's
  * flex-wrap row beside the review buttons; its outcome takes a full-width line under them.
  */
-export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, canWrite, size = "default" }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean; size?: "default" | "sm" }) {
+export function RequeueAction({ taskId, lane, state, workerLanes, registeredLanes = [], cloudLanes, canWrite, size = "default" }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; registeredLanes?: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean; size?: "default" | "sm" }) {
   const router = useRouter();
   const [result, setResult] = useState<TaskActionResult | null>(null);
   const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState<string>(lane && [...workerLanes, ...cloudLanes].includes(lane) ? lane : workerLanes[0] ?? "claude");
+  // a task's own lane is always offered, even when its worker has since been forgotten
+  const registered = lane && ![...workerLanes, ...registeredLanes, ...cloudLanes].includes(lane) ? [...registeredLanes, lane] : registeredLanes;
+  const [target, setTarget] = useState<string>(lane && [...workerLanes, ...registered, ...cloudLanes].includes(lane) ? lane : workerLanes[0] ?? "claude");
   const [reason, setReason] = useState("");
   const [pending, start] = useTransition();
 
@@ -75,6 +78,16 @@ export function RequeueAction({ taskId, lane, state, workerLanes, cloudLanes, ca
                       </SelectItem>
                     ))}
                   </SelectGroup>
+                  {registered.length > 0 && (
+                    <SelectGroup>
+                      <SelectLabel>Registered (apps serving their own lane)</SelectLabel>
+                      {registered.map((l) => (
+                        <SelectItem key={l} value={l} className="font-mono">
+                          {l}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  )}
                   {cloudLanes.length > 0 && (
                     <SelectGroup>
                       <SelectLabel>Cloud (dispatches only once wired)</SelectLabel>

@@ -4,7 +4,7 @@
  * `issue_comment` deliveries carrying the runner's usage block go through `githubEvents`, which
  * may yield two rows (step.usage and, in review mode, pr.review).
  */
-import { isWorkerLane, WORKER_LANES } from "@relay/core";
+import { isLaneName, LANE_NAME_PATTERN } from "@relay/core";
 import type { Lane, NewEvent } from "@/lib/types";
 import { resolveProject, type TaskProjectLookup } from "./project.ts";
 import { parseUsageComment, senderTrusted, usageEvents } from "./usage.ts";
@@ -21,20 +21,27 @@ function actorOf(payload: Json): string {
   return `human:${login}`;
 }
 
-/** The worker lanes as a regex alternative, so a lane added to core's WORKER_LANES is read here without another edit. */
-const LANE_ALT = WORKER_LANES.join("|");
-const LANE_LABEL = new RegExp(`^agent:(${LANE_ALT})$`);
-const RELAY_BRANCH = new RegExp(`^relay\\/(?:(${LANE_ALT})-(\\d+)|(\\d+)-(${LANE_ALT}))(?:$|[-/])`);
+/**
+ * The lane registry is open (packages/core/src/tasks/create.ts): an `agent:<lane>` label names any lane whose name
+ * fits `LANE_NAME_PATTERN`, a built-in one or one an app registered, so a lane added anywhere is read here without
+ * another edit. The branch pattern takes the shortest lane that leaves an issue number (`relay/laser-cut-42` is lane
+ * `laser-cut`, issue 42; `relay/claude-7-fix` is `claude`, 7).
+ */
+const LANE_LABEL = new RegExp(`^agent:(${LANE_NAME_PATTERN})$`);
+const LAZY_LANE = LANE_NAME_PATTERN.replace(/\}$/, "}?");
+const RELAY_BRANCH = new RegExp(`^relay\\/(?:(${LAZY_LANE})-(\\d+)|(\\d+)-(${LANE_NAME_PATTERN}))(?:$|[-/])`);
 
-function laneOf(label: string | undefined): Lane | null {
+/** The lane an `agent:<lane>` label names, or null for any other label. */
+export function laneOf(label: string | undefined): Lane | null {
   const m = LANE_LABEL.exec(label ?? "");
-  return m?.[1] && isWorkerLane(m[1]) ? m[1] : null;
+  return m?.[1] && isLaneName(m[1]) ? m[1] : null;
 }
 
-function laneFromLabels(labels: unknown): Lane | null {
+/** The lane of the first `agent:*` label in a GitHub labels array (objects with `name`, or strings), or null. */
+export function laneOfLabels(labels: unknown): Lane | null {
   if (!Array.isArray(labels)) return null;
   for (const l of labels) {
-    const lane = laneOf(get<string>(l, "name"));
+    const lane = laneOf(typeof l === "string" ? l : get<string>(l, "name"));
     if (lane) return lane;
   }
   return null;
@@ -44,7 +51,7 @@ function laneFromLabels(labels: unknown): Lane | null {
  * A runner branch: `relay/<lane>-<issue>` as run-lane.sh names it (the older `relay/<issue>-<lane>` spelling is
  * still read). Null for any other branch.
  */
-function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number } | null {
+export function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number } | null {
   const m = RELAY_BRANCH.exec(branch ?? "");
   if (!m) return null;
   const lane = (m[1] ?? m[4]) as Lane;
@@ -133,7 +140,7 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       const number = get<number>(issue, "number") ?? null;
       const title = get<string>(issue, "title") ?? "";
       const url = get<string>(issue, "html_url") ?? null;
-      const lane = laneFromLabels(get(issue, "labels"));
+      const lane = laneOfLabels(get(issue, "labels"));
       if (action === "opened" || action === "reopened") {
         return { ...base, kind: "issue.opened", issue: number, lane, summary: title, url, payload: { action, labels: get(issue, "labels") } };
       }
@@ -158,7 +165,7 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       const issue = linkedIssue(pr);
       const branch = get<string>(pr, "head.ref") ?? null;
       const cloud = cloudLaneOf(pr, payload);
-      const lane = relayBranch(branch)?.lane ?? cloud?.lane ?? laneFromLabels(get(pr, "labels"));
+      const lane = relayBranch(branch)?.lane ?? cloud?.lane ?? laneOfLabels(get(pr, "labels"));
       // A cloud-lane PR is the lane's work even when the vendor pushed it under the user's own GitHub login.
       const common = { ...base, pr: number, issue, url, lane, ...(cloud ? { actor: `agent:${cloud.lane}` } : {}) };
       const cloudPayload = cloud ? { cloud: cloud.cloud, author: get<string>(pr, "user.login") ?? null } : {};

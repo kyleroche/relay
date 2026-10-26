@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { ArrowUpRight, Globe, ShieldAlert, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { CLOUD_LANES, heldInfo, parseTaskId, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
+import { CLOUD_LANES, heldInfo, parseTaskId, registeredLanes, repo as core, WORKER_LANES, type TaskView } from "@relay/core";
 type EventRow = core.EventRow;
 import { Thumb } from "@/components/assets/asset-card";
 import { AssetReviewActions } from "@/components/assets/asset-review-actions";
@@ -35,6 +35,8 @@ interface Loaded {
   task: TaskView;
   events: EventRow[];
   title: string;
+  /** The lanes registered workers serve beyond the built-ins, for the Requeue sheet (empty in demo mode). */
+  registeredLanes: string[];
 }
 
 async function load(p: { owner: string; repo: string; n: string }): Promise<Loaded | null> {
@@ -45,13 +47,13 @@ async function load(p: { owner: string; repo: string; n: string }): Promise<Load
     const task = (await getTasks({ limit: 500 })).find((t) => t.id === id);
     if (!task) return null;
     const events = (await getFeed({ project: task.project, limit: 500 })).filter((e) => e.repo === task.repo && e.issue === task.issue) as unknown as EventRow[];
-    return { task, events, title: taskTitle(task, events) };
+    return { task, events, title: taskTitle(task, events), registeredLanes: [] };
   }
   const db = await getDb();
   const row = await core.getTask(db, id);
   if (!row) return null;
-  const [task, events] = await Promise.all([core.taskView(db, row), core.taskEvents(db, row)]);
-  return { task, events, title: taskTitle(task, events) };
+  const [task, events, lanes] = await Promise.all([core.taskView(db, row), core.taskEvents(db, row), registeredLanes(db)]);
+  return { task, events, title: taskTitle(task, events), registeredLanes: lanes };
 }
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
@@ -156,7 +158,7 @@ export default async function TaskPage({ params }: Props) {
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <ReleaseAction taskId={t.id} canWrite={dataMode() === "db"} />
-              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={l.registeredLanes} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
             </div>
           </section>
         )}
@@ -211,7 +213,7 @@ export default async function TaskPage({ params }: Props) {
             )}
             <div className="flex flex-wrap items-center gap-2">
               {inReview && !t.asset && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
-              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+              <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={l.registeredLanes} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
             </div>
           </section>
         )}

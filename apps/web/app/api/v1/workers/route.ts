@@ -1,4 +1,4 @@
-import { isWorkerLane, registerWorkerServer, repo, WORKER_LANES, WORKER_NAME } from "@relay/core";
+import { isLaneName, LANE_NAME_RULE, registerWorkerServer, repo, WORKER_NAME } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -20,7 +20,9 @@ export const GET = api(
 
 /**
  * operationId: registerWorker. Body: { name, host?, lanes, labels?, version? }. Upserts the worker by name (the id is
- * stable across restarts) and writes worker.registered on first sight and worker.online when it comes back.
+ * stable across restarts) and writes worker.registered on first sight and worker.online when it comes back. The lane
+ * registry is open: `relay work` sends the built-in lanes, an app serving its own craft sends that lane (any lane
+ * name; docs/WORKER-AGENTS.md), and from then on tasks may be opened on it.
  */
 export const POST = api(
   async (req) => {
@@ -32,7 +34,8 @@ export const POST = api(
     const name = str(body.name);
     if (!name || !WORKER_NAME.test(name)) return problem(400, "Bad Request", "name is required: 1-64 characters, letters, digits, dot, dash, underscore.", instance, { parameter: "name" });
     const lanes = strList(body.lanes) ?? [];
-    if (lanes.some((l) => !isWorkerLane(l))) return problem(400, "Bad Request", `lanes must be among ${WORKER_LANES.join(", ")}.`, instance, { parameter: "lanes" });
+    const badLane = lanes.find((l) => !isLaneName(l));
+    if (badLane !== undefined) return problem(400, "Bad Request", `lanes: '${badLane}' is not a lane name (${LANE_NAME_RULE}).`, instance, { parameter: "lanes" });
     try {
       const r = await registerWorkerServer(await getDb(), { name, host: str(body.host) ?? "", lanes, labels: strList(body.labels) ?? [], version: str(body.version) ?? "" });
       dispatchAfter(r.events);

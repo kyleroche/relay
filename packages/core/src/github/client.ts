@@ -57,6 +57,13 @@ export interface GitHubClient {
   /** Remove one label from an issue; a label the issue does not carry is not an error (re-laning a task). */
   removeLabel(repo: string, issue: number, label: string): Promise<void>;
   getIssue(repo: string, issue: number): Promise<GitHubIssue>;
+  /**
+   * Make sure the repository has this label (GET /repos/{repo}/labels/{name}, POST /repos/{repo}/labels on a 404),
+   * so an issue can carry it with relay's colour and description: `openTask` calls it for the `agent:<lane>` label of a
+   * registered worker's lane, which `relay link` does not install. Optional so a fake or a third-party client that
+   * never opens tasks on such a lane need not implement it; every client here does.
+   */
+  ensureLabel?(repo: string, label: { name: string; color: string; description: string }): Promise<void>;
   /** Any REST call under /repos/{owner}/{repo}/… (comments, reopening an issue). Throws GitHubError on non-2xx. */
   request(method: string, path: string, body?: unknown): Promise<Record<string, unknown>>;
   /** Comment on an issue or pull request (the cloud-lane dispatch comment). */
@@ -105,6 +112,24 @@ async function removeLabelWith(call: (method: string, path: string, body?: unkno
     await call("DELETE", `/repos/${repo}/issues/${issue}/labels/${encodeURIComponent(label)}`);
   } catch (e) {
     if (e instanceof GitHubError && e.status === 404) return; // not on the issue (any more)
+    throw e;
+  }
+}
+
+/** Shared by the token and gh clients: `ensureLabel` over a raw `call`. A label two callers create at once is fine (422 "already_exists"). */
+async function ensureLabelWith(call: (method: string, path: string, body?: unknown) => Promise<Record<string, unknown>>, repo: string, label: { name: string; color: string; description: string }): Promise<void> {
+  assertRepo(repo);
+  if (!label.name.trim()) return;
+  try {
+    await call("GET", `/repos/${repo}/labels/${encodeURIComponent(label.name)}`);
+    return;
+  } catch (e) {
+    if (!(e instanceof GitHubError && e.status === 404)) throw e;
+  }
+  try {
+    await call("POST", `/repos/${repo}/labels`, { name: label.name, color: label.color.replace(/^#/, ""), description: label.description.slice(0, 100) });
+  } catch (e) {
+    if (e instanceof GitHubError && e.status === 422) return; // made meanwhile
     throw e;
   }
 }
@@ -178,6 +203,7 @@ export function githubFromToken(token: string, fetchImpl: GitHubFetch = (u, i) =
       await call("POST", `/repos/${repo}/issues/${issue}/labels`, { labels });
     },
     removeLabel: (repo, issue, label) => removeLabelWith(call, repo, issue, label),
+    ensureLabel: (repo, label) => ensureLabelWith(call, repo, label),
     async getIssue(repo, issue) {
       assertRepo(repo);
       return toIssue(await call("GET", `/repos/${repo}/issues/${issue}`));
@@ -247,6 +273,7 @@ export function githubFromGh(bin: string = findOnPath("gh") ?? "gh"): GitHubClie
       await api("POST", `/repos/${repo}/issues/${issue}/labels`, { labels });
     },
     removeLabel: (repo, issue, label) => removeLabelWith(api, repo, issue, label),
+    ensureLabel: (repo, label) => ensureLabelWith(api, repo, label),
     async getIssue(repo, issue) {
       assertRepo(repo);
       return toIssue(await api("GET", `/repos/${repo}/issues/${issue}`));
