@@ -3,7 +3,7 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
-import { openTask, TaskCreateError, taskMarker } from "../src/tasks/create.ts";
+import { isLaneName, knownLanes, laneUnservedProblem, openTask, TaskCreateError, taskMarker } from "../src/tasks/create.ts";
 import type { GitHubClient, GitHubIssue } from "../src/github/client.ts";
 
 let db: Db;
@@ -129,14 +129,19 @@ describe("task state derivation", () => {
   });
 });
 
-function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: string; body: string; labels: string[] }>; labelled: string[] } {
+function fakeGitHub(): GitHubClient & { created: Array<{ repo: string; title: string; body: string; labels: string[] }>; labelled: string[]; ensured: Array<{ repo: string; name: string; color: string; description: string }> } {
   let n = 100;
   const created: Array<{ repo: string; title: string; body: string; labels: string[] }> = [];
   const labelled: string[] = [];
+  const ensured: Array<{ repo: string; name: string; color: string; description: string }> = [];
   return {
     source: "token",
     created,
     labelled,
+    ensured,
+    async ensureLabel(repo, label) {
+      ensured.push({ repo, ...label });
+    },
     async createIssue(repo, input): Promise<GitHubIssue> {
       created.push({ repo, title: input.title, body: input.body, labels: input.labels ?? [] });
       n++;
@@ -209,7 +214,10 @@ describe("openTask", () => {
     const gh = fakeGitHub();
     await expect(openTask(db, gh, { project: "ghost", title: "x", lane: "claude", actor: "bot:a" })).rejects.toMatchObject({ status: 404 });
     await expect(openTask(db, gh, { project: "norepo", title: "x", lane: "claude", actor: "bot:a" })).rejects.toBeInstanceOf(TaskCreateError);
-    await expect(openTask(db, gh, { project: "demo", title: "x", lane: "gemini" as "claude", actor: "bot:a" })).rejects.toThrow(/lane must be one of/);
+    // a well-formed name nobody serves, and a malformed one
+    await expect(openTask(db, gh, { project: "demo", title: "x", lane: "gemini", actor: "bot:a" })).rejects.toThrow(/no worker serves lane 'gemini'/);
+    await expect(openTask(db, gh, { project: "demo", title: "x", lane: "Gemini!", actor: "bot:a" })).rejects.toThrow(/lane 'Gemini!' is not a lane name/);
+    expect(gh.created.length).toBe(0);
     await expect(openTask(db, undefined, { project: "demo", title: "x", lane: "claude", actor: "bot:a" })).rejects.toMatchObject({ status: 503 });
   });
 
@@ -219,5 +227,65 @@ describe("openTask", () => {
     expect(a.created).toBe(true);
     expect(b.created).toBe(false);
     expect(b.task.id).toBe("acme/demo#500");
+  });
+});
+
+describe("the lane registry", () => {
+  // a repository of its own: the fake GitHub numbers issues from 100 in every test, and task rows are one per issue
+  beforeAll(() => repo.upsertProject(db, { slug: "hoop", repo: "acme/hoop", path: "/tmp/hoop" }));
+
+  it("isLaneName: a lowercase word of letters, digits and dashes, 1 to 32 characters, starting with a letter", () => {
+    for (const ok of ["claude", "codex", "grok", "nodes", "claude-cloud", "embroidery", "laser-cut", "a", "x1", "a".repeat(32)]) expect(isLaneName(ok)).toBe(true);
+    for (const bad of ["", "Claude", "1lane", "-lane", "lane_1", "lane cut", "agent:claude", "a".repeat(33), "laser.cut", "émbroidery"]) expect(isLaneName(bad)).toBe(false);
+  });
+
+  it("a task on a lane opens only once a worker has registered it; the refusal names the lanes that have one", async () => {
+    const gh = fakeGitHub();
+    expect((await knownLanes(db)).registered).toEqual([]);
+    const before = await laneUnservedProblem(db, "embroidery");
+    expect(before).toBe("no worker serves lane 'embroidery'; lanes with a worker: none; built-in: claude, codex, grok, nodes; cloud: claude-cloud, codex-cloud");
+    await expect(openTask(db, gh, { project: "hoop", title: "Hoop the logo", lane: "embroidery", actor: "bot:digitizer" })).rejects.toMatchObject({ status: 400, message: before });
+    expect(gh.created.length).toBe(0);
+    expect(gh.ensured.length).toBe(0);
+
+    // the embroidery app registers as a worker serving its lane (later also laser)
+    await repo.registerWorker(db, { name: "digitizer", lanes: ["embroidery"] });
+    expect(await laneUnservedProblem(db, "embroidery")).toBeUndefined();
+    expect(await laneUnservedProblem(db, "laser")).toBe("no worker serves lane 'laser'; lanes with a worker: embroidery; built-in: claude, codex, grok, nodes; cloud: claude-cloud, codex-cloud");
+    const r = await openTask(db, gh, { project: "hoop", title: "Hoop the logo", lane: "embroidery", actor: "bot:digitizer" });
+    expect(r.created).toBe(true);
+    expect(r.task.lane).toBe("embroidery");
+    expect(gh.created.at(-1)?.labels).toEqual(["agent:embroidery"]);
+    // the label is made with relay's colour before the issue carries it; relay link never installs it
+    expect(gh.ensured).toEqual([{ repo: "acme/hoop", name: "agent:embroidery", color: "8A2BE2", description: "relay: served by the embroidery worker" }]);
+
+    // built-in and cloud lanes need no worker and get no ensureLabel (relay link installed those labels)
+    await openTask(db, gh, { project: "hoop", title: "Plain", lane: "claude", actor: "human:kyle" });
+    await openTask(db, gh, { project: "hoop", title: "Cloud", lane: "codex-cloud", actor: "human:kyle" });
+    expect(gh.ensured.length).toBe(1);
+
+    await repo.registerWorker(db, { name: "digitizer", lanes: ["embroidery", "laser"] });
+    const known = await knownLanes(db);
+    expect(known.builtin).toEqual(["claude", "codex", "grok", "nodes"]);
+    expect(known.cloud).toEqual(["claude-cloud", "codex-cloud"]);
+    expect(known.registered).toEqual(["embroidery", "laser"]);
+    // a worker that also serves a built-in lane adds nothing to the registered list
+    await repo.registerWorker(db, { name: "mini", lanes: ["claude", "codex"] });
+    expect((await knownLanes(db)).registered).toEqual(["embroidery", "laser"]);
+  });
+
+  it("a GitHub client without ensureLabel, or one whose ensureLabel fails, still opens the task", async () => {
+    await repo.upsertProject(db, { slug: "bare", repo: "acme/bare", path: "/tmp/bare" }); // its own issue numbers again
+    const gh = fakeGitHub();
+    const bare: GitHubClient = { ...gh };
+    delete (bare as Partial<GitHubClient>).ensureLabel;
+    expect((await openTask(db, bare, { project: "bare", title: "Bare", lane: "embroidery", actor: "bot:digitizer" })).task.lane).toBe("embroidery");
+    const failing: GitHubClient = {
+      ...gh,
+      async ensureLabel() {
+        throw new Error("labels: 403");
+      },
+    };
+    expect((await openTask(db, failing, { project: "bare", title: "Failing", lane: "embroidery", actor: "bot:digitizer" })).task.lane).toBe("embroidery");
   });
 });

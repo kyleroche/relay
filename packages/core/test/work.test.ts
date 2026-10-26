@@ -839,3 +839,15 @@ describe("container login helpers (relay work container login)", () => {
     expect(CONTAINER_LOGIN_COMMAND).toBe("relay work container login all");
   });
 });
+
+describe("registerWorkerServer and the open lane registry", () => {
+  it("takes any lane name and refuses a malformed one with the rule", async () => {
+    const reg = await registerWorkerServer(db, { name: "digitizer", host: "studio.local", lanes: ["embroidery", "laser-cut"], version: "1.0.0" });
+    expect(reg.worker.lanes).toEqual(["embroidery", "laser-cut"]);
+    expect(reg.events.map((e) => e.kind)).toEqual(["worker.registered", "worker.online"]);
+    await expect(registerWorkerServer(db, { name: "digitizer", lanes: ["Embroidery"] })).rejects.toMatchObject({ status: 400, message: "lanes: 'Embroidery' is not a lane name (lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter)." } satisfies Partial<WorkError>);
+    await expect(registerWorkerServer(db, { name: "digitizer", lanes: ["agent:claude"] })).rejects.toBeInstanceOf(WorkError);
+    // the lanes stayed what the good registration set
+    expect((await repo.getWorkerByName(db, "digitizer"))?.lanes).toEqual(["embroidery", "laser-cut"]);
+  });
+});

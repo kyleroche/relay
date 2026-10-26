@@ -21,6 +21,7 @@ import { getTask, type TaskRow } from "../db/tasks.ts";
 import { claimNext, doorbell, forgetWorker, getWorker, getWorkerByName, heartbeatWorker, liveClaim, registerWorker, releaseClaim, workerViews, type ClaimRow, type Doorbell, type WorkerInput, type WorkerRow, type WorkerView } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
 import type { MeterReading } from "../meters.ts";
+import { isLaneName, LANE_NAME_RULE } from "../tasks/create.ts";
 import { heldEvent, type GateVerdict } from "../tasks/gate.ts";
 import { reviewNotes } from "../tasks/review.ts";
 
@@ -137,7 +138,14 @@ export interface ReleaseResult {
 
 const actorOf = (w: Pick<WorkerRow, "name">): string => `runner:${w.name}`;
 
+/**
+ * Register (or refresh) a worker. The lane registry is open: any lane name is accepted (`relay work` sends the built-in
+ * lanes its logins allow; an app serving its own craft sends that lane, docs/WORKER-AGENTS.md), and only the shape of
+ * a name is checked here, since a lane exists by being served.
+ */
 export async function registerWorkerServer(db: Db, input: WorkerInput): Promise<RegisterResult> {
+  const bad = input.lanes.find((l) => !isLaneName(l.trim()));
+  if (bad !== undefined) throw new WorkError(`lanes: '${bad}' is not a lane name (${LANE_NAME_RULE}).`, 400);
   const before = await getWorkerByName(db, input.name);
   const { worker, created } = await registerWorker(db, input);
   const events: EventRow[] = [];
