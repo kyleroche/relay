@@ -43,9 +43,13 @@ export class ManifestError extends Error {
 export const MANIFEST_FENCE = "relay-nodes";
 const KNOWN_KEYS = new Set(["workflow", "inputs", "outputs", "model", "stage"]);
 
-/** The text inside the first ```relay-nodes fence, or undefined when the body has none. */
-export function extractManifestBlock(body: string): string | undefined {
-  const m = /^[ \t]*(`{3,}|~{3,})[ \t]*relay-nodes[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*$/m.exec(body ?? "");
+/**
+ * The text inside the first ```<fence> block (`relay-nodes` by default; `relay-job` for app workers, `job-manifest.ts`),
+ * or undefined when the body has none.
+ */
+export function extractManifestBlock(body: string, fence: string = MANIFEST_FENCE): string | undefined {
+  const name = fence.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = new RegExp(`^[ \\t]*(\`{3,}|~{3,})[ \\t]*${name}[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n[ \\t]*\\1[ \\t]*$`, "m").exec(body ?? "");
   return m ? m[2] : undefined;
 }
 
@@ -62,18 +66,18 @@ export function parseNodesManifest(body: string): NodesManifest {
   return manifestFromValue(parseManifestText(block));
 }
 
-/** Parse the block's text as JSON when it starts with `{`, else as the YAML subset. */
-export function parseManifestText(text: string): unknown {
+/** Parse the block's text as JSON when it starts with `{`, else as the YAML subset. `fence` names the block in errors. */
+export function parseManifestText(text: string, fence: string = MANIFEST_FENCE): unknown {
   const t = text.trim();
-  if (!t) throw new ManifestError("the relay-nodes block is empty");
+  if (!t) throw new ManifestError(`the ${fence} block is empty`);
   if (t.startsWith("{")) {
     try {
       return JSON.parse(t);
     } catch (e) {
-      throw new ManifestError(`the relay-nodes block is not valid JSON: ${(e as Error).message}`);
+      throw new ManifestError(`the ${fence} block is not valid JSON: ${(e as Error).message}`);
     }
   }
-  return parseYamlSubset(t);
+  return parseYamlSubset(t, fence);
 }
 
 /** Validate a parsed object into a manifest. */
@@ -119,7 +123,7 @@ export function normalizeWorkflowPath(raw: unknown): string {
   return p;
 }
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+export const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // ---------- the YAML subset ----------
 
@@ -134,15 +138,15 @@ interface Line {
  * strings, numbers, booleans and null; `#` comments outside quotes. Anchors, multi-line scalars, flow mappings with
  * YAML (not JSON) syntax and tabs are refused with a line number.
  */
-export function parseYamlSubset(text: string): unknown {
+export function parseYamlSubset(text: string, fence: string = MANIFEST_FENCE): unknown {
   const lines: Line[] = [];
   text.split(/\r?\n/).forEach((raw, i) => {
-    if (raw.includes("\t")) throw new ManifestError(`line ${i + 1}: tabs are not allowed in the relay-nodes block; indent with spaces`);
+    if (raw.includes("\t")) throw new ManifestError(`line ${i + 1}: tabs are not allowed in the ${fence} block; indent with spaces`);
     const stripped = stripComment(raw);
     if (!stripped.trim()) return;
     lines.push({ indent: raw.length - raw.trimStart().length, text: stripped.trim(), no: i + 1 });
   });
-  if (!lines.length) throw new ManifestError("the relay-nodes block is empty");
+  if (!lines.length) throw new ManifestError(`the ${fence} block is empty`);
   const [value, next] = parseNode(lines, 0, lines[0]!.indent);
   if (next !== lines.length) throw new ManifestError(`line ${lines[next]!.no}: unexpected indentation`);
   return value;

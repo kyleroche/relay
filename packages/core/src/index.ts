@@ -24,6 +24,7 @@ export * from "./tasks/review.ts";
 export * from "./tasks/requeue.ts";
 export * from "./tasks/gate.ts";
 export * from "./tasks/manifest.ts";
+export * from "./tasks/job-manifest.ts";
 export * from "./client/index.ts";
 export * from "./onboard/index.ts";
 export * from "./onboard/registry.ts";
