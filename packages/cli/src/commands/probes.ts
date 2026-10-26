@@ -14,6 +14,8 @@ export interface Check {
   status: Status;
   name: string;
   detail: string;
+  /** For a lane probe: true when the machine can serve that lane (a warn can still serve; a missing tool never does). */
+  serves?: boolean;
 }
 
 /** How to put each tool on a machine that lacks it, for the doctor line (official sources only). */
@@ -137,7 +139,7 @@ export async function nodesCheck(env: NodeJS.ProcessEnv = process.env): Promise<
   const keys = NODES_KEY_NAMES.filter((k) => !!env[k]);
   const detail = `${bin}${version ? ` v${version}` : ""}; python ${python[0]}${python.length > 1 ? " (uv tool run)" : ""}; workspace ${workspace ?? "unknown"}; keys set: ${keys.length ? keys.join(", ") : "none"}${problems.length ? `; ${problems.join("; ")}` : ""}`;
   // an invalid config is a warn the lane still serves (the shim registers libraries itself); no version is a fail
-  return { status: !version ? "fail" : problems.length ? "warn" : "ok", name, detail };
+  return { status: !version ? "fail" : problems.length ? "warn" : "ok", name, detail, serves: !!version };
 }
 
 /**
@@ -279,7 +281,8 @@ export function metersCheck(home: string, now: number = Date.now()): Check {
 /**
  * The lanes this machine can serve, from its logins: `claude` when Claude Code is logged in, `codex` when the codex
  * CLI is logged in or fx has a Codex login, `grok` when the grok CLI is present or fx has a Grok login, `nodes` when
- * the Griptape Nodes engine is installed (`nodesCheck`, ok or warn). `gh` must be logged in for any lane (clones,
+ * the Griptape Nodes engine is installed and answers (`nodesCheck` with `serves`; a machine without the engine gets a
+ * warn line and no lane). `gh` must be logged in for any lane (clones,
  * pushes, PRs and issue comments run as it).
  */
 export function lanesFromChecks(checks: Check[]): { lanes: string[]; reasons: string[] } {
@@ -298,7 +301,7 @@ export function lanesFromChecks(checks: Check[]): { lanes: string[]; reasons: st
   if (by.get("cli:grok")?.status === "ok" || fx.includes("grok")) lanes.push("grok");
   else reasons.push("grok: no grok CLI or fx login");
   const nodes = by.get("nodes");
-  if (nodes && nodes.status !== "fail") lanes.push("nodes");
+  if (nodes?.serves) lanes.push("nodes");
   else reasons.push(`nodes: ${nodes ? nodes.detail.split(";")[0] : "griptape-nodes not installed"}`);
   return { lanes, reasons };
 }

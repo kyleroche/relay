@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { defaultConfig, type HarnessConfig } from "@relay/core";
-import { mcpCheck } from "../src/commands/probes.ts";
+import { type Check, lanesFromChecks, mcpCheck } from "../src/commands/probes.ts";
 import { pathCheck } from "../src/commands/probes.ts";
 
 const ENTRY = "/opt/relay/dist/relay-mcp.js";
@@ -67,5 +67,23 @@ describe("pathCheck", () => {
     expect(c.status).toBe("warn");
     expect(c.detail).toContain("not installed as a command");
     expect(c.detail).not.toContain(".zshrc");
+  });
+});
+
+describe("lanesFromChecks: the nodes lane", () => {
+  const base = (): Check[] => [
+    { status: "ok", name: "login:gh", detail: "logged in" },
+    { status: "ok", name: "login:claude", detail: "logged in" },
+    { status: "ok", name: "login:fx", detail: "connected: Codex, Grok" },
+  ];
+  it("is served only when the engine answered, even when the line is a warning", () => {
+    expect(lanesFromChecks([...base(), { status: "warn", name: "nodes", detail: "/usr/local/bin/griptape-nodes v0.104.2; workspace missing", serves: true }]).lanes).toContain("nodes");
+    expect(lanesFromChecks([...base(), { status: "ok", name: "nodes", detail: "/usr/local/bin/griptape-nodes v0.104.2", serves: true }]).lanes).toContain("nodes");
+  });
+  it("is not served by a machine without the engine, whose line is a warning with the install hint", () => {
+    const r = lanesFromChecks([...base(), { status: "warn", name: "nodes", detail: "not on PATH; install Griptape Nodes" }]);
+    expect(r.lanes).not.toContain("nodes");
+    expect(r.reasons).toContain("nodes: not on PATH");
+    expect(lanesFromChecks([...base(), { status: "fail", name: "nodes", detail: "/x/griptape-nodes; `griptape-nodes --version` gave no version" }]).lanes).not.toContain("nodes");
   });
 });
