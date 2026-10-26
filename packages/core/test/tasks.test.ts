@@ -230,28 +230,6 @@ describe("openTask", () => {
   });
 });
 
-describe("openTask with a relay-job block", () => {
-  const fence = (inner: string) => `Digitize the logo for the left chest.\n\n\`\`\`relay-job\n${inner}\n\`\`\`\n`;
-  it("refuses a block that does not parse, or names an asset that is missing or on another project", async () => {
-    const gh = fakeGitHub();
-    await repo.upsertProject(db, { slug: "hoop", repo: "acme/hoop" });
-    await repo.upsertProject(db, { slug: "other", repo: "acme/other" });
-    await repo.registerWorker(db, { name: "stitcher", lanes: ["digitize"] });
-    await expect(openTask(db, gh, { project: "hoop", title: "Logo", lane: "digitize", body: fence("inputs: [01JMISSING]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest: input asset 01JMISSING does not exist/) });
-    await repo.createAsset(db, { id: "01JELSE", project: "other", title: "elsewhere", kind: "image", mime: "image/png", size: 3, sha256: "e".repeat(64), storageKey: "other/01JELSE/a.png", createdBy: "human:kyle" });
-    await expect(openTask(db, gh, { project: "hoop", title: "Logo", lane: "digitize", body: fence("inputs: [01JELSE]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/belongs to project 'other'/) });
-    await expect(openTask(db, gh, { project: "hoop", title: "Logo", lane: "digitize", body: fence("wrong: 1"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest:/) });
-    expect(gh.created.some((c) => c.title === "Logo")).toBe(false);
-  });
-  it("opens the issue when the block parses and its inputs are the project's own", async () => {
-    const gh = fakeGitHub();
-    await repo.createAsset(db, { id: "01JLOGO", project: "hoop", title: "logo", kind: "image", mime: "image/png", size: 3, sha256: "a".repeat(64), storageKey: "hoop/01JLOGO/logo.png", createdBy: "human:kyle" });
-    const r = await openTask(db, gh, { project: "hoop", title: "Logo", lane: "digitize", body: fence("inputs:\n  - asset: 01JLOGO\n    as: artwork\nparams:\n  hoop: 100x100\noutputs: [stitch-file]"), actor: "human:kyle" });
-    expect(r.task.lane).toBe("digitize");
-    expect(gh.created.at(-1)?.body).toContain("```relay-job");
-  });
-});
-
 describe("the lane registry", () => {
   // a repository of its own: the fake GitHub numbers issues from 100 in every test, and task rows are one per issue
   beforeAll(() => repo.upsertProject(db, { slug: "hoop", repo: "acme/hoop", path: "/tmp/hoop" }));
@@ -276,7 +254,7 @@ describe("the lane registry", () => {
     expect(await laneUnservedProblem(db, "laser")).toBe("no worker serves lane 'laser'; lanes with a worker: embroidery; built-in: claude, codex, grok, nodes; cloud: claude-cloud, codex-cloud");
     const r = await openTask(db, gh, { project: "hoop", title: "Hoop the logo", lane: "embroidery", actor: "bot:digitizer" });
     expect(r.created).toBe(true);
-    expect(r.task.lane).toBe("digitize");
+    expect(r.task.lane).toBe("embroidery");
     expect(gh.created.at(-1)?.labels).toEqual(["agent:embroidery"]);
     // the label is made with relay's colour before the issue carries it; relay link never installs it
     expect(gh.ensured).toEqual([{ repo: "acme/hoop", name: "agent:embroidery", color: "8A2BE2", description: "relay: served by the embroidery worker" }]);
@@ -309,5 +287,27 @@ describe("the lane registry", () => {
       },
     };
     expect((await openTask(db, failing, { project: "bare", title: "Failing", lane: "embroidery", actor: "bot:digitizer" })).task.lane).toBe("embroidery");
+  });
+});
+
+describe("openTask with a relay-job block", () => {
+  const fence = (inner: string) => `Digitize the logo for the left chest.\n\n\`\`\`relay-job\n${inner}\n\`\`\`\n`;
+  it("refuses a block that does not parse, or names an asset that is missing or on another project", async () => {
+    const gh = fakeGitHub();
+    await repo.upsertProject(db, { slug: "stitch", repo: "acme/stitch" });
+    await repo.upsertProject(db, { slug: "other", repo: "acme/other" });
+    await repo.registerWorker(db, { name: "stitcher", lanes: ["digitize"] });
+    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs: [01JMISSING]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest: input asset 01JMISSING does not exist/) });
+    await repo.createAsset(db, { id: "01JELSE", project: "other", title: "elsewhere", kind: "image", mime: "image/png", size: 3, sha256: "e".repeat(64), storageKey: "other/01JELSE/a.png", createdBy: "human:kyle" });
+    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs: [01JELSE]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/belongs to project 'other'/) });
+    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("wrong: 1"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest:/) });
+    expect(gh.created.some((c) => c.title === "Logo")).toBe(false);
+  });
+  it("opens the issue when the block parses and its inputs are the project's own", async () => {
+    const gh = fakeGitHub();
+    await repo.createAsset(db, { id: "01JLOGO", project: "stitch", title: "logo", kind: "image", mime: "image/png", size: 3, sha256: "a".repeat(64), storageKey: "stitch/01JLOGO/logo.png", createdBy: "human:kyle" });
+    const r = await openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs:\n  - asset: 01JLOGO\n    as: artwork\nparams:\n  hoop: 100x100\noutputs: [stitch-file]"), actor: "human:kyle" });
+    expect(r.task.lane).toBe("digitize");
+    expect(gh.created.at(-1)?.body).toContain("```relay-job");
   });
 });
