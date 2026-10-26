@@ -2,7 +2,12 @@
  * OpenAPI pieces for the integration surface (tasks, external events, tokens, webhooks, project uploads, usage), kept
  * out of app/openapi.json/route.ts so that file only spreads them in. Everything here is additive to the API.
  */
-import { TASK_LANES, TASK_PRIORITIES, TASK_STATES, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES, WEBHOOK_EVENT_KINDS } from "@relay/core";
+import { CLOUD_LANES, LANE_NAME_PATTERN, TASK_PRIORITIES, TASK_STATES, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES, WEBHOOK_EVENT_KINDS, WORKER_LANES } from "@relay/core";
+
+/** A lane name: the registry is open, so the schema is the shape and the built-ins are in the description (packages/core/src/tasks/create.ts). */
+const LANE_PATTERN = `^${LANE_NAME_PATTERN}$`;
+const LANE_WORDS = `Built-in: ${WORKER_LANES.join(", ")} (run on the user's own workers, machines running relay work). Cloud: ${CLOUD_LANES.join(", ")} (the vendors' hosted tiers, dispatched by the site once wired). Any other lane name is one a registered worker serves (an app's own craft, e.g. embroidery); a task on a lane no worker has registered is refused with the lanes that have one.`;
+const laneSchema = (description: string) => ({ type: "string", pattern: LANE_PATTERN, description: `${description} ${LANE_WORDS}` });
 
 export const scopeDescriptions: Record<string, string> = { ...TOKEN_SCOPE_DESCRIPTIONS };
 
@@ -212,7 +217,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
               schema: {
                 type: "object",
                 properties: {
-                  lane: { type: "string", enum: TASK_LANES, description: "The lane to move the task to; omitted keeps its lane. claude, codex and grok run on the user's own workers; the cloud lanes dispatch nothing until the operator wires them." },
+                  lane: laneSchema("The lane to move the task to; omitted keeps its lane."),
                   reason: { type: "string", maxLength: 2000, description: "Why, for the feed row." },
                 },
               },
@@ -682,7 +687,7 @@ export const integrationSchemas: Record<string, unknown> = {
       project: { type: "string" },
       title: { type: "string", maxLength: 256 },
       body: { type: "string", description: "Markdown; the brief the lane reads." },
-      lane: { type: "string", enum: TASK_LANES },
+      lane: laneSchema("The lane that runs the task."),
       priority: { type: "string", enum: TASK_PRIORITIES },
       idempotency_key: { type: "string", maxLength: 200 },
     },
@@ -831,7 +836,7 @@ export const integrationSchemas: Record<string, unknown> = {
       id: { type: "string" },
       name: { type: "string", description: "`runner:<name>` is this worker's actor in the feed." },
       host: { type: "string" },
-      lanes: { type: "array", items: { type: "string", enum: ["claude", "codex", "grok"] } },
+      lanes: { type: "array", items: laneSchema("A lane this worker serves.") },
       labels: { type: "array", items: { type: "string" }, description: "Capabilities matched against a project's `lane.labels` preference." },
       version: { type: "string" },
       last_seen: { type: "string", format: "date-time" },
@@ -897,7 +902,7 @@ export const integrationSchemas: Record<string, unknown> = {
     properties: {
       name: { type: "string", pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$" },
       host: { type: "string" },
-      lanes: { type: "array", items: { type: "string", enum: ["claude", "codex", "grok"] } },
+      lanes: { type: "array", items: laneSchema("A lane this worker serves; relay work sends the built-ins its logins allow, an app sends its own.") },
       labels: { type: "array", items: { type: "string" } },
       version: { type: "string" },
     },

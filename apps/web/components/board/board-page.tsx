@@ -7,7 +7,9 @@ import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
+import { registeredLanes as coreRegisteredLanes } from "@relay/core";
 import { dataMode, getAssets, getBoard, getProjects, getWorkers } from "@/lib/data";
+import { getDb } from "@/lib/db";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
 
 /** The board: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -20,11 +22,13 @@ export const BOARD_METADATA: Metadata = {
 
 export async function BoardPage({ all, project }: { all?: string; project?: string } = {}) {
   const db = dataMode() === "db";
-  const [tasks, workers, pending, projects] = await Promise.all([
+  const [tasks, workers, pending, projects, registeredLanes] = await Promise.all([
     getBoard({ limit: 300, doneLimit: 10, ...(project ? { project } : {}) }),
     getWorkers(),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
+    // the Requeue sheet's "Registered" lanes: what workers beyond relay work serve (the demo dataset has none)
+    db ? getDb().then(coreRegisteredLanes) : Promise.resolve([] as string[]),
   ]);
   const now = Date.now();
   const live = workers.filter((w) => !w.retired);
@@ -92,7 +96,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
           {known ? "Nothing in motion, failed this week or merged for this project. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} />
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} registeredLanes={registeredLanes} />
     </>
   );
 }

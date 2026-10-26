@@ -1,4 +1,4 @@
-import { isTaskState, openTask, repo, TaskCreateError, TASK_LANES, TASK_PRIORITIES, TASK_STATES, type TaskLane, type TaskPriority } from "@relay/core";
+import { isLaneName, isTaskState, laneNameProblem, openTask, repo, TaskCreateError, TASK_PRIORITIES, TASK_STATES, type TaskPriority } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -27,7 +27,8 @@ export const GET = api(
 /**
  * operationId: createTask. Body: { project, title, body?, lane, priority?, idempotency_key? }. Opens the GitHub issue
  * with the agent:<lane> label, records the task, writes issue.opened and task.created. 201 on create, 200 when the
- * idempotency key matched an earlier task.
+ * idempotency key matched an earlier task. The lane is a built-in or cloud lane, or one a registered worker serves;
+ * openTask answers 400 naming the lanes that have a worker otherwise.
  */
 export const POST = api(
   async (req) => {
@@ -38,7 +39,8 @@ export const POST = api(
     if (!body) return problem(400, "Bad Request", "Body must be a JSON object.", instance);
     const lane = str(body.lane);
     const priority = str(body.priority);
-    if (!lane || !(TASK_LANES as readonly string[]).includes(lane)) return problem(400, "Bad Request", `lane must be one of ${TASK_LANES.join(", ")}.`, instance, { parameter: "lane" });
+    if (!lane) return problem(400, "Bad Request", "lane is required.", instance, { parameter: "lane" });
+    if (!isLaneName(lane)) return problem(400, "Bad Request", `${laneNameProblem(lane)}.`, instance, { parameter: "lane" });
     if (priority && !(TASK_PRIORITIES as readonly string[]).includes(priority)) return problem(400, "Bad Request", `priority must be one of ${TASK_PRIORITIES.join(", ")}.`, instance, { parameter: "priority" });
     const project = str(body.project);
     const title = str(body.title);
@@ -50,7 +52,7 @@ export const POST = api(
         project,
         title,
         body: typeof body.body === "string" ? body.body : "",
-        lane: lane as TaskLane,
+        lane,
         ...(priority ? { priority: priority as TaskPriority } : {}),
         idempotency_key: str(body.idempotency_key) ?? null,
         actor,

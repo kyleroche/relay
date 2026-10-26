@@ -64,7 +64,7 @@ function AssetLine({ t, title }: { t: BoardTask & { asset_id: string }; title: s
   );
 }
 
-function Card({ t, now, workers, canWrite }: { t: BoardTask; now: number; workers: Worker[]; canWrite: boolean }) {
+function Card({ t, now, workers, canWrite, registeredLanes }: { t: BoardTask; now: number; workers: Worker[]; canWrite: boolean; registeredLanes: readonly string[] }) {
   const title = t.title ?? `#${t.issue}`;
   const inFlight = t.state === "claimed" || t.state === "running";
   const name = workerName(t.runner);
@@ -120,14 +120,14 @@ function Card({ t, now, workers, canWrite }: { t: BoardTask; now: number; worker
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t pt-2.5">
           {t.state === "review" && (t.asset_id != null ? <AssetReviewActions assetId={t.asset_id} version={t.asset_version} canWrite={canWrite} size="sm" /> : <ReviewActions taskId={t.id} pr={t.pr} canWrite={canWrite} size="sm" />)}
           {t.state === "held" && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
-          {requeue && <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} cloudLanes={CLOUD_LANES} canWrite={canWrite} size="sm" />}
+          {requeue && <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={registeredLanes} cloudLanes={CLOUD_LANES} canWrite={canWrite} size="sm" />}
         </div>
       )}
     </li>
   );
 }
 
-export function Board({ tasks, workers, now, canWrite, all, project }: { tasks: BoardTask[]; workers: Worker[]; now: number; canWrite: boolean; all?: string; project?: string }) {
+export function Board({ tasks, workers, now, canWrite, all, project, registeredLanes = [] }: { tasks: BoardTask[]; workers: Worker[]; now: number; canWrite: boolean; all?: string; project?: string; registeredLanes?: readonly string[] }) {
   const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => c.states.includes(t.state)) })).filter((c) => c.always || c.list.length > 0);
   const href = (column?: string) => {
     const qs = new URLSearchParams();
@@ -153,7 +153,7 @@ export function Board({ tasks, workers, now, canWrite, all, project }: { tasks: 
             ) : (
               <ul className="flex flex-col gap-2 px-2 pb-2">
                 {shown.map((t) => (
-                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} />
+                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} registeredLanes={registeredLanes} />
                 ))}
               </ul>
             )}

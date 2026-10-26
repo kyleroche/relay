@@ -1,4 +1,4 @@
-import type { BoardRow, TaskState, TaskView, WorkerLane } from "@relay/core";
+import type { BoardRow, TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
 
 export type { TaskState, TaskView };
@@ -24,8 +24,12 @@ export interface TaskListOptions {
 
 export type ActorKind = "human" | "bot" | "runner" | "agent";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
-/** The worker lanes, core's `WORKER_LANES` (packages/core/src/tasks/create.ts): one place to add a lane. */
-export type Lane = WorkerLane;
+/**
+ * A lane name: one of core's `WORKER_LANES` (claude, codex, grok, nodes), a cloud lane, or the lane an app registered as
+ * a worker (the registry is open; `isLaneName` in packages/core/src/tasks/create.ts is the shape). `WorkerLane` from
+ * core still names the built-ins where only those are meant.
+ */
+export type Lane = string;
 
 /** One row of the `events` table (see packages/core/src/db/schema.sql). */
 export interface FeedEvent {
