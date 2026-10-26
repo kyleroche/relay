@@ -1,6 +1,6 @@
 {
   "name": "@kyleroche/relay",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "relay: your coding-agent subscriptions (Claude Code, Codex, Grok) as one system. The CLI, the session hooks and the memory MCP server.",
   "type": "module",
   "license": "Apache-2.0",
