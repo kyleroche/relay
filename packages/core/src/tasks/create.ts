@@ -16,6 +16,8 @@ import { createTask, findTaskByKey, taskView, type TaskView } from "../db/tasks.
 import type { GitHubClient } from "../github/client.ts";
 import { ulid } from "../util.ts";
 import { heldEvent, precheckTask } from "./gate.ts";
+import { assertJobManifest } from "./job-manifest.ts";
+import { ManifestError } from "./manifest.ts";
 
 /**
  * The lane registry is open. The built-in worker lanes execute on a machine that ran `relay work`, with the adapters in
@@ -154,6 +156,13 @@ export async function openTask(db: Db, github: GitHubClient | undefined, input: 
   }
   const unserved = await laneUnservedProblem(db, input.lane);
   if (unserved) throw new TaskCreateError(unserved, 400);
+  // a relay-job block (docs/WORKER-AGENTS.md) must parse and name assets of this project before the issue exists
+  try {
+    await assertJobManifest(db, input.body ?? "", input.project);
+  } catch (e) {
+    if (e instanceof ManifestError) throw new TaskCreateError(`relay-job manifest: ${e.message}`, 400);
+    throw e;
+  }
   if (!github) throw new TaskCreateError("No GitHub credential: set GITHUB_TOKEN (web) or log in with gh (CLI).", 503);
   // a registered worker's lane has no label from `relay link`: make it before the issue carries it, so it gets relay's colour rather than GitHub's default (best effort)
   if (!isTaskLane(input.lane)) await github.ensureLabel?.(project.repo, laneLabelSpec(input.lane)).catch(() => {});

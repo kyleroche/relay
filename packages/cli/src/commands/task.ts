@@ -5,7 +5,7 @@
  */
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
-import { CLOUD_LANES, isLaneName, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, TASK_PRIORITIES, TASK_STATES, isTaskState, WORKER_LANES, type TaskPriority, type TaskView } from "@relay/core";
+import { CLOUD_LANES, isLaneName, JOB_FENCE, jobManifestFromValue, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, TASK_PRIORITIES, TASK_STATES, isTaskState, WORKER_LANES, type TaskPriority, type TaskView } from "@relay/core";
 import { log, openReady, resolveProject } from "./_common.ts";
 
 function line(t: TaskView): string {
@@ -41,12 +41,13 @@ export function registerTask(program: Command): void {
     .option("--body <text>", "issue body (markdown)")
     .option("--body-file <path>", "read the body from a file ('-' for stdin)")
     .option("--manifest <path>", "a relay-nodes manifest (JSON or YAML: workflow, inputs, outputs, model, stage) appended to the body as the fenced block the nodes lane runs")
+    .option("--job <path>", "a relay-job manifest for an app worker (JSON or YAML: inputs as asset ids, params, outputs) appended to the body as the fenced block the worker reads (docs/WORKER-AGENTS.md)")
     .option("--priority <p>", `one of ${TASK_PRIORITIES.join(", ")}`)
     .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
     .option("--cwd <path>")
     .option("--json")
     .description("Open a task: a GitHub issue with agent:<lane> (and priority:<p>) labels")
-    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; manifest?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
+    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; manifest?: string; job?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
       if (!isLaneName(o.lane)) throw new Error(`--lane: ${laneNameProblem(o.lane)}`);
       if (o.priority && !(TASK_PRIORITIES as readonly string[]).includes(o.priority)) throw new Error(`--priority must be one of ${TASK_PRIORITIES.join(", ")}`);
       const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
@@ -56,6 +57,11 @@ export function registerTask(program: Command): void {
         const text = readFileSync(o.manifest, "utf8");
         manifestFromValue(parseManifestText(text)); // throws ManifestError with the line to fix before anything is opened
         body = `${body.trimEnd()}\n\n\`\`\`${MANIFEST_FENCE}\n${text.trim()}\n\`\`\`\n`;
+      }
+      if (o.job) {
+        const text = readFileSync(o.job, "utf8");
+        jobManifestFromValue(parseManifestText(text, JOB_FENCE)); // same: refuse a bad block locally; the server checks the asset ids
+        body = `${body.trimEnd()}\n\n\`\`\`${JOB_FENCE}\n${text.trim()}\n\`\`\`\n`;
       }
       const h = await openReady();
       try {

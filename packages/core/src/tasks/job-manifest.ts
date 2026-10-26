@@ -170,6 +170,22 @@ function jobOutputFrom(item: unknown, n: number): JobOutput {
   return out;
 }
 
+/**
+ * The check `openTask` runs before an issue is opened: a `relay-job` block that parses, whose input assets exist and
+ * belong to the project. Nothing is signed. Returns the manifest, or undefined when the body has no block; throws
+ * `ManifestError` with the line to fix.
+ */
+export async function assertJobManifest(db: Db, body: string, project: string): Promise<JobManifest | undefined> {
+  const manifest = parseJobManifest(body);
+  if (!manifest) return undefined;
+  for (const input of manifest.inputs) {
+    const row = await getAsset(db, input.asset);
+    if (!row) throw new ManifestError(`input asset ${input.asset} does not exist in the library`);
+    if (row.project !== project) throw new ManifestError(`input asset ${input.asset} belongs to project '${row.project ?? "_"}', not '${project}'`);
+  }
+  return manifest;
+}
+
 export interface ResolveJobInputsOptions {
   /** Map the store's signed URL to what the caller can fetch (the web app's public view route); identity by default. */
   viewUrl?: (signedUrl: string, key: string) => string;
