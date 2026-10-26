@@ -16,9 +16,9 @@
     "relay": "../../bin/relay"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@relay/core": "workspace:*",
-    "zod": "^4.0.0"
+    "zod": "^4.6.7"
   },
   "license": "Apache-2.0"
 }
