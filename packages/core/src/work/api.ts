@@ -136,7 +136,8 @@ export function localWorkApi(db: Db, opts: LocalWorkApiOptions = {}): WorkApi {
 
 export interface HttpWorkApiOptions {
   site: string;
-  token: string;
+  /** The bearer, or a getter called before every request so a long-running worker renews its token (the CLI passes one that refreshes when stale). */
+  token: string | (() => Promise<string>);
   fetch?: HttpFetch;
 }
 
@@ -146,9 +147,10 @@ export function httpWorkApi(opts: HttpWorkApiOptions): WorkApi {
   async function rest<T>(method: string, path: string, body?: unknown, query?: Record<string, string | number | undefined>, raw?: { bytes: Uint8Array<ArrayBuffer>; contentType: string }): Promise<T> {
     const url = new URL(`${site}/api/v1${path}`);
     for (const [k, v] of Object.entries(query ?? {})) if (v !== undefined && v !== "") url.searchParams.set(k, String(v));
+    const token = typeof opts.token === "function" ? await opts.token() : opts.token;
     const res = await doFetch(url.toString(), {
       method,
-      headers: { authorization: `Bearer ${opts.token}`, accept: "application/json", "user-agent": "relay-work", ...(raw ? { "content-type": raw.contentType } : body !== undefined ? { "content-type": "application/json" } : {}) },
+      headers: { authorization: `Bearer ${token}`, accept: "application/json", "user-agent": "relay-work", ...(raw ? { "content-type": raw.contentType } : body !== undefined ? { "content-type": "application/json" } : {}) },
       ...(raw ? { body: raw.bytes } : body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
     const text = await res.text();

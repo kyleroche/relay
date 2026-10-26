@@ -31,63 +31,7 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSy
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import {
-  CONTAINER_CPUS,
-  CONTAINER_CREDENTIALS,
-  CONTAINER_HOME,
-  CONTAINER_IMAGE,
-  CONTAINER_LOGIN_COMMAND,
-  CONTAINER_LOGIN_COMMAND_WHY,
-  CONTAINER_MEMORY,
-  CONTAINER_NAME,
-  CONTAINER_PASSTHROUGH_ENV,
-  CONTAINER_RELAY_HOME,
-  CONTAINER_SANDBOX_LABEL,
-  CONTAINER_VOLUME,
-  CONTAINER_WORKER_HOST_ENV,
-  CONTAINER_WORKER_NAME_ENV,
-  containerLoginSteps,
-  containerPlan,
-  containerSettingsFrom,
-  containerStateFrom,
-  containerWorkerName,
-  imageStatus,
-  isLoginProvider,
-  lanesFromDoctorOutput,
-  loginDonePage,
-  loginStatesFromDoctorOutput,
-  manualLoginSteps,
-  parseLoginCallback,
-  parseLoginUrl,
-  replayUrl,
-  tokenNameFromDoctorOutput,
-  detectGitHub,
-  httpWorkApi,
-  ISOLATION_LABEL,
-  ISOLATIONS,
-  laneRunner,
-  localWorkApi,
-  LOGIN_CALLBACK_PORTS,
-  WORKER_LANES,
-  LOGIN_PROVIDERS,
-  LOGIN_TIMEOUT_MS,
-  MAX_IDLE_MS,
-  NO_SANDBOX_LABEL,
-  POLL_MS,
-  readSiteConfig,
-  relayHome,
-  runtimePaths,
-  runWorker,
-  SANDBOX_ON_LABEL,
-  servicePlan,
-  type ContainerPlan,
-  type Isolation,
-  type LoginProvider,
-  type LoginRedirect,
-  type WorkApi,
-  type WorkerView,
-  workerRetired,
-} from "@relay/core";
+import { CONTAINER_CPUS, CONTAINER_CREDENTIALS, CONTAINER_HOME, CONTAINER_IMAGE, CONTAINER_LOGIN_COMMAND, CONTAINER_LOGIN_COMMAND_WHY, CONTAINER_MEMORY, CONTAINER_NAME, CONTAINER_PASSTHROUGH_ENV, CONTAINER_RELAY_HOME, CONTAINER_SANDBOX_LABEL, CONTAINER_VOLUME, CONTAINER_WORKER_HOST_ENV, CONTAINER_WORKER_NAME_ENV, containerLoginSteps, containerPlan, containerSettingsFrom, containerStateFrom, containerWorkerName, imageStatus, isLoginProvider, lanesFromDoctorOutput, loginDonePage, loginStatesFromDoctorOutput, manualLoginSteps, parseLoginCallback, parseLoginUrl, replayUrl, tokenNameFromDoctorOutput, detectGitHub, httpWorkApi, ISOLATION_LABEL, ISOLATIONS, laneRunner, localWorkApi, LOGIN_CALLBACK_PORTS, WORKER_LANES, LOGIN_PROVIDERS, LOGIN_TIMEOUT_MS, MAX_IDLE_MS, NO_SANDBOX_LABEL, POLL_MS, readSiteConfig, relayHome, runtimePaths, runWorker, SANDBOX_ON_LABEL, servicePlan, type ContainerPlan, type Isolation, type LoginProvider, type LoginRedirect, type WorkApi, type WorkerView, workerRetired, refreshSiteTokenIfStale } from "@relay/core";
 import { log, onPath, openReady } from "./_common.ts";
 import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.ts";
 
@@ -152,7 +96,15 @@ function fileLog(path: string): (m: string) => void {
 /** Site mode talks to the hosted relay; local mode schedules against this machine's database. */
 async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () => Promise<void> }> {
   const h = await openReady();
-  if (h.mode === "site") return { api: httpWorkApi({ site: h.cfg.site!, token: h.cfg.siteToken! }), where: h.cfg.site!, close: () => h.close() };
+  if (h.mode === "site") {
+    // the worker runs for days: renew the token before it lapses instead of dying on the first 401 (serialised across processes in core)
+    let cfg = h.cfg;
+    const token = async () => {
+      cfg = await refreshSiteTokenIfStale(cfg);
+      return cfg.siteToken!;
+    };
+    return { api: httpWorkApi({ site: cfg.site!, token }), where: cfg.site!, close: () => h.close() };
+  }
   return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 

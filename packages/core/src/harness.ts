@@ -3,10 +3,11 @@ import { openDb, type Db } from "./db/client.ts";
 import { Ledger } from "./ledger/ledger.ts";
 import type { Harness } from "./onboard/index.ts";
 import { briefEmbedder } from "./brief/index.ts";
+import { statSync, unlinkSync, writeFileSync } from "node:fs";
 import { credentialsFromToken, OAuthClientError, refreshAccessToken, tokenIsStale } from "./client/device.ts";
-import { httpClient, SiteModeError } from "./client/http.ts";
+import { type HttpFetch, httpClient, SiteModeError } from "./client/http.ts";
 import { localClient } from "./client/local.ts";
-import { writeSiteConfig } from "./client/site.ts";
+import { credentialsPath, readSiteConfig, writeSiteConfig } from "./client/site.ts";
 import type { ClientMode, RelayClient } from "./client/types.ts";
 
 export interface OpenHarness extends Harness {
@@ -56,24 +57,97 @@ export async function refreshSiteTokenIfStale(cfg: HarnessConfig, now: number = 
 export const canRefreshSiteToken = (cfg: HarnessConfig): boolean => !!cfg.site && !!cfg.siteRefreshToken && cfg.siteTokenSource !== "env";
 
 /**
+ * Serialise refreshes across the processes that share one credential file (CLI commands, hooks, the stdio MCP bridge,
+ * a worker): a refresh rotates the refresh token, and the server treats a second use of the old one as a leaked chain
+ * and revokes every token on it. The lock is a file next to credentials.json created exclusively; a lock older than
+ * `STALE_LOCK_MS` is from a process that died and is taken over. Waiting longer than `LOCK_WAIT_MS` proceeds anyway.
+ */
+const STALE_LOCK_MS = 30_000;
+const LOCK_WAIT_MS = 15_000;
+async function withCredentialLock<T>(home: string | undefined, fn: () => Promise<T>): Promise<T> {
+  const lock = `${credentialsPath(home)}.lock`;
+  const started = Date.now();
+  let held = false;
+  while (!held) {
+    try {
+      writeFileSync(lock, `${process.pid} ${new Date().toISOString()}\n`, { flag: "wx" });
+      held = true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") break; // no lock possible here (read-only home): refresh unguarded
+      let age = 0;
+      try {
+        age = Date.now() - statSync(lock).mtimeMs;
+      } catch {
+        continue; // vanished between the two calls: try again
+      }
+      if (age > STALE_LOCK_MS) {
+        try {
+          unlinkSync(lock);
+        } catch {
+          // another waiter took it over first
+        }
+        continue;
+      }
+      if (Date.now() - started > LOCK_WAIT_MS) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    if (held) {
+      try {
+        unlinkSync(lock);
+      } catch {
+        // already gone
+      }
+    }
+  }
+}
+
+/** The config with whatever credential the file holds now, when another process stored a newer one than `cfg` carries. */
+function adoptStored(cfg: HarnessConfig, now: number): HarnessConfig | undefined {
+  const stored = readSiteConfig(cfg.home);
+  if (!stored.token || stored.tokenSource === "env" || stored.site !== cfg.site) return undefined;
+  if (stored.token === cfg.siteToken || tokenIsStale(stored.tokenExpiresAt, now)) return undefined;
+  const next: HarnessConfig = { ...cfg, siteToken: stored.token };
+  if (stored.refreshToken) next.siteRefreshToken = stored.refreshToken;
+  if (stored.tokenExpiresAt) next.siteTokenExpiresAt = stored.tokenExpiresAt;
+  if (stored.tokenName) next.siteTokenName = stored.tokenName;
+  return next;
+}
+
+/**
  * Trade the refresh token for a new pair now, whatever the expiry says (the site answered 401 to a token that
  * looked valid: revoked, or rotated by another process). Stores the new credential and returns the config with it.
+ * Under the credential lock, and only after re-reading the file: when another process renewed the credential first,
+ * its pair is adopted and nothing is sent, so two refreshers never spend the same refresh token.
  */
-export async function refreshSiteToken(cfg: HarnessConfig, now: number = Date.now()): Promise<HarnessConfig> {
+export async function refreshSiteToken(cfg: HarnessConfig, now: number = Date.now(), deps: { fetch?: HttpFetch } = {}): Promise<HarnessConfig> {
   if (!cfg.site || !cfg.siteRefreshToken) throw new SiteModeError("refreshing the site token", `no refresh token is stored; run \`relay setup --site ${cfg.site ?? "<url>"}\` to approve this machine again`);
-  try {
-    const r = await refreshAccessToken({ site: cfg.site, refreshToken: cfg.siteRefreshToken });
-    const c = credentialsFromToken(r, now);
-    writeSiteConfig({ site: cfg.site, token: { token: c.token, refreshToken: c.refreshToken, expiresAt: c.expiresAt, source: cfg.siteTokenSource ?? "device", tokenName: r.token_name ?? cfg.siteTokenName ?? null } }, cfg.home);
-    const next: HarnessConfig = { ...cfg, siteToken: c.token };
-    if (c.refreshToken) next.siteRefreshToken = c.refreshToken;
-    if (c.expiresAt) next.siteTokenExpiresAt = c.expiresAt;
-    if (r.token_name) next.siteTokenName = r.token_name;
-    return next;
-  } catch (e) {
-    const why = e instanceof OAuthClientError ? `${e.code}: ${e.description}` : e instanceof Error ? e.message : String(e);
-    throw new SiteModeError("refreshing the site token", `the refresh failed (${why}); run \`relay setup --site ${cfg.site}\` to approve this machine again`);
-  }
+  const site = cfg.site;
+  return withCredentialLock(cfg.home, async () => {
+    const fresh = adoptStored(cfg, now);
+    if (fresh) return fresh;
+    // the file may hold a rotated refresh token from a renewal that was then revoked server-side; prefer the stored one
+    const stored = readSiteConfig(cfg.home);
+    const refreshToken = stored.site === site && stored.refreshToken && stored.tokenSource !== "env" ? stored.refreshToken : cfg.siteRefreshToken!;
+    try {
+      const r = await refreshAccessToken({ site, refreshToken, ...(deps.fetch ? { fetch: deps.fetch } : {}) });
+      const c = credentialsFromToken(r, now);
+      writeSiteConfig({ site, token: { token: c.token, refreshToken: c.refreshToken, expiresAt: c.expiresAt, source: cfg.siteTokenSource ?? "device", tokenName: r.token_name ?? cfg.siteTokenName ?? null } }, cfg.home);
+      const next: HarnessConfig = { ...cfg, siteToken: c.token };
+      if (c.refreshToken) next.siteRefreshToken = c.refreshToken;
+      if (c.expiresAt) next.siteTokenExpiresAt = c.expiresAt;
+      if (r.token_name) next.siteTokenName = r.token_name;
+      return next;
+    } catch (e) {
+      const late = adoptStored(cfg, now); // a renewal that landed while we were refused
+      if (late) return late;
+      const why = e instanceof OAuthClientError ? `${e.code}: ${e.description}` : e instanceof Error ? e.message : String(e);
+      throw new SiteModeError("refreshing the site token", `the refresh failed (${why}); run \`relay setup --site ${site}\` to approve this machine again`);
+    }
+  });
 }
 
 export async function openHarness(cfg: HarnessConfig = loadConfig(), opts: OpenHarnessOptions = {}): Promise<OpenHarness> {
