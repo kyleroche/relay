@@ -74,6 +74,13 @@ describe("relay mcp tools", () => {
       "relay_webhook_subscribe",
       "relay_webhook_unsubscribe",
       "relay_whoami",
+      "relay_work_claim",
+      "relay_work_doorbell",
+      "relay_work_heartbeat",
+      "relay_work_job",
+      "relay_work_register",
+      "relay_work_release",
+      "relay_work_start",
     ]);
     await client.close();
     await server.close();
@@ -731,5 +738,178 @@ describe("http handler", () => {
     const denied = (await (await handler(rpc(call("relay_recall", { query: "x" }), token))).json()) as Result;
     expect(denied.result.isError).toBe(true);
     expect(denied.result.content[0]!.text).toMatch(/memory:read/);
+  });
+});
+
+describe("worker tools (docs/WORKER-AGENTS.md)", () => {
+  const github = (body: string) => ({
+    source: "token" as const,
+    createIssue: async () => ({ number: 90, title: "Digitize the logo", body, state: "open", html_url: "https://github.com/acme/demo/issues/90", labels: ["agent:embroidery"] }),
+    addLabels: async () => {},
+    removeLabel: async () => {},
+    getIssue: async (_r: string, n: number) => ({ number: n, title: "Digitize the logo", body, state: "open", html_url: `https://github.com/acme/demo/issues/${n}`, labels: ["agent:embroidery"] }),
+    request: async () => ({}),
+    createComment: async () => ({ id: 1, html_url: "" }),
+    getPullRequest: async () => {
+      throw new Error("unused");
+    },
+    mergePullRequest: async () => {
+      throw new Error("unused");
+    },
+    deleteBranch: async () => {},
+  });
+  const caller =
+    (client: Client) =>
+    <T>(name: string, args: Record<string, unknown>) =>
+      client.callTool({ name, arguments: args }).then((r) => (r.isError ? Promise.reject(new Error(textOf(r))) : jsonOf<T>(r)));
+
+  it("runs the loop: register, doorbell, claim with brief and job, start, upload, release finished; the task reads review", async () => {
+    // the artwork the job starts from, already in the library
+    const lib = await connect({ canWrite: false, scopes: ["assets:write"], actor: "human:kyle" });
+    const art = jsonOf<{ id: string; key: string }>(await lib.client.callTool({ name: "relay_asset_request_upload", arguments: { project: "demo", filename: "logo.svg" } }));
+    await store.put(art.key, Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"), { contentType: "image/svg+xml" });
+    await lib.client.callTool({ name: "relay_asset_finalize", arguments: { key: art.key, project: "demo", title: "Logo" } });
+    await lib.client.close();
+    await lib.server.close();
+
+    const body = `Digitize the logo for the left chest.\n\n\`\`\`relay-job\nlane: embroidery\ninputs:\n  - asset: ${art.id}\n    as: artwork\nparams:\n  hoop: 130x180\n  format: [pes, dst]\noutputs:\n  - { "name": "stitch-file", "format": "pes" }\n\`\`\`\n`;
+    const events: repo.EventRow[] = [];
+    const w = await connect({ canWrite: false, scopes: ["work:claim", "assets:write", "assets:read", "memory:read", "tasks:read"], actor: "token:oauth:stitchwerx", github: github(body), afterEvent: (row) => void events.push(row) });
+    const call = caller(w.client);
+
+    const reg = await call<{ worker_id: string; name: string; lanes: string[]; labels: string[]; registered: boolean; events: string[] }>("relay_work_register", { name: "stitchwerx-mac", host: "studio.local", lanes: ["embroidery"], labels: ["app:stitchwerx", "machine:pe800"], version: "1.2.0" });
+    expect(reg).toMatchObject({ name: "stitchwerx-mac", lanes: ["embroidery"], labels: ["app:stitchwerx", "machine:pe800"], registered: true, events: ["worker.registered", "worker.online"] });
+    const again = await call<{ worker_id: string; registered: boolean }>("relay_work_register", { name: "stitchwerx-mac", lanes: ["embroidery"] });
+    expect(again).toMatchObject({ worker_id: reg.worker_id, registered: false });
+    expect(events.map((e) => e.kind)).toEqual(["worker.registered", "worker.online"]);
+    expect(events[0]!.actor).toBe("runner:stitchwerx-mac");
+
+    const idle = await call<{ version: number; queued: number; ts: string }>("relay_work_doorbell", { lanes: ["embroidery"] });
+    expect(idle.queued).toBe(0);
+    expect(await call<null>("relay_work_claim", { worker_id: reg.worker_id })).toBeNull();
+
+    // a person opens the task (the issue already exists on GitHub with the manifest in its body)
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 90, createdBy: "human:kyle", lane: "embroidery", title: "Digitize the logo" });
+    const rung = await call<{ version: number; queued: number }>("relay_work_doorbell", { lanes: ["embroidery"] });
+    expect(rung.version).toBeGreaterThan(idle.version);
+    expect(rung.queued).toBe(1);
+
+    type Claim = {
+      task_id: string;
+      project: string;
+      repo: string;
+      lane: string;
+      lease_until: string;
+      issue: { number: number; title: string; body: string; labels: string[]; source: string };
+      brief: string;
+      review_note: string | null;
+      job: { lane: string; inputs: Array<{ id: string; as: string | null; kind: string; url: string }>; params: Record<string, unknown>; outputs: Array<{ name: string; format?: string }> } | null;
+      job_error: string | null;
+      next: string;
+    };
+    const claim = (await call<Claim>("relay_work_claim", { worker_id: reg.worker_id }))!;
+    expect(claim).toMatchObject({ task_id: "acme/demo#90", project: "demo", repo: "acme/demo", lane: "embroidery", review_note: null, job_error: null });
+    expect(claim.issue).toMatchObject({ number: 90, title: "Digitize the logo", labels: ["agent:embroidery"], source: "github" });
+    expect(claim.issue.body).toContain("```relay-job");
+    expect(claim.brief).toContain("Demo is a TypeScript service.");
+    expect(claim.job).toMatchObject({ lane: "embroidery", params: { hoop: "130x180", format: ["pes", "dst"] }, outputs: [{ name: "stitch-file", format: "pes" }] });
+    expect(claim.job!.inputs).toHaveLength(1);
+    expect(claim.job!.inputs[0]).toMatchObject({ id: art.id, as: "artwork", kind: "image" });
+    expect(claim.job!.inputs[0]!.url.startsWith("file://")).toBe(true);
+    expect(new Date(claim.lease_until).getTime()).toBeGreaterThan(Date.now() + 25 * 60_000);
+    expect(jsonOf<{ state: string }>(await w.client.callTool({ name: "relay_task_get", arguments: { task_id: "acme/demo#90" } })).state).toBe("claimed");
+
+    // nothing else to claim; the same job can be re-read after a restart
+    expect(await call<null>("relay_work_claim", { worker_id: reg.worker_id })).toBeNull();
+    const reread = await call<{ task_id: string; job: { inputs: Array<{ id: string }> } }>("relay_work_job", { task_id: "acme/demo#90" });
+    expect(reread.task_id).toBe("acme/demo#90");
+    expect(reread.job.inputs[0]!.id).toBe(art.id);
+
+    const started = await call<{ state: string; events: string[] }>("relay_work_start", { task_id: "acme/demo#90", worker_id: reg.worker_id, host: "studio.local" });
+    expect(started).toMatchObject({ state: "running", events: ["run.started"] });
+    const hb = await call<{ worker: { name: string; status: string }; leases: Array<{ task_id: string; lease_until: string }> }>("relay_work_heartbeat", { worker_id: reg.worker_id, interval_ms: 60_000 });
+    expect(hb.worker.name).toBe("stitchwerx-mac");
+    expect(hb.leases.map((l) => l.task_id)).toEqual(["acme/demo#90"]);
+    expect(new Date(hb.leases[0]!.lease_until).getTime()).toBeGreaterThanOrEqual(new Date(claim.lease_until).getTime());
+
+    // the deliverable goes on the issue through the asset tools
+    const up = await call<{ id: string; key: string }>("relay_asset_request_upload", { project: "demo", filename: "logo.pes" });
+    await store.put(up.key, Buffer.from("#PES0001 stitches"), { contentType: "application/octet-stream" });
+    const fin = await call<{ id: string; issue: number; status: string }>("relay_asset_finalize", { key: up.key, project: "demo", issue: 90, title: "stitch-file" });
+    expect(fin).toMatchObject({ id: up.id, issue: 90, status: "pending" });
+
+    const rel = await call<{ task_id: string; state: string; events: string[] }>("relay_work_release", {
+      task_id: "acme/demo#90",
+      worker_id: reg.worker_id,
+      outcome: "finished",
+      summary: "Digitized at 130x180, 6 colours",
+      usage: { duration_ms: 95_000, cost_equiv: 0.12, model: "anthropic/claude-sonnet-5" },
+      assets: [up.id],
+    });
+    expect(rel).toMatchObject({ task_id: "acme/demo#90", state: "review", events: ["run.finished", "step.usage"] });
+    const feed = await repo.listEvents(db, { project: "demo", limit: 20 });
+    const finished = feed.find((e) => e.kind === "run.finished" && e.issue === 90)!;
+    expect(finished.actor).toBe("runner:stitchwerx-mac");
+    expect(finished.summary).toBe(`Digitized at 130x180, 6 colours (assets: ${up.id})`);
+    expect(finished.duration_ms).toBe(95_000);
+    const usage = feed.find((e) => e.kind === "step.usage" && e.issue === 90)!;
+    expect(usage).toMatchObject({ lane: "embroidery", model: "anthropic/claude-sonnet-5", cost_equiv: 0.12 });
+    const view = jsonOf<{ state: string; asset: { id: string } | null }>(await w.client.callTool({ name: "relay_task_get", arguments: { task_id: "acme/demo#90" } }));
+    expect(view.state).toBe("review");
+    expect(view.asset?.id).toBe(up.id);
+    // the lease is gone: a second release is a 409, and the doorbell rang for the others
+    await expect(call("relay_work_release", { task_id: "acme/demo#90", worker_id: reg.worker_id, outcome: "finished" })).rejects.toThrow(/no live claim.*\(409\)/);
+    expect((await call<{ version: number }>("relay_work_doorbell", {})).version).toBeGreaterThan(rung.version);
+    // webhooks saw every write
+    expect(events.map((e) => e.kind)).toEqual(["worker.registered", "worker.online", "run.started", "run.finished", "step.usage"]);
+    const off = await call<{ worker: { status: string }; events: string[] }>("relay_work_heartbeat", { worker_id: reg.worker_id, status: "offline" });
+    expect(off).toMatchObject({ worker: { status: "offline" }, events: ["worker.offline"] });
+    await w.client.close();
+    await w.server.close();
+  });
+
+  it("a failed run, a bad manifest, and the brief without memory:read", async () => {
+    const bad = "Cut the badge.\n\n```relay-job\ninputs: [01JNOPE]\n```\n";
+    const w = await connect({ canWrite: false, scopes: ["work:claim"], actor: "token:oauth:laser", github: github(bad) });
+    const call = caller(w.client);
+    const reg = await call<{ worker_id: string }>("relay_work_register", { name: "xtool-mac", lanes: ["laser", "embroidery"] });
+    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 91, createdBy: "human:kyle", lane: "laser", title: "Cut the badge" });
+    const claim = (await call<{ task_id: string; lane: string; brief: string; brief_omitted?: string; job: unknown; job_error: string | null }>("relay_work_claim", { worker_id: reg.worker_id, lanes: ["laser"] }))!;
+    expect(claim).toMatchObject({ task_id: "acme/demo#91", lane: "laser", brief: "", brief_omitted: "needs memory:read", job: null });
+    expect(claim.job_error).toMatch(/input asset 01JNOPE does not exist/);
+    await call("relay_work_start", { task_id: "acme/demo#91", worker_id: reg.worker_id });
+    const rel = await call<{ state: string; events: string[] }>("relay_work_release", { task_id: "acme/demo#91", worker_id: reg.worker_id, outcome: "failed", error: `cannot start: ${claim.job_error}` });
+    expect(rel).toMatchObject({ state: "failed", events: ["run.failed"] });
+    expect((await repo.listEvents(db, { kind: "run.failed", limit: 5 }))[0]).toMatchObject({ actor: "runner:xtool-mac", issue: 91, summary: expect.stringContaining("01JNOPE") });
+    // the worker that holds no claim cannot start
+    await expect(call("relay_work_start", { task_id: "acme/demo#91", worker_id: reg.worker_id })).rejects.toThrow(/no live claim/);
+    // an unknown worker is a 404
+    await expect(call("relay_work_claim", { worker_id: "nope" })).rejects.toThrow(/register first.*\(404\)/);
+    await w.client.close();
+    await w.server.close();
+  });
+
+  it("scope: every work tool needs work:claim; the doorbell also opens to feed:read", async () => {
+    const reader = await connect({ canWrite: false, scopes: ["feed:read", "tasks:read"] });
+    for (const [name, args] of [
+      ["relay_work_register", { name: "x", lanes: ["laser"] }],
+      ["relay_work_heartbeat", { worker_id: "x" }],
+      ["relay_work_claim", { worker_id: "x" }],
+      ["relay_work_start", { task_id: "acme/demo#1", worker_id: "x" }],
+      ["relay_work_release", { task_id: "acme/demo#1", worker_id: "x", outcome: "released" }],
+      ["relay_work_job", { task_id: "acme/demo#1" }],
+    ] as Array<[string, Record<string, unknown>]>) {
+      const r = await reader.client.callTool({ name, arguments: args });
+      expect(r.isError, name).toBe(true);
+      expect(textOf(r)).toMatch(/work:claim/);
+    }
+    const bell = jsonOf<{ version: number; queued: number }>(await reader.client.callTool({ name: "relay_work_doorbell", arguments: {} }));
+    expect(typeof bell.version).toBe("number");
+    await reader.client.close();
+    await reader.server.close();
+    const anon = await connect({ canWrite: false, scopes: ["tasks:read"] });
+    expect(textOf(await anon.client.callTool({ name: "relay_work_doorbell", arguments: {} }))).toMatch(/work:claim/);
+    await anon.client.close();
+    await anon.server.close();
   });
 });

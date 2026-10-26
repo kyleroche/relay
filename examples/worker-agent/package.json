@@ -1,0 +1,18 @@
+{
+  "name": "relay-worker-agent-example",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A minimal relay worker over MCP: register a lane, claim tasks, upload outputs as assets, release. Replace job.mjs with the real app.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node worker.mjs",
+    "once": "RELAY_ONCE=1 node worker.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "license": "Apache-2.0"
+}
