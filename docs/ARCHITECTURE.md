@@ -5,7 +5,7 @@ relay exists because one person using several coding-agent subscriptions wastes 
 ## The rules
 
 1. **Tasks move, credentials never do.** Every model call runs on a machine where the owner logged in with the vendor's own tool. No token is copied, proxied, or stored in CI.
-2. **GitHub is the task bus.** An issue is a task, a label picks the lane, a pull request is the result. Nothing of record lives anywhere else.
+2. **GitHub is the task bus.** An issue is a task, a label picks the lane, a pull request is the result. Nothing of record lives anywhere else. The lane registry is open: `agent:claude`, `agent:codex`, `agent:grok` and `agent:nodes` are the built-in lanes `relay work` serves, and an app that registers itself as a worker over the protocol names its own lane (`agent:embroidery`), one per craft, on which tasks may be opened as soon as one worker serves it (docs/WORKER-AGENTS.md).
 3. **Every step starts fresh with a small brief.** No transcript is ever sent to a model. A brief is the repo's rules file, the issue, relevant decisions, and the vendor guidance that matches the intent.
 4. **Official vendor sources only.** Model guidance comes from the vendor's documentation and the skills the vendor publishes. Community prompt guides are excluded unless the user allowlists a domain.
 5. **Everything is an event.** One append-only table records what every human, bot, and runner did, with tokens and cost. The ledger is a view over it.
