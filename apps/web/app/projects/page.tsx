@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { getProjects } from "@/lib/data";
+import { summaryLede } from "@/lib/summary";
 
 export const metadata: Metadata = {
   title: "Projects",
@@ -45,7 +46,7 @@ export default async function ProjectsPage() {
                 </div>
                 {p.lastActivity ? <RelTime iso={p.lastActivity} now={now} className="shrink-0 text-xs text-muted-foreground" /> : <span className="shrink-0 text-xs text-muted-foreground">no activity</span>}
               </div>
-              {p.summary && <p className="line-clamp-2 text-sm text-muted-foreground">{p.summary}</p>}
+              {summaryLede(p.summary) && <p className="line-clamp-2 text-sm text-muted-foreground">{summaryLede(p.summary)}</p>}
               <dl className="mt-auto grid grid-cols-3 gap-2 text-sm">
                 <div>
                   <dt className="text-[11px] text-muted-foreground">Open issues</dt>

@@ -127,6 +127,25 @@
   }
 }
 
+/* A project summary inside a card: the docs' prose, one size down and tighter (headings demoted to h3/h4 by lib/summary.ts). */
+.prose-summary {
+  @apply text-sm leading-6;
+}
+.prose-summary h3 {
+  @apply mt-5 mb-1.5 text-sm font-semibold uppercase tracking-wide text-muted-foreground;
+}
+.prose-summary h4 {
+  @apply mt-4 mb-1 text-sm font-semibold;
+}
+.prose-summary p,
+.prose-summary ul,
+.prose-summary ol {
+  @apply my-2;
+}
+.prose-summary li {
+  @apply my-0.5;
+}
+
 /* Rendered markdown (docs pages). Kept minimal: it is documentation, not a blog. */
 .prose-relay {
   @apply text-[15px] leading-7;

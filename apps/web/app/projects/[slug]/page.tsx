@@ -14,6 +14,7 @@ import { getProject } from "@/lib/data";
 import { fmtDate } from "@/lib/format";
 import { dayKeyIn, dayLabelIn } from "@/lib/tz";
 import { viewerTimeZone } from "@/lib/tz-server";
+import { summaryHtml, summaryLede } from "@/lib/summary";
 
 type Props = { params: Promise<{ slug: string }> };
 
@@ -25,7 +26,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   if (!p) return { title: "Project not found" };
   return {
     title: p.slug,
-    description: p.summary ?? `relay project ${p.slug}${p.repo ? ` (${p.repo})` : ""}`,
+    description: summaryLede(p.summary) ?? `relay project ${p.slug}${p.repo ? ` (${p.repo})` : ""}`,
     alternates: { canonical: `/projects/${p.slug}` },
   };
 }
@@ -35,6 +36,7 @@ export default async function ProjectPage({ params }: Props) {
   const [p, tz] = await Promise.all([getProject(slug), viewerTimeZone()]);
   if (!p) notFound();
   const now = Date.now();
+  const lede = summaryLede(p.summary);
   const groups: Array<{ key: string; label: string; items: typeof p.events }> = [];
   for (const e of p.events) {
     const key = dayKeyIn(e.ts, tz);
@@ -64,9 +66,20 @@ export default async function ProjectPage({ params }: Props) {
                 no repository
               </p>
             )}
-            {p.summary && <p className="mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">{p.summary}</p>}
+            {lede && <p className="mt-4 max-w-2xl text-[15px] leading-7 text-muted-foreground">{lede}</p>}
+            {p.lanes.length > 0 && (
+              <p className="mt-3 flex flex-wrap items-center gap-1">
+                {p.lanes.map((l) => (
+                  <Pill key={l} asChild mono className="hover:border-primary/50 hover:text-foreground">
+                    <Link href={`/feed?project=${p.slug}&lane=${l}`} title={`Feed: ${p.slug} on the ${l} lane`}>
+                      {l}
+                    </Link>
+                  </Pill>
+                ))}
+              </p>
+            )}
           </div>
-          <dl className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-1">
+          <dl className="grid shrink-0 grid-cols-2 gap-x-8 gap-y-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
             <div>
               <dt className="text-[11px] text-muted-foreground">Last activity</dt>
               <dd className="font-mono tabular-nums">{p.lastActivity ? <RelTime iso={p.lastActivity} now={now} /> : "—"}</dd>
@@ -76,12 +89,8 @@ export default async function ProjectPage({ params }: Props) {
               <dd className="font-mono tabular-nums">{p.openIssues}</dd>
             </div>
             <div>
-              <dt className="text-[11px] text-muted-foreground">Stack</dt>
-              <dd>{p.stack ?? "—"}</dd>
-            </div>
-            <div>
-              <dt className="text-[11px] text-muted-foreground">Check</dt>
-              <dd className="font-mono text-xs">{p.check_cmd ?? "—"}</dd>
+              <dt className="text-[11px] text-muted-foreground">Decisions</dt>
+              <dd className="font-mono tabular-nums">{p.decisions.length}</dd>
             </div>
             <div>
               <dt className="text-[11px] text-muted-foreground">Digest coverage</dt>
@@ -92,25 +101,22 @@ export default async function ProjectPage({ params }: Props) {
                 </span>
               </dd>
             </div>
-            <div>
-              <dt className="text-[11px] text-muted-foreground">Lanes</dt>
-              <dd className="mt-0.5 flex flex-wrap gap-1">
-                {p.lanes.length === 0 && <span className="text-muted-foreground">—</span>}
-                {p.lanes.map((l) => (
-                  <Pill key={l} asChild mono className="hover:border-primary/50 hover:text-foreground">
-                    <Link href={`/feed?project=${p.slug}&lane=${l}`} title={`Feed: ${p.slug} on the ${l} lane`}>
-                      {l}
-                    </Link>
-                  </Pill>
-                ))}
-              </dd>
-            </div>
           </dl>
         </div>
       </section>
 
       <div className="grid grid-cols-[minmax(0,1fr)] gap-10 lg:grid-cols-[minmax(0,1fr)_20rem]">
         <div className="flex flex-col gap-10">
+          {p.summary && (
+            <section aria-labelledby="summary">
+              <SectionHeading id="summary">Summary</SectionHeading>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Written by <code className="rounded bg-muted px-1 font-mono">relay link</code> from the repository&apos;s digest; every lane reads it in its brief.
+              </p>
+              <div className="prose-relay prose-summary mt-2 rounded-lg border bg-card px-5 py-1" dangerouslySetInnerHTML={{ __html: summaryHtml(p.summary) }} />
+            </section>
+          )}
+
           <section aria-labelledby="decisions">
             <SectionHeading id="decisions" count={p.decisions.length}>
               Current decisions
@@ -180,6 +186,26 @@ export default async function ProjectPage({ params }: Props) {
         </div>
 
         <aside className="flex flex-col gap-8">
+          {(p.stack || p.check_cmd) && (
+            <section aria-labelledby="setup">
+              <SectionHeading id="setup">Setup</SectionHeading>
+              <dl className="mt-4 flex flex-col gap-3 text-sm">
+                {p.stack && (
+                  <div>
+                    <dt className="text-[11px] text-muted-foreground">Stack</dt>
+                    <dd>{p.stack}</dd>
+                  </div>
+                )}
+                {p.check_cmd && (
+                  <div>
+                    <dt className="text-[11px] text-muted-foreground">Check</dt>
+                    <dd className="font-mono text-xs">{p.check_cmd}</dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+          )}
+
           <section aria-labelledby="models">
             <SectionHeading id="models">Models in use</SectionHeading>
             <ul className="mt-4 flex flex-col gap-3">
