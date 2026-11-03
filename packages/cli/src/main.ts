@@ -235,17 +235,17 @@ program
 
 program
   .command("probe")
-  .argument("<target>", "codex:<model> | grok:<model> | gateway:<model> | claude:<fable|opus|sonnet>")
+  .argument("<target>", "codex[:<model>] | grok[:<model>] | gateway:<model> | claude:<fable|opus|sonnet> (no model: the login's own)")
   .argument("[prompt...]")
   .description("Run one lane call with a tiny prompt and record it in the ledger (smoke test for logins and usage parsing)")
   .action(async (target: string, promptWords: string[]) => {
     const [kind, model] = target.split(":") as [string, string | undefined];
-    if (!model) throw new Error("target must be provider:model");
+    if (!model && (kind === "claude" || kind === "gateway")) throw new Error(`target must be ${kind}:<model>`);
     const h = await openHarness();
     try {
       const prompt = promptWords.length ? promptWords.join(" ") : "Reply with exactly the single word: pong";
       const req = { lane: "probe" as const, prompt, cwd: process.cwd(), readOnly: true, timeoutMs: 180_000 };
-      const r = kind === "claude" ? await runClaude(req, { model: model as ClaudeModel }) : await runFx(req, { provider: kind as FxProvider, model });
+      const r = kind === "claude" ? await runClaude(req, { model: model as ClaudeModel }) : await runFx(req, { provider: kind as FxProvider, ...(model ? { model } : {}) });
       await recordLane(h.ledger, req, r, kind === "claude" ? "anthropic" : kind);
       console.log(JSON.stringify({ ok: r.ok, model: r.model, subscription: r.subscription, text: r.text.slice(0, 200), tokensIn: r.tokensIn, tokensOut: r.tokensOut, cacheRead: r.cacheRead, costEquiv: r.costEquiv, durationMs: r.durationMs, error: r.error }, null, 2));
       if (!r.ok) process.exitCode = 1;

@@ -38,7 +38,9 @@ embedded PGlite file), which is how the tests run and how a single laptop can se
 `gh` must be logged in for any lane: the clone, the push and the PR (or, for `nodes`, the issue comment) run as that
 account (`gh auth login`, then `gh auth setup-git`). Force the set with `--lanes claude,codex`; a machine without a
 lane's login must not serve it.
-Models come from `RELAY_MODEL_CLAUDE` (`opus` by default), `RELAY_MODEL_CODEX`, `RELAY_MODEL_GROK`. No lane ever runs
+Models come from `RELAY_MODEL_CLAUDE` (`opus` by default), `RELAY_MODEL_CODEX`, `RELAY_MODEL_GROK`; unset, a native CLI
+uses its own default and a lane over fx uses the login's: fx's default for that provider, else the first model `fx models`
+lists, and a model the subscription has since dropped is retried once with the catalog's first. No lane ever runs
 with permission checks bypassed, and the job's environment (`cleanEnv`) drops any `ANTHROPIC_API_KEY`,
 `OPENAI_API_KEY`, `XAI_API_KEY`, `GH_TOKEN` or `GITHUB_TOKEN` so the run cannot slip onto a key instead of the
 subscription, and the worker's own `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` so the lane never sees the site

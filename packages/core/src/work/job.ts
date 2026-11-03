@@ -284,7 +284,7 @@ export interface LaneRunnerOptions {
 
 /**
  * The lane runner `relay work` uses: the native CLI for the lane, fx when only it is installed. Models come from
- * RELAY_MODEL_<LANE>. The Claude lane runs code requests inside Claude Code's OS sandbox with the allowlist as the
+ * RELAY_MODEL_<LANE>; unset, the native CLI's default, or over fx the login's own (`pickFxModel` in lanes/fx.ts). The Claude lane runs code requests inside Claude Code's OS sandbox with the allowlist as the
  * second layer; `RELAY_LANE_ALLOWED_DOMAINS` in the job's environment adds hosts to the sandbox's network allowlist.
  */
 export const laneRunner = (o: LaneRunnerOptions = {}): LaneRunner => async (req, lane) => {
@@ -296,11 +296,11 @@ export const laneRunner = (o: LaneRunnerOptions = {}): LaneRunner => async (req,
   const fake = env.RELAY_FAKE_LANES === "1";
   if (lane === "codex") {
     if (fake || findOnPath("codex") || env.RELAY_CODEX_BIN) return { tool: "codex", ...(await runCodex(req, { ...(env.RELAY_MODEL_CODEX ? { model: env.RELAY_MODEL_CODEX } : {}) })) };
-    return { tool: "fx", ...(await runFx(req, { provider: "codex", model: env.RELAY_MODEL_CODEX ?? "gpt-5.5" })) };
+    return { tool: "fx", ...(await runFx(req, { provider: "codex", ...(env.RELAY_MODEL_CODEX ? { model: env.RELAY_MODEL_CODEX } : {}) })) };
   }
   if (lane === "grok") {
     if (fake || findOnPath("grok") || env.RELAY_GROK_BIN) return { tool: "grok", ...(await runGrok(req, { ...(env.RELAY_MODEL_GROK ? { model: env.RELAY_MODEL_GROK } : {}) })) };
-    return { tool: "fx", ...(await runFx(req, { provider: "grok", model: env.RELAY_MODEL_GROK ?? "grok-4.7" })) };
+    return { tool: "fx", ...(await runFx(req, { provider: "grok", ...(env.RELAY_MODEL_GROK ? { model: env.RELAY_MODEL_GROK } : {}) })) };
   }
   throw new Error(`no lane adapter for '${lane}'`);
 };
