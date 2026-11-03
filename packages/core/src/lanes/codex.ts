@@ -9,7 +9,7 @@ import type { LaneRequest, LaneResult } from "./types.ts";
 import { withSubscriptionLock } from "./types.ts";
 import { costEquiv } from "../ledger/ledger.ts";
 import { approxTokens } from "../util.ts";
-import { findOnPath } from "../github/client.ts";
+import { cliBin } from "./bin.ts";
 
 export interface CodexOptions {
   /** Codex model id (`gpt-5.5`, `gpt-6-astra`, ...). Omit for the CLI's default. */
@@ -63,7 +63,7 @@ export function parseCodexJsonl(stdout: string): { tokensIn: number; tokensOut: 
 
 export async function runCodex(req: LaneRequest, opts: CodexOptions = {}): Promise<LaneResult> {
   if (process.env.RELAY_FAKE_LANES === "1") return fakeCodex(req, opts);
-  const bin = opts.bin ?? process.env.RELAY_CODEX_BIN ?? findOnPath("codex") ?? "codex";
+  const bin = opts.bin ?? cliBin("codex");
   return withSubscriptionLock("codex", async () => {
     const args = ["exec", "--json", "--sandbox", req.readOnly ? "read-only" : "workspace-write", "-c", "agents.enabled=false"];
     if (opts.model) args.push("-m", opts.model);

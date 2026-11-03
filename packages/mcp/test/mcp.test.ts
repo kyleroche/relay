@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { deviceAuthorization, exchangeToken, GRANT_DEVICE_CODE, GRANT_INVITE, OAuthError, openDb, migrate, repo, approxTokens, LocalStore, TOKEN_SCOPES, verifyLocalUploadUrl, type Db, type TokenScope } from "@relay/core";
+import { deviceAuthorization, exchangeToken, GRANT_DEVICE_CODE, GRANT_INVITE, OAuthError, openDb, migrate, repo, approxTokens, LocalStore, TOKEN_SCOPES, verifyLocalUploadUrl, type Db, type GitHubClient, type TokenScope } from "@relay/core";
 import { createRelayServer, capText, grantedScopes, RESULT_TOKENS, TOOL_SCOPES, type RelayServerOptions } from "../src/server.ts";
 import { createMcpHandler } from "../src/http.ts";
 

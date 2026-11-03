@@ -9,6 +9,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { LaneRequest, LaneResult } from "./types.ts";
 import { withSubscriptionLock } from "./types.ts";
+import { cliBin } from "./bin.ts";
 import { claudeSandboxSettingsJson, looksLikeSandboxUnavailable, parseDomainList, SANDBOX_UNAVAILABLE, type SandboxOptions } from "./sandbox.ts";
 import { costEquiv } from "../ledger/ledger.ts";
 import { approxTokens } from "../util.ts";
@@ -143,7 +144,7 @@ export function fakeClaude(req: LaneRequest, opts: ClaudeOptions): LaneResult {
 
 export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<LaneResult> {
   if (process.env.RELAY_FAKE_LANES === "1") return fakeClaude(req, opts);
-  const bin = opts.bin ?? process.env.RELAY_CLAUDE_BIN ?? join(homedir(), ".local", "bin", "claude");
+  const bin = opts.bin ?? cliBin("claude");
   const model = MODEL_IDS[opts.model];
   const utility = isUtility(opts);
   return withSubscriptionLock("claude:max", async () => {

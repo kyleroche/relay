@@ -8,7 +8,7 @@ import type { LaneRequest, LaneResult } from "./types.ts";
 import { withSubscriptionLock } from "./types.ts";
 import { costEquiv } from "../ledger/ledger.ts";
 import { approxTokens } from "../util.ts";
-import { findOnPath } from "../github/client.ts";
+import { cliBin } from "./bin.ts";
 
 export interface GrokOptions {
   /** Grok model id (`grok-4.7`, ...). Omit for the CLI's default. */
@@ -36,7 +36,7 @@ export function fakeGrok(req: LaneRequest, opts: GrokOptions): LaneResult {
 
 export async function runGrok(req: LaneRequest, opts: GrokOptions = {}): Promise<LaneResult> {
   if (process.env.RELAY_FAKE_LANES === "1") return fakeGrok(req, opts);
-  const bin = opts.bin ?? process.env.RELAY_GROK_BIN ?? findOnPath("grok") ?? "grok";
+  const bin = opts.bin ?? cliBin("grok");
   return withSubscriptionLock("grok", async () => {
     const args = ["-p", req.prompt, "--output-format", "json", "--no-subagents", "--no-plan", "--permission-mode", req.readOnly ? "plan" : "acceptEdits"];
     if (opts.model) args.push("-m", opts.model);

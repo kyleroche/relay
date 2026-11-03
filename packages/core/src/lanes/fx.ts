@@ -16,6 +16,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { LaneRequest, LaneResult, Subscription } from "./types.ts";
 import { withSubscriptionLock } from "./types.ts";
+import { cliBin } from "./bin.ts";
 import { costEquiv } from "../ledger/ledger.ts";
 
 export type FxProvider = "codex" | "grok" | "gateway";
@@ -97,7 +98,7 @@ function ledgerModelId(provider: FxProvider, model: string): string {
 }
 
 export async function runFx(req: LaneRequest, opts: FxOptions): Promise<LaneResult> {
-  const bin = opts.bin ?? process.env.RELAY_FX_BIN ?? join(homedir(), ".local", "bin", "fx");
+  const bin = opts.bin ?? cliBin("fx");
   const subscription: Subscription = opts.provider === "gateway" ? "gateway" : opts.provider;
   const fxProvider = opts.provider === "gateway" ? "vercel" : opts.provider;
   const baseEnv = { ...(req.env ?? process.env), FX_NO_OPEN_BROWSER: "1", FX_AUTO_UPGRADE: "0" };
