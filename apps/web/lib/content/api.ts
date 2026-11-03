@@ -47,7 +47,7 @@ Scopes are named and granted per token:
 | \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
 | \`assets:review\` | PUT /api/v1/assets/{id}/review, relay_asset_review |
 | \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{owner}/{repo}%23{n}, relay_task_get, relay_task_list |
-| \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/request-changes, POST /api/v1/tasks/{id}/requeue, relay_task_create, relay_task_approve, relay_task_request_changes, relay_task_requeue |
+| \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/request-changes, POST /api/v1/tasks/{id}/requeue, POST /api/v1/tasks/{id}/close, relay_task_create, relay_task_approve, relay_task_request_changes, relay_task_requeue, relay_task_close |
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
 | \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
 | \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
@@ -197,6 +197,7 @@ The integration surface for an external bot ([Integrations](/docs/integrations))
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/approve\` (\`approveTask\`) | \`tasks:write\` | squash-merge the PR of a task in review, delete its branch, write \`task.approved\` (the task is done); a bot may not approve a PR its own lane produced, and GitHub's refusal comes back as 502 with \`task.merge_failed\` |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/request-changes\` (\`requestTaskChanges\`) | \`tasks:write\` | \`{"note"}\`: comment on the PR, write \`task.changes_requested\`, queue the task again; the next run gets the note in its brief |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/requeue\` (\`requeueTask\`) | \`tasks:write\` | \`{"lane"?,"reason"?}\`: put a task back in the queue from any state but done, optionally on another lane (the \`agent:*\` label on the issue moves, best effort); a live worker claim is released and \`task.requeued\` written; for a task stuck running or on the wrong lane |
+| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/close\` (\`closeTask\`) | \`tasks:write\` | \`{"reason"?}\`: close a task without a merge from any state but done: the issue is closed on GitHub as not planned with the reason as a comment and an open PR closed with it (best effort); a live worker claim is released and \`task.closed\` written (the task is done) |
 | \`POST /api/v1/tasks/{owner}/{repo}%23{n}/release\` (\`releaseTask\`) | \`tokens:write\` | \`{"note"?}\`: release a task the injection gate \`held\` (its issue text read as instructions aimed at the agent; the \`task.held\` row has the score and reasons); writes \`task.released\`, the task is queued again and the next worker grades it again. Never for a task the bot opened itself |
 | \`POST /api/v1/events\` (\`logEvent\`) | \`events:write\` | \`{"kind":"external.<x>","project","summary","url","cost_equiv","source"}\`; the actor is the token's |
 | \`GET /api/v1/usage\` (\`getUsage\`) | \`feed:read\` | per-subscription totals since \`since\` |

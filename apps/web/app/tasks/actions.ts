@@ -1,6 +1,6 @@
 "use server";
 
-import { approveTask, releaseTask, requestChanges, requeueTask, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
+import { approveTask, closeTask, releaseTask, requestChanges, requeueTask, TaskCloseError, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
 import { revalidatePath } from "next/cache";
 import { dataMode } from "@/lib/data";
 import { getDb } from "@/lib/db";
@@ -39,7 +39,7 @@ async function gate(): Promise<{ refused: TaskActionResult; by?: never } | { ref
   return by ? { by } : { refused: SIGNED_OUT };
 }
 
-const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof TaskGateError || e instanceof Error ? e.message : String(e));
+const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof TaskCloseError || e instanceof TaskGateError || e instanceof Error ? e.message : String(e));
 
 function pagePath(taskId: string): string {
   const [repo, n] = taskId.split("#");
@@ -104,6 +104,22 @@ export async function requeueTaskAction(taskId: string, input: { lane?: string |
     revalidatePath("/");
     const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
     return { ok: true, state: r.task.state, ...(github && !github.relabelled ? { message: `Queued, but the GitHub label did not move: ${github.error ?? "unknown error"}.` } : {}) };
+  } catch (e) {
+    return { ok: false, message: describe(e) };
+  }
+}
+
+/** Close without a merge: the issue and an open PR are closed on GitHub (best effort), a live claim released, task.closed written. */
+export async function closeTaskAction(taskId: string, reason?: string | null): Promise<TaskActionResult> {
+  const g = await gate();
+  if (g.refused) return g.refused;
+  try {
+    const r = await closeTask(await getDb(), await siteGitHub(), taskId, g.by, { reason: reason ?? null });
+    dispatchAfter(r.events);
+    revalidatePath(pagePath(taskId));
+    revalidatePath("/");
+    const github = r.events[0]?.payload.github as { closed: boolean; error?: string } | null | undefined;
+    return { ok: true, state: r.task.state, ...(github && !github.closed ? { message: `Closed in relay, but the issue did not close on GitHub: ${github.error ?? "unknown error"}.` } : {}) };
   } catch (e) {
     return { ok: false, message: describe(e) };
   }

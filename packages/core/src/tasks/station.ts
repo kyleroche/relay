@@ -125,7 +125,7 @@ export function stationSince(task: StationInput, station: Station, events: Stati
       ts = latest(events, (e) => e.kind === "pr.review" || e.kind === "task.merge_failed");
       break;
     case "Merged":
-      ts = task.merged_at ?? latest(events, (e) => e.kind === "pr.merged" || e.kind === "issue.closed" || (e.kind === "task.approved" && e.payload?.merged === true) || assetDecision(e, "approved"));
+      ts = task.merged_at ?? latest(events, (e) => e.kind === "pr.merged" || e.kind === "issue.closed" || e.kind === "task.closed" || (e.kind === "task.approved" && e.payload?.merged === true) || assetDecision(e, "approved"));
       break;
     case "Failed":
       ts = latest(events, (e) => e.kind === "run.failed" || finishedBad(e));

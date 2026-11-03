@@ -5,11 +5,13 @@ import type { ProjectSummary } from "@/lib/types";
 /**
  * The board's one filter: a row of project pills, "All" first, the current one in the primary tone, each a link to
  * `/?project=<slug>` so the filter lives in the URL (and survives the board's refresh and the "Show N more" links).
- * Drawn only when there is something to choose between. DESIGN.md, "Board".
+ * Drawn only when there is something to choose between. The history page passes its own `href` so the pills keep
+ * its state filter. DESIGN.md, "Board".
  */
-export function ProjectFilter({ projects, current, className }: { projects: ProjectSummary[]; current?: string; className?: string }) {
+export function ProjectFilter({ projects, current, className, href }: { projects: ProjectSummary[]; current?: string; className?: string; href?: (slug: string | undefined) => string }) {
   if (projects.length < 2 && !current) return null;
-  const items = [{ slug: "all", label: "All", href: "/" }, ...projects.map((p) => ({ slug: p.slug, label: p.slug, href: `/?project=${encodeURIComponent(p.slug)}` }))];
+  const link = href ?? ((slug?: string) => (slug ? `/?project=${encodeURIComponent(slug)}` : "/"));
+  const items = [{ slug: "all", label: "All", href: link(undefined) }, ...projects.map((p) => ({ slug: p.slug, label: p.slug, href: link(p.slug) }))];
   const active = current ?? "all";
   return (
     <nav aria-label="Project filter" className={className}>

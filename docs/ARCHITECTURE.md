@@ -74,7 +74,11 @@ the worker lanes for people who already operate them.
    puts the task back in the queue, optionally on another lane: relay moves the `agent:*` label on the issue (best
    effort), releases a live claim, writes `task.requeued` (`queued`) and rings the doorbell; the next run starts over
    from the base branch and reuses an open PR. That is how a task opened on a cloud lane nobody wired, or one whose
-   worker vanished, gets to a machine without waiting for a GitHub webhook that may never arrive.
+   worker vanished, gets to a machine without waiting for a GitHub webhook that may never arrive. A close (the
+   board card, the task page, `relay_task_close`, `POST …/close`, `relay task close`) finishes a task without a
+   merge from any state but `done`: the issue is closed on GitHub as not planned with the reason as a comment, an
+   open PR closed with it (best effort), a live claim released, `task.closed` written (`done`). Reopening the issue
+   on GitHub starts it again.
    **The asset path.** A production (a film: script, characters, shots, voice-over, the cut) is a relay project with
    no checkout, registered with `relay project add <slug> --repo owner/name`; several productions share one GitHub
    repository used only for issues, and `openTask` adds a `production:<slug>` label on such a shared repo so the

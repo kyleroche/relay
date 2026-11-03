@@ -179,7 +179,7 @@ export async function expireLeases(db: Db, now: number = Date.now()): Promise<Cl
 }
 
 /** State-changing kinds the doorbell looks at; the latest one per task decides whether it still looks queued. */
-const QUEUE_KINDS = ["issue.labeled", "run.started", "run.dispatched", "run.failed", "run.finished", "pr.opened", "pr.merged", "pr.closed", "issue.closed", "task.approved", "task.changes_requested", "task.requeued", "task.held", "task.released"];
+const QUEUE_KINDS = ["issue.labeled", "run.started", "run.dispatched", "run.failed", "run.finished", "pr.opened", "pr.merged", "pr.closed", "issue.closed", "task.approved", "task.changes_requested", "task.requeued", "task.closed", "task.held", "task.released"];
 
 /**
  * How many tasks look claimable right now, in one query: a worker lane (optionally only `lanes`), no live lease, and

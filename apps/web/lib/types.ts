@@ -16,6 +16,14 @@ export interface BoardOptions {
   project?: string;
 }
 
+/** What the history page reads: every task newest first, one project's or one state's, paged by keyset (`before` is the previous page's last row). */
+export interface HistoryOptions {
+  project?: string;
+  state?: TaskState;
+  limit?: number;
+  before?: { since: string; id: string } | null;
+}
+
 export interface TaskListOptions {
   project?: string;
   state?: TaskState;
@@ -263,6 +271,8 @@ export interface DataSource {
   getTasks(opts?: TaskListOptions): Promise<TaskView[]>;
   /** The board's cards in one query over the state cache: everything in motion, failed within a week, the newest merged; `project` narrows it. */
   getBoard(opts?: BoardOptions): Promise<BoardTask[]>;
+  /** The archive behind the board: every task newest first over the state cache, filtered and paged (`/history`). */
+  getHistory(opts?: HistoryOptions): Promise<BoardTask[]>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
   getAssets(opts?: AssetListOptions): Promise<Asset[]>;

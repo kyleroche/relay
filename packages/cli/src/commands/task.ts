@@ -1,5 +1,5 @@
 /**
- * `relay task …`: open, read, review, requeue and release tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
+ * `relay task …`: open, read, review, requeue, close and release tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
  * the issue is opened and the PR merged with the machine's gh login; in site mode the site does it with its own
  * GitHub credential. State is derived from the feed every time it is asked for (docs/INTEGRATIONS.md).
  */
@@ -151,6 +151,26 @@ export function registerTask(program: Command): void {
         if (o.json) console.log(JSON.stringify(t, null, 2));
         else {
           log(`requeued; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""}`);
+          show(t);
+        }
+      } finally {
+        await h.close();
+      }
+    });
+
+  task
+    .command("close")
+    .argument("<task-id>", "owner/repo#n")
+    .option("--reason <text>", "why, for the feed and the issue comment")
+    .option("--json")
+    .description("Close a task without a merge from any state but done: the issue (and an open PR) is closed on GitHub, a live claim released, task.closed recorded")
+    .action(async (id: string, o: { reason?: string; json?: boolean }) => {
+      const h = await openReady();
+      try {
+        const t = await h.client.closeTask(id, { reason: o.reason ?? null });
+        if (o.json) console.log(JSON.stringify(t, null, 2));
+        else {
+          log(`closed; the task is ${t.state}`);
           show(t);
         }
       } finally {

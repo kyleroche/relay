@@ -280,6 +280,15 @@ same job from the base branch, replacing the branch with `--force-with-lease` an
 exists for is a task opened on a cloud lane nobody wired: `run.dispatched` makes it `running` for ever, and a requeue
 onto `claude`, `codex` or `grok` hands it to a machine.
 
+### Close: finished without a merge
+
+A task that should not run at all, or not any more (opened by mistake, against a spec the repo does not match, a
+duplicate), is closed ("Close" on the board card or the task page, `relay task close <id> [--reason <text>]`,
+`relay_task_close`, `POST /api/v1/tasks/{id}/close`; `packages/core/src/tasks/close.ts`). It works from every state
+but `done`: relay comments the reason on the issue and closes it as not planned, closes an open PR the same way
+(best effort; a GitHub failure is recorded in the payload), releases a live claim so the worker that held it stops
+counting, writes `task.closed` (`done`) and moves the queue version. Reopening the issue on GitHub starts it again.
+
 ### Held at the gate: release
 
 A task the gate held sits in state `held`: the doorbell does not count it, `claimNext` passes it over, the board

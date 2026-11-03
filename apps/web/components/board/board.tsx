@@ -3,6 +3,7 @@ import Link from "next/link";
 import { CLOUD_LANES, WORKER_LANES, type TaskState } from "@relay/core";
 import { Thumb } from "@/components/assets/asset-card";
 import { AssetReviewActions } from "@/components/assets/asset-review-actions";
+import { CloseAction } from "@/components/tasks/close-action";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
@@ -20,7 +21,8 @@ import { cn } from "@/lib/utils";
  * stopped those and a person should read them before anything else; Queue, Running, Review and Done are always there
  * so an empty board still says what the steps are. The cards come from one query over the task state cache
  * (`boardTasks`), not a fold per task. Each column shows its newest `cap` cards; "Show N more" (`?all=<column>`)
- * opens the whole column in place, keeping the project filter. A card whose deliverable is an asset (a production)
+ * opens the whole column in place, keeping the project filter. Done holds only the newest ten the query returns and
+ * Failed only the last week's, so each ends in a link to the history (`/history?state=…`), where every task is. A card whose deliverable is an asset (a production)
  * shows the asset's thumbnail and kind where a PR card shows its PR line, and Approve / Reject with a note in Review
  * instead of Approve-and-merge. DESIGN.md, "Board".
  */
@@ -32,6 +34,8 @@ interface Column {
   /** Drawn even when empty. */
   always: boolean;
   cap: number;
+  /** The column is a window on the history page: the link's label. */
+  archive?: string;
 }
 
 const COLUMNS: readonly Column[] = [
@@ -39,8 +43,8 @@ const COLUMNS: readonly Column[] = [
   { key: "queued", label: "Queue", states: ["queued"], always: true, cap: 25 },
   { key: "running", label: "Running", states: ["claimed", "running"], always: true, cap: 25 },
   { key: "review", label: "Review", states: ["review"], always: true, cap: 25 },
-  { key: "failed", label: "Failed", states: ["failed"], always: false, cap: 10 },
-  { key: "done", label: "Done", states: ["done"], always: true, cap: 10 },
+  { key: "failed", label: "Failed", states: ["failed"], always: false, cap: 10, archive: "Older failures" },
+  { key: "done", label: "Done", states: ["done"], always: true, cap: 10, archive: "Everything merged and closed" },
 ];
 
 const workerName = (runner: string | null): string | null => (runner ? runner.replace(/^runner:/, "") : null);
@@ -121,6 +125,7 @@ function Card({ t, now, workers, canWrite, registeredLanes }: { t: BoardTask; no
           {t.state === "review" && (t.asset_id != null ? <AssetReviewActions assetId={t.asset_id} version={t.asset_version} canWrite={canWrite} size="sm" /> : <ReviewActions taskId={t.id} pr={t.pr} canWrite={canWrite} size="sm" />)}
           {t.state === "held" && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
           {requeue && <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={registeredLanes} cloudLanes={CLOUD_LANES} canWrite={canWrite} size="sm" />}
+          {requeue && <CloseAction taskId={t.id} state={t.state} pr={t.pr} canWrite={canWrite} size="sm" />}
         </div>
       )}
     </li>
@@ -165,6 +170,11 @@ export function Board({ tasks, workers, now, canWrite, all, project, registeredL
             {all === c.key && c.list.length > c.cap && (
               <Link href={href()} scroll={false} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
                 Show fewer
+              </Link>
+            )}
+            {c.archive && (
+              <Link href={`/history?state=${c.states[0]}${project ? `&project=${encodeURIComponent(project)}` : ""}`} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                {c.archive} →
               </Link>
             )}
           </section>

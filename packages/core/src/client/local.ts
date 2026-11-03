@@ -9,6 +9,7 @@ import { TOKEN_SCOPES } from "../db/tokens.ts";
 import { openTask } from "../tasks/create.ts";
 import { approveTask, requestChanges } from "../tasks/review.ts";
 import { requeueTask } from "../tasks/requeue.ts";
+import { closeTask } from "../tasks/close.ts";
 import { releaseTask } from "../tasks/gate.ts";
 import { forgetWorkerServer, WorkError } from "../work/server.ts";
 import { deliverWebhook, dispatchEvent, pingPayload, type DeliverOptions } from "../webhooks/dispatch.ts";
@@ -154,6 +155,11 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
     },
     async requeueTask(id, o = {}) {
       const r = await requeueTask(db, github(), id, opts.actor, { lane: o.lane ?? null, reason: o.reason ?? null });
+      for (const ev of r.events) await afterWrite(ev);
+      return r.task;
+    },
+    async closeTask(id, o = {}) {
+      const r = await closeTask(db, github(), id, opts.actor, { reason: o.reason ?? null });
       for (const ev of r.events) await afterWrite(ev);
       return r.task;
     },

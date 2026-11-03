@@ -23,6 +23,11 @@ export interface RequeueTaskInput {
   reason?: string | null;
 }
 
+/** `relay task close`, `relay_task_close`, `POST /api/v1/tasks/{id}/close`: why the task is closed without a merge. */
+export interface CloseTaskInput {
+  reason?: string | null;
+}
+
 /** `relay task release` / `relay_task_release` / `POST /api/v1/tasks/{id}/release`: lift the injection gate's hold. */
 export interface ReleaseTaskInput {
   note?: string | null;
@@ -217,6 +222,8 @@ export interface RelayClient {
   requestChanges(id: string, note: string): Promise<TaskView>;
   /** Put a task back in the queue, optionally on another lane (the agent:* label moves with it); any state but done (tasks/requeue.ts). */
   requeueTask(id: string, opts?: RequeueTaskInput): Promise<TaskView>;
+  /** Close a task without a merge: the issue (and an open PR) closed on GitHub, a live claim released, task.closed written; any state but done (tasks/close.ts). */
+  closeTask(id: string, opts?: CloseTaskInput): Promise<TaskView>;
   /** Release a task the injection gate held: task.released, the task is queued again (tasks/gate.ts). */
   releaseTask(id: string, opts?: ReleaseTaskInput): Promise<TaskView>;
 

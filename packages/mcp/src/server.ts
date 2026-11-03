@@ -41,6 +41,8 @@ import {
   TaskCreateError,
   TaskGateError,
   TaskRequeueError,
+  TaskCloseError,
+  closeTask,
   TaskReviewError,
   TOKEN_SCOPES,
   ulid,
@@ -88,6 +90,7 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its PR through GitHub, deletes the branch and writes task.approved (the task is done). A bot may approve only with tasks:write and never a PR its own lane produced; GitHub's refusal comes back as an error with task.merge_failed in the feed." },
   { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: relay comments on the PR (relay: changes requested by <actor>: …), writes task.changes_requested and queues the task; the next run gets the note in its brief and pushes to the same PR." },
   { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held): relay writes task.released and the task is queued again; the next worker grades it again before running. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task it opened itself." },
+  { name: "relay_task_close", scope: "tasks:write", description: "Close a task without a merge from any state but done: relay closes the issue on GitHub as not planned with the reason as a comment, closes an open PR the same way (best effort), releases a live worker claim and writes task.closed (the task is done). For a task opened by mistake, against a spec the repo does not match, or a duplicate. A bot needs tasks:write." },
   { name: "relay_task_requeue", scope: "tasks:write", description: "Put a task back in the queue from any state but done, optionally on another lane: relay moves the agent:* label on the issue (best effort), releases a live worker claim, writes task.requeued and rings the doorbell; the next worker that serves the lane claims it and starts over. For a task stuck running (a cloud lane nobody wired, a run that never reported) or on the wrong lane." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
@@ -733,6 +736,28 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         });
       } catch (e) {
         return fail(`relay: ${e instanceof TaskRequeueError || e instanceof Error ? e.message : String(e)}`);
+      }
+    },
+  );
+
+  server.registerTool(
+    "relay_task_close",
+    {
+      title: "Close a task",
+      description: toolDescription("relay_task_close"),
+      inputSchema: { id: z.string().min(3).describe("owner/repo#n"), reason: z.string().max(2000).optional().describe("why, for the feed and the issue comment") },
+    },
+    async ({ id, reason }) => {
+      const g = gate("tasks:write", "relay_task_close");
+      if (g) return g;
+      try {
+        const r = await closeTask(db, opts.github, id.trim(), externalActor(actor), { reason: reason ?? null, scopes: [...granted] });
+        for (const e of r.events) await emit(e);
+        afterWrite(r.task.project);
+        const github = r.events[0]?.payload.github as { closed: boolean; error?: string } | null | undefined;
+        return json({ task_id: r.task.id, state: r.task.state, github: github ?? null, next: github && !github.closed ? `done in relay, but the issue did not close on GitHub: ${github.error ?? "unknown error"}; close it by hand` : "done; the issue is closed as not planned. Reopening it on GitHub is the way to start it again" });
+      } catch (e) {
+        return fail(`relay: ${e instanceof TaskCloseError || e instanceof Error ? e.message : String(e)}`);
       }
     },
   );

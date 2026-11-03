@@ -205,3 +205,45 @@ export async function boardTasks(db: Db, opts: { now?: number; limit?: number; d
     .map(toBoardRow)
     .sort((a, b) => b.since.localeCompare(a.since) || b.created_at.localeCompare(a.created_at));
 }
+
+/** A page of the history: `before` is the last row of the previous page (`since` and `id`), so paging is stable while tasks move. */
+export interface TaskHistoryOptions {
+  now?: number;
+  project?: string;
+  state?: string;
+  limit?: number;
+  before?: { since: string; id: string } | null;
+}
+
+/**
+ * Every task, newest `since` first, over the same cache the board reads (`toBoardRow`): the archive behind the
+ * board's Done column, filtered by `project` and `state` and paged by keyset on (`since`, `id`) so a page never
+ * skips or repeats a row while the feed moves. Rows whose cache is empty are filled in first (bounded), so the first
+ * read after the migration is complete.
+ */
+export async function taskHistory(db: Db, opts: TaskHistoryOptions = {}): Promise<BoardRow[]> {
+  const now = opts.now ?? Date.now();
+  const limit = Math.max(1, Math.min(opts.limit ?? 50, 200));
+  const cols = `${TASK_COLS.split(", ")
+    .map((c) => `t.${c}`)
+    .join(", ")}, t.state, t.station, t.since, t.pr, t.pr_url, t.preview_state, t.preview_url, t.runner, t.last_error, t.cost,
+    t.asset_id, t.asset_kind, t.asset_version, t.asset_thumb_key, p.repo AS project_repo`;
+  const params: unknown[] = [limit];
+  const where: string[] = ["t.state IS NOT NULL"];
+  if (opts.project) {
+    params.push(opts.project);
+    where.push(`t.project = $${params.length}`);
+  }
+  if (opts.state) {
+    params.push(opts.state);
+    where.push(`t.state = $${params.length}`);
+  }
+  if (opts.before) {
+    params.push(opts.before.since, opts.before.id);
+    where.push(`(t.since < $${params.length - 1}::timestamptz OR (t.since = $${params.length - 1}::timestamptz AND t.id < $${params.length}))`);
+  }
+  const empty = await db.query<{ id: string }>(`SELECT id FROM tasks WHERE state IS NULL${opts.project ? " AND project = $1" : ""} LIMIT 500`, opts.project ? [opts.project] : []);
+  for (const r of empty) await refreshTaskState(db, r.id, now);
+  const rows = await db.query(`SELECT ${cols} FROM tasks t LEFT JOIN projects p ON p.slug = t.project WHERE ${where.join(" AND ")} ORDER BY t.since DESC, t.id DESC LIMIT $1`, params);
+  return rows.map(toBoardRow);
+}

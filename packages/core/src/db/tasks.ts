@@ -218,6 +218,7 @@ export function previewMatches(task: Pick<TaskRow, "issue">, e: EventRow, prs: R
  *   task.approved -> done when relay merged the PR itself (payload.merged); pr.merged from GitHub confirms it
  *   task.merge_failed -> stays in review (GitHub refused the merge; the payload says why)
  *   task.requeued -> queued (an operator put it back, perhaps on another lane; tasks/requeue.ts)
+ *   task.closed -> done (an operator closed it without a merge; tasks/close.ts; issue.closed from GitHub confirms it)
  *   task.held -> held (the injection gate flagged the issue text; not claimable until released; tasks/gate.ts)
  *   task.released -> queued (a person or a tokens:write bot released the hold)
  * The asset path, for a task whose deliverable is a media asset on the issue rather than a PR (a production):
@@ -346,6 +347,11 @@ export function deriveTaskStatus(task: Pick<TaskRow, "repo" | "issue">, events: 
         // an operator put the task back in the queue (and perhaps on another lane); the next claim starts over
         state = "queued";
         lastEnd = e.ts; // a run that was in flight is over as far as relay is concerned
+        break;
+      case "task.closed":
+        // an operator closed the task without a merge (tasks/close.ts): finished, nothing to claim
+        state = "done";
+        lastEnd = e.ts;
         break;
       case "task.held":
         // the injection gate flagged the text (tasks/gate.ts): the worker gave its claim back and nobody may claim again until a release

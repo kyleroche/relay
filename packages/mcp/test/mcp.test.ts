@@ -65,6 +65,7 @@ describe("relay mcp tools", () => {
       "relay_project",
       "relay_recall",
       "relay_task_approve",
+      "relay_task_close",
       "relay_task_create",
       "relay_task_get",
       "relay_task_list",
@@ -387,6 +388,58 @@ describe("relay mcp tools", () => {
     const done = await grok.client.callTool({ name: "relay_task_requeue", arguments: { id: "acme/demo#78" } });
     expect(done.isError).toBe(true);
     expect(textOf(done)).toMatch(/done/);
+    await grok.client.close();
+    await grok.server.close();
+  });
+
+  it("closes a task without a merge: tasks:write only; the issue closes as not planned with the reason, the task is done", async () => {
+    const t = (await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 95, createdBy: "human:kyle", lane: "claude" })).task;
+    const calls: string[] = [];
+    const github: GitHubClient = {
+      source: "token",
+      createIssue: async () => {
+        throw new Error("unused");
+      },
+      addLabels: async () => {},
+      removeLabel: async () => {},
+      getIssue: async (repo, n) => ({ number: n, title: "t", body: "", state: "open", html_url: `https://github.com/${repo}/issues/${n}`, labels: ["agent:claude"] }),
+      request: async (method, path, body) => {
+        calls.push(`${method} ${path} ${JSON.stringify(body)}`);
+        return {};
+      },
+      createComment: async (_repo, n, body) => {
+        calls.push(`comment ${n}: ${body}`);
+        return { id: 1, html_url: `https://github.com/acme/demo/issues/${n}#issuecomment-1` };
+      },
+      getPullRequest: async () => {
+        throw new Error("unused");
+      },
+      mergePullRequest: async () => {
+        throw new Error("unused");
+      },
+      deleteBranch: async () => {},
+    };
+    const events: repo.EventRow[] = [];
+
+    const reader = await connect({ canWrite: false, scopes: ["tasks:read"] });
+    const refused = await reader.client.callTool({ name: "relay_task_close", arguments: { id: t.id } });
+    expect(refused.isError).toBe(true);
+    expect(textOf(refused)).toMatch(/tasks:write/);
+    await reader.client.close();
+    await reader.server.close();
+
+    const grok = await connect({ canWrite: false, scopes: ["tasks:write", "tasks:read"], actor: "token:oauth:grok-bot", github, afterEvent: (row) => void events.push(row) });
+    const r = jsonOf<{ task_id: string; state: string; github: { closed: boolean }; next: string }>(await grok.client.callTool({ name: "relay_task_close", arguments: { id: t.id, reason: "opened by mistake" } }));
+    expect(r).toMatchObject({ task_id: t.id, state: "done", github: { closed: true } });
+    expect(r.next).toContain("not planned");
+    expect(calls).toEqual(["comment 95: relay: closed by bot:oauth:grok-bot: opened by mistake", 'PATCH /repos/acme/demo/issues/95 {"state":"closed","state_reason":"not_planned"}']);
+    expect(events.map((e) => e.kind)).toEqual(["task.closed"]);
+    expect(events[0]?.actor).toBe("bot:oauth:grok-bot");
+    expect(events[0]?.payload).toMatchObject({ previous_state: "queued", reason: "opened by mistake" });
+    expect(jsonOf<{ state: string }>(await grok.client.callTool({ name: "relay_task_get", arguments: { task_id: t.id } })).state).toBe("done");
+    const again = await grok.client.callTool({ name: "relay_task_close", arguments: { id: t.id } });
+    expect(again.isError).toBe(true);
+    expect(textOf(again)).toMatch(/done/);
     await grok.client.close();
     await grok.server.close();
   });

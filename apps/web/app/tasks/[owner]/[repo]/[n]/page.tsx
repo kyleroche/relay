@@ -11,6 +11,7 @@ import { AssetStatusBadge } from "@/components/assets/status-badge";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { EventRow as FeedRow } from "@/components/feed/event-row";
 import { ReleaseAction } from "@/components/tasks/release-action";
+import { CloseAction } from "@/components/tasks/close-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { PreviewBadge, TaskStateBadge } from "@/components/tasks/state-badge";
@@ -62,7 +63,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   return { title: l ? `${l.task.id}: ${l.title}` : "Task not found", robots: { index: false } };
 }
 
-const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed", "asset.uploaded", "asset.reviewed"]);
+const REVIEW_KINDS = new Set(["task.approved", "task.changes_requested", "task.merge_failed", "task.requeued", "task.closed", "task.held", "task.released", "pr.review", "pr.merged", "pr.opened", "pr.closed", "asset.uploaded", "asset.reviewed"]);
 /** States a task can be requeued from on this page: anything but done. A queued task is requeued to move it to another lane. */
 const REQUEUE_STATES = new Set(["queued", "running", "failed", "review", "claimed"]);
 
@@ -159,6 +160,7 @@ export default async function TaskPage({ params }: Props) {
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <ReleaseAction taskId={t.id} canWrite={dataMode() === "db"} />
               <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={l.registeredLanes} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+              <CloseAction taskId={t.id} state={t.state} pr={t.pr} canWrite={dataMode() === "db"} />
             </div>
           </section>
         )}
@@ -195,12 +197,12 @@ export default async function TaskPage({ params }: Props) {
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
               {inReview
                 ? t.asset
-                  ? "The deliverable is the asset in the card below: Approve accepts it and closes the issue; Reject sends your note to the next run. Requeue starts over on a lane."
+                  ? "The deliverable is the asset in the card below: Approve accepts it and closes the issue; Reject sends your note to the next run. Requeue starts over on a lane; Close finishes it without a merge."
                   : `Approve squash-merges ${t.pr ? `PR #${t.pr}` : "the pull request"}; Request changes sends your note to the next run.`
                 : t.lane?.endsWith("-cloud")
                   ? "A cloud lane holds this task; if that lane is not wired, requeue it on a worker lane."
                   : t.state === "failed"
-                    ? "The run failed; Requeue starts it over, on this lane or another."
+                    ? "The run failed; Requeue starts it over, on this lane or another. Close finishes it without a merge."
                     : "A worker has this task; Requeue releases it and starts over, on this lane or another."}
             </p>
             {showMergeFailure && (
@@ -214,6 +216,7 @@ export default async function TaskPage({ params }: Props) {
             <div className="flex flex-wrap items-center gap-2">
               {inReview && !t.asset && <ReviewActions taskId={t.id} pr={t.pr} canWrite={dataMode() === "db"} />}
               <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={l.registeredLanes} cloudLanes={CLOUD_LANES} canWrite={dataMode() === "db"} />
+              <CloseAction taskId={t.id} state={t.state} pr={t.pr} canWrite={dataMode() === "db"} />
             </div>
           </section>
         )}
@@ -366,7 +369,7 @@ export default async function TaskPage({ params }: Props) {
                   </p>
                   <p className="mt-1">{e.kind === "task.merge_failed" ? <span className="text-muted-foreground">merge refused</span> : e.summary}</p>
                   {(e.kind === "task.changes_requested" || e.kind === "asset.reviewed") && typeof e.payload.note === "string" && e.payload.note && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
-                  {e.kind === "task.requeued" && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
+                  {(e.kind === "task.requeued" || e.kind === "task.closed") && typeof e.payload.reason === "string" && e.payload.reason && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.reason}</p>}
                   {e.kind === "task.held" && Array.isArray(e.payload.reasons) && e.payload.reasons.length > 0 && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{(e.payload.reasons as unknown[]).map(String).join("\n")}</p>}
                   {e.kind === "task.released" && typeof e.payload.note === "string" && e.payload.note && <p className="mt-1 whitespace-pre-wrap rounded bg-muted p-2 font-mono text-xs">{e.payload.note}</p>}
                 </li>

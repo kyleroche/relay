@@ -255,6 +255,14 @@ export const dbSource: DataSource = {
     return Promise.all(rows.map(async (r) => ({ ...r, asset_thumb_url: await viewUrl(r.asset_thumb_key) })));
   },
 
+  async getHistory(opts = {}): Promise<BoardTask[]> {
+    const db = await getDb();
+    const now = Date.now();
+    await repo.expireLeases(db, now);
+    const rows = await repo.taskHistory(db, { now, ...opts });
+    return Promise.all(rows.map(async (r) => ({ ...r, asset_thumb_url: await viewUrl(r.asset_thumb_key) })));
+  },
+
   async getModels(): Promise<ModelInfo[]> {
     const db = await getDb();
     return (await repo.listModels(db)).map(toModel);

@@ -48,7 +48,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
             <h1 className="sr-only">Board</h1>
             <HomeTabs active="board" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges a PR or accepts an asset, request changes or reject sends it back with your note, release lifts a hold. The board refreshes itself.
+              Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges a PR or accepts an asset, request changes or reject sends it back with your note, release lifts a hold, close finishes it without a merge. Done keeps the newest ten; History has the rest. The board refreshes itself.
             </p>
             <ProjectFilter projects={projects} current={project} className="mt-2" />
           </div>

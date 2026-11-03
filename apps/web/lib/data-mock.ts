@@ -116,6 +116,25 @@ function laneModels(lanes: string[], models: ModelInfo[]): ModelInfo[] {
   return models.filter((m) => ids.has(m.id));
 }
 
+/** The board's cache columns, derived here from a folded task (a database holds them on the row). */
+function boardRow(t: TaskView): BoardTask {
+  const assets = dataset().assets;
+  const asset = t.asset ? assets.find((a) => a.id === t.asset?.id) : undefined;
+  return {
+    ...t,
+    station: stationOf(t, []),
+    since: t.updated_at ?? t.created_at,
+    last_error: t.state === "failed" ? t.run_summary : null,
+    cost: t.usage?.cost_equiv ?? null,
+    asset_id: t.asset?.id ?? null,
+    asset_kind: t.asset?.kind ?? null,
+    asset_version: t.asset?.version ?? null,
+    asset_thumb_key: null,
+    asset_thumb_url: asset?.thumb_url ?? null,
+    project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
+  };
+}
+
 export const mockSource: DataSource = {
   async getFeed(opts: FeedOptions = {}): Promise<FeedEvent[]> {
     const ds = dataset();
@@ -225,29 +244,20 @@ export const mockSource: DataSource = {
   },
 
   /** The board from the same folded tasks: the cache columns a database would hold, derived here; `project` narrows it. */
+  async getHistory(opts = {}) {
+    const all = await this.getTasks({ limit: 500, ...(opts.project ? { project: opts.project } : {}), ...(opts.state ? { state: opts.state } : {}) });
+    const rows = all.map(boardRow).sort((a, b) => b.since.localeCompare(a.since) || b.id.localeCompare(a.id));
+    const start = opts.before ? rows.findIndex((r) => r.since < opts.before!.since || (r.since === opts.before!.since && r.id < opts.before!.id)) : 0;
+    return start < 0 ? [] : rows.slice(start, start + (opts.limit ?? 50));
+  },
+
   async getBoard(opts = {}) {
     const all = await this.getTasks({ limit: 500, ...(opts.project ? { project: opts.project } : {}) });
-    const assets = dataset().assets;
-    const row = (t: TaskView): BoardTask => {
-      const asset = t.asset ? assets.find((a) => a.id === t.asset?.id) : undefined;
-      return {
-        ...t,
-        station: stationOf(t, []),
-        since: t.updated_at ?? t.created_at,
-        last_error: t.state === "failed" ? t.run_summary : null,
-        cost: t.usage?.cost_equiv ?? null,
-        asset_id: t.asset?.id ?? null,
-        asset_kind: t.asset?.kind ?? null,
-        asset_version: t.asset?.version ?? null,
-        asset_thumb_key: null,
-        asset_thumb_url: asset?.thumb_url ?? null,
-        project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
-      };
-    };
     const live = all.filter((t) => t.state !== "done").slice(0, opts.limit ?? 300);
     const done = all.filter((t) => t.state === "done").slice(0, opts.doneLimit ?? 10);
-    return [...live, ...done].map(row);
+    return [...live, ...done].map(boardRow);
   },
+
 
   async getModels() {
     return dataset().models;

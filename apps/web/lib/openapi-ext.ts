@@ -197,6 +197,42 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         },
       },
     },
+    "/tasks/{owner}/{repo}%23{issue}/close": {
+      post: {
+        operationId: "closeTask",
+        tags: ["tasks"],
+        summary: "Close a task without a merge",
+        description:
+          "For a task opened by mistake, against a spec the repository does not match, or a duplicate. Relay closes the issue on GitHub as not planned with `reason` as a comment and closes an open PR the same way (best effort: a GitHub failure is recorded in the event payload, not fatal), releases a live worker claim, writes `task.closed`, which folds to `done`, and moves the queue version so the workers' doorbells drop it. Allowed from every state except `done`. A signed-in person may close anything; a bot's token must hold `tasks:write`. Reopening the issue on GitHub is the way to start the task again.",
+        security: [{ bearer: ["tasks:write"] }],
+        parameters: [
+          { name: "owner", in: "path", required: true, schema: { type: "string" } },
+          { name: "repo", in: "path", required: true, schema: { type: "string" } },
+          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
+        ],
+        requestBody: {
+          required: false,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  reason: { type: "string", maxLength: 2000, description: "Why, for the feed row and the issue comment." },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          "200": response("Closed; the updated task (state done).", "#/components/schemas/Task"),
+          "400": problemResponse("Bad task id or a reason over 2000 characters."),
+          "403": problemResponse("A token without tasks:write."),
+          "404": problemResponse("No such task."),
+          "409": problemResponse("The task is already done (merged or closed)."),
+          ...commonErrors,
+        },
+      },
+    },
     "/tasks/{owner}/{repo}%23{issue}/requeue": {
       post: {
         operationId: "requeueTask",
@@ -645,7 +681,7 @@ export const integrationSchemas: Record<string, unknown> = {
       idempotency_key: nullable("string"),
       created_by: { type: "string" },
       created_at: { type: "string", format: "date-time" },
-      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, task.held → held (the injection gate; not claimable until task.released → queued), run.started → running, pr.opened, a finished run or asset.uploaded → review, task.changes_requested, task.requeued or a rejected asset.reviewed → queued, task.approved, pr.merged, issue.closed or an approved asset.reviewed → done, run.failed or a failed run → failed." },
+      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, task.held → held (the injection gate; not claimable until task.released → queued), run.started → running, pr.opened, a finished run or asset.uploaded → review, task.changes_requested, task.requeued or a rejected asset.reviewed → queued, task.approved, pr.merged, issue.closed, task.closed or an approved asset.reviewed → done, run.failed or a failed run → failed." },
       runner: nullable("string", { description: "runner:<name> that last claimed it." }),
       lane: nullable("string"),
       pr: nullable("integer"),
