@@ -2,9 +2,6 @@ packages:
   - packages/*
   - apps/*
 # pnpm 12: overrides live here (package.json "pnpm" is no longer read). Floors for advisories in transitive tooling deps.
-minimumReleaseAgeExclude:
-  - '@electric-sql/pglite-pgvector@0.0.13'
-  - '@electric-sql/pglite@0.5.12'
 overrides:
   tinypool: '>=2.1.2'
   source-map-js: '>=1.2.2'

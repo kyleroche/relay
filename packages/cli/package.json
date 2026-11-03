@@ -47,12 +47,12 @@
     "relay": "../../bin/relay"
   },
   "dependencies": {
-    "@ai-sdk/gateway": "^4.0.126",
-    "@electric-sql/pglite": "^0.5.12",
-    "@electric-sql/pglite-pgvector": "0.0.13",
+    "@ai-sdk/gateway": "^4.0.132",
+    "@electric-sql/pglite": "^0.5.14",
+    "@electric-sql/pglite-pgvector": "0.0.15",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@vercel/blob": "^2.8.2",
-    "ai": "^7.0.153",
+    "ai": "^7.0.159",
     "cheerio": "^1.2.0",
     "commander": "^15.0.0",
     "pg": "^8.23.1",

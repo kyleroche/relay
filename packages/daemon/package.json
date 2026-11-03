@@ -8,9 +8,9 @@
     "start": "tsx src/main.ts"
   },
   "dependencies": {
-    "@hono/node-server": "^2.1.5",
+    "@hono/node-server": "^2.1.6",
     "@relay/core": "workspace:*",
-    "hono": "^4.13.14"
+    "hono": "^4.13.16"
   },
   "license": "Apache-2.0"
 }
