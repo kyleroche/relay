@@ -94,7 +94,7 @@ program
     // the config after openReady() renewed the site token, so the mcp line probes with the token the bridge would send
     let live = cfg;
     if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site}` });
-    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite, task and webhook commands, the hooks and the MCP server use it)` : "local: the database on this machine" });
+    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite and webhook commands, the hooks and the MCP server use it; tasks and workers are on the board)` : "local: the database on this machine" });
     if (siteMode) {
       const t0 = Date.now();
       // Where the credential came from, never the credential: device flow, invite, pasted token, or RELAY_TOKEN.

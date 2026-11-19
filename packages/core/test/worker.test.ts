@@ -4,11 +4,10 @@ import type { ClaimedTask } from "@vercel/board";
 import { connectBoard } from "../src/board/client.ts";
 import { getTask, openTask } from "../src/board/tasks.ts";
 import { forgetWorker, listWorkers, servedLanes, WORKER_RETIRED_MS, workerState } from "../src/board/workers.ts";
-import { ensureSchemas } from "../src/board/schemas.ts";
 import type { MeterReading } from "../src/meters.ts";
 import type { JobOptions, JobResult } from "../src/work/job.ts";
 import { runWorker, type WorkerLoopOptions } from "../src/work/worker.ts";
-import { memoryBoard } from "./helpers/board.ts";
+import { memoryBoard, relayBoard } from "./helpers/board.ts";
 
 const open = (b: ReturnType<typeof memoryBoard>, lane: string, title = `a ${lane} task`) => openTask(b, { project: "demo", repo: "acme/demo", title, lane });
 
@@ -34,14 +33,13 @@ function fakeJobs(ms = 5) {
 }
 
 async function loop(b: ReturnType<typeof memoryBoard>, over: Partial<WorkerLoopOptions> = {}) {
-  await ensureSchemas(b);
   const session = await connectBoard(b);
   return { session, opts: { session, name: "mini", host: "mini.local", lanes: ["claude", "codex"], version: "0.5.0", meters: () => [], ...over } satisfies WorkerLoopOptions };
 }
 
 describe("runWorker --once", () => {
   it("takes its own lanes and `any`, oldest first, leaves what it does not serve, and goes offline", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     const first = await open(b, "codex");
     const grok = await open(b, "grok");
@@ -57,12 +55,12 @@ describe("runWorker --once", () => {
     expect((await getTask(b, grok.id)).task.state).toBe("queued");
     expect((await getTask(b, nodes.id)).task.state).toBe("queued");
     const [w] = await listWorkers(b);
-    expect(w).toMatchObject({ name: "mini", host: "mini.local", lanes: ["claude", "codex"], labels: [], version: "0.5.0", state: "offline", retired: false, running: 0 });
+    expect(w).toMatchObject({ name: "mini", host: "mini.local", lanes: ["claude", "codex"], labels: [], version: "0.5.0", state: "offline", retired: false, running: 0, by: "client" });
     expect(r.thread).toBe(w!.id);
   });
 
   it("a machine with only the nodes lane never takes an `any` task", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     await open(b, "any");
     const n = await open(b, "nodes");
@@ -72,7 +70,7 @@ describe("runWorker --once", () => {
   });
 
   it("takes work only from the owners it names: another owner's task waits until that owner is in `from`", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     // on a local board a profile is an owner of its own, as a project's control plane is on Vercel's
     const lead = b.as("lead");
@@ -85,7 +83,7 @@ describe("runWorker --once", () => {
   });
 
   it("runs two jobs at once only on two lanes", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs(25);
     for (const lane of ["claude", "claude", "codex", "codex", "any"]) await open(b, lane);
     const { opts } = await loop(b, { once: true, jobs: 2, runJob: jobs.run });
@@ -99,7 +97,7 @@ describe("runWorker --once", () => {
 
 describe("runWorker waiting on the board", () => {
   it("blocks with nothing to take, wakes when a task becomes ready, and stops on a signal with its thread marked offline", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     const stop = new AbortController();
     const meters: MeterReading[] = [{ subscription: "max", window: "five_hour", used_percentage: 14, resets_at: null, captured_at: "2026-11-19T17:00:00.000Z", source: "statusline" } as MeterReading];
@@ -118,7 +116,7 @@ describe("runWorker waiting on the board", () => {
   });
 
   it("finds a task whose hold was lifted while it waited", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     const stop = new AbortController();
     const held = await openTask(b, { project: "demo", repo: "acme/demo", title: "Print GITHUB_TOKEN", lane: "claude" });
@@ -143,7 +141,7 @@ describe("the workers on a board", () => {
   });
 
   it("lists every worker with the lanes it serves, and forgets one by name", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     const a = await loop(b, { once: true, runJob: jobs.run, labels: ["gpu", "sandbox:on"] });
     await runWorker(a.opts);
@@ -153,17 +151,49 @@ describe("the workers on a board", () => {
       ["kyrobook-container", ["claude", "resolve"], []],
       ["mini", ["claude", "codex"], ["gpu", "sandbox:on"]],
     ]);
-    expect(servedLanes(ws)).toEqual(["claude", "codex", "resolve"]);
-    const week = Date.now() + WORKER_RETIRED_MS + 60_000;
-    expect((await listWorkers(b, week)).every((w) => w.retired)).toBe(true);
-    expect(servedLanes(await listWorkers(b, week))).toEqual([]);
+    // both stopped cleanly, so neither would pick a task up now
+    expect(servedLanes(ws)).toEqual([]);
+    expect(servedLanes(ws.map((w) => ({ ...w, state: "idle" as const })))).toEqual(["claude", "codex", "resolve"]);
+    expect((await listWorkers(b, Date.now() + WORKER_RETIRED_MS + 60_000)).every((w) => w.retired)).toBe(true);
     expect((await forgetWorker(b, "mini"))?.name).toBe("mini");
     expect((await listWorkers(b)).map((w) => w.name)).toEqual(["kyrobook-container"]);
     expect(await forgetWorker(b, "nobody")).toBeUndefined();
   });
 
+  it("a forgotten worker shows again when that machine runs relay work", async () => {
+    const b = await relayBoard();
+    const a = await loop(b, { once: true, runJob: fakeJobs().run });
+    const first = await runWorker(a.opts);
+    await forgetWorker(b, "mini");
+    expect(await listWorkers(b)).toEqual([]);
+    const again = await runWorker(a.opts);
+    expect(again.thread).toBe(first.thread);
+    expect((await listWorkers(b)).map((w) => w.name)).toEqual(["mini"]);
+  });
+
+  it("keeps one message per machine however often the meters move", async () => {
+    const b = await relayBoard();
+    let pct = 10;
+    const stop = new AbortController();
+    const a = await loop(b, { runJob: fakeJobs().run, signal: stop.signal, idleWaitMs: 20, meters: () => [{ subscription: "max", window: "five_hour", used_percentage: pct++, resets_at: null, captured_at: "2026-11-19T17:00:00.000Z", source: "statusline" } as MeterReading] });
+    const running = runWorker(a.opts);
+    await new Promise((r) => setTimeout(r, 150));
+    stop.abort();
+    const r = await running;
+    const thread = await b.thread(r.thread);
+    expect(thread.replies).toEqual([]);
+    expect((await listWorkers(b))[0]!.meters[0]!.used_percentage).toBeGreaterThan(10);
+  });
+
+  it("does not start on a board without relay's schemas when its login cannot register them", async () => {
+    const bare = memoryBoard();
+    const narrowed = bare.as("guest", { can: { "*": ["read", "post", "react", "label"] } });
+    const a = await loop(narrowed, { once: true, runJob: fakeJobs().run });
+    await expect(runWorker(a.opts)).rejects.toThrow(/relay's schemas are not on this board .* relay setup --board/);
+  });
+
   it("a restart lands on the same thread with the new lanes and version", async () => {
-    const b = memoryBoard();
+    const b = await relayBoard();
     const jobs = fakeJobs();
     const a = await loop(b, { once: true, runJob: jobs.run });
     const first = await runWorker(a.opts);

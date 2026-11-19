@@ -22,7 +22,7 @@ import {
   lanesFromDoctorOutput,
   loginStatesFromDoctorOutput,
   tokenNameFromDoctorOutput,
-} from "../src/work/container.ts";
+ currentWorkArgs } from "../src/work/container.ts";
 
 describe("workers", () => {
   it("derives online, idle and offline from last_seen", () => {
@@ -253,6 +253,10 @@ describe("container plan (relay work --isolation container)", () => {
     expect(fmtMemory(1536 * 2 ** 20)).toBe("1536M");
     expect(fmtMemory(2 ** 10)).toBe("1K");
     expect(fmtMemory(1000)).toBe("1000");
+  });
+  it("drops the options relay work no longer takes, each with its value, from a container made before", () => {
+    expect(currentWorkArgs(["--lanes", "claude", "--max-interval", "900", "--labels", "gpu", "--jobs", "2", "--interval", "15", "--no-sandbox"])).toEqual(["--lanes", "claude", "--jobs", "2", "--no-sandbox"]);
+    expect(currentWorkArgs([])).toEqual([]);
   });
   it("says whether the container runs this relay's image", () => {
     expect(imageStatus("relay-worker:0.2.0", "relay-worker:0.2.0")).toEqual({ current: true, line: "relay-worker:0.2.0 (this relay's build)" });

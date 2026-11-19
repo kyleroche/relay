@@ -9,7 +9,7 @@
  *   relay work --install       print the LaunchAgent (macOS) or systemd user unit (Linux); --yes writes and starts it
  *   relay work --uninstall     stop and remove the service; --yes to do it
  *   relay work status          the service, the board's workers, the log tail
- *   relay work forget <name>   remove a retired worker's row (a renamed or decommissioned machine); it comes back if it runs `relay work` again
+ *   relay work forget <name>   hide a retired worker (a renamed or decommissioned machine); it shows again if it runs `relay work`
  *
  * Isolation tier 2 (docs/WORKERS.md, "Isolation"): `--isolation container` runs the whole worker inside one
  * persistent Linux container made with Apple's `container` CLI. `--install` builds the image, creates the container
@@ -25,7 +25,7 @@
  * sets RELAY_ISOLATION=container and `relay work` adds the labels `isolation:container` and `sandbox:on` or
  * `sandbox:container`, waits for the site and the logins instead of exiting, and names itself `<host>-container`.
  */
-import { Option, type Command } from "commander";
+import type { Command } from "commander";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -38,7 +38,6 @@ import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.
 interface WorkOptions {
   once?: boolean;
   lanes?: string;
-  labels?: string;
   jobs: string;
   name?: string;
   maxMinutes: string;
@@ -125,17 +124,16 @@ const memoryBrief: BriefSource = async (q) => {
 };
 
 /** The `relay work` arguments an install bakes into the service (host) or the container's command. */
-export function bakedArgs(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>): string[] {
+export function bakedArgs(o: Pick<WorkOptions, "lanes" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>): string[] {
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
-  if (o.labels) args.push("--labels", o.labels);
   if (o.jobs && o.jobs !== "1") args.push("--jobs", o.jobs);
   if (o.name) args.push("--name", o.name);
   if (o.sandbox === false) args.push("--no-sandbox");
   return args;
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>, deps: WorkDeps, containerBin?: string) {
+function plan(o: Pick<WorkOptions, "lanes" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>, deps: WorkDeps, containerBin?: string) {
   const platform = deps.platform === "darwin" ? "darwin" : "linux";
   const rp = runtimePaths();
   // extra hosts for the Claude lane's sandbox travel with the service when set at install time
@@ -232,12 +230,8 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .enablePositionalOptions()
     .option("--once", "drain the queue once, then exit")
     .option("--lanes <list>", "force the lanes to serve (default: detected from logins), e.g. claude,codex")
-    .option("--labels <list>", "capabilities this worker advertises, matched against a project's lane.labels preference, e.g. gpu,xcode")
     .option("--jobs <n>", "concurrent jobs (the lanes still serialize per vendor login)", "1")
     .option("--name <name>", "worker name (default: this host's short name)")
-    // installed services and containers made before the board may still pass these; the worker waits on the board now and ignores them
-    .addOption(new Option("--interval <seconds>").hideHelp())
-    .addOption(new Option("--max-interval <seconds>").hideHelp())
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
     .option("--no-sandbox", `run the Claude lane's Bash without Claude Code's OS sandbox (allowlist only); logged, and advertised as the label ${NO_SANDBOX_LABEL}`)
@@ -266,7 +260,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       process.once("SIGTERM", stop);
       let serving = lanes;
       if (inside) {
-        // the container's process must stay alive for `container exec`; wait for the site and the logins instead of exiting
+        // the container's process must stay alive for `container exec`; wait for the board and the logins instead of exiting
         serving = await waitForReadiness(out, lanes, ac.signal);
         if (ac.signal.aborted) return;
       } else if (!serving) {
@@ -276,7 +270,8 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         if (d.reasons.length) out(`not serving: ${d.reasons.join("; ")}`);
       }
       const debug = process.env.RELAY_DEBUG ? (m: string) => out(`debug: ${m}`) : undefined;
-      const labels = list(o.labels);
+      // what the board's workers list says about how this worker runs its lanes
+      const labels: string[] = [];
       let sandbox = o.sandbox;
       if (inside) {
         if (!labels.includes(ISOLATION_LABEL)) labels.push(ISOLATION_LABEL);
@@ -311,7 +306,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), brief: memoryBrief },
         });
         const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
-        const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("settled") ? [`${count("settled")} settled`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];
+        const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("eval") ? [`${count("eval")} waiting for an eval`] : []), ...(count("done") ? [`${count("done")} step task${count("done") === 1 ? "" : "s"} done`] : []), ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];
         out(`done: ${r.ran} job(s)${r.results.length ? `; ${parts.join(", ")}` : ""}`);
         if (count("failed")) process.exitCode = 1;
       } finally {
@@ -842,7 +837,6 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     if (mode === "update" && !previous) throw new Error(`no ${CONTAINER_NAME} container to update; create one with: relay work --isolation container --install`);
     const workerName = o.name ?? previous?.workerName ?? containerWorkerName(host);
     const site = o.site ?? readSiteConfig().site;
-    if (mode === "install" && !site) throw new Error("container mode joins a hosted relay (the container cannot see this machine's local database): pass --site <url>, or put this machine in site mode first with relay setup --site <url>");
     // the host's passthrough environment, over what the container has now on an update
     const env: Record<string, string> = { ...(previous?.env ?? {}) };
     for (const k of CONTAINER_PASSTHROUGH_ENV) if (process.env[k]) env[k] = process.env[k]!;
@@ -937,7 +931,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     }
     let after = probeInside(c);
     if (after.credentials) log(`site: joined as ${joinedAs(after.doctor)} (kept)`);
-    else if (!site) log(`site: the volume holds no token and no site is known; the worker waits. Join with: relay work container shell, then relay setup --site <url>; or re-run with --site <url>`);
+    else if (!site) log(`site: none. The worker inside needs only its Vercel login for the board; it runs without relay's memory until it joins a hosted relay (relay work container shell, then relay setup --site <url>)`);
     else {
       log(`joining ${site} from inside the container (approve the code it prints)…`);
       const setupCode = deps.run(c.setup);

@@ -24,7 +24,7 @@ export const CONTAINER_RELAY_HOME = `${CONTAINER_HOME}/.harness`;
 /** The site token `relay setup --site` inside writes; present in the volume means the container has joined already. */
 export const CONTAINER_CREDENTIALS = `${CONTAINER_RELAY_HOME}/credentials.json`;
 /** Host environment `--install` passes into the container when set, and `update` carries over from the container. */
-export const CONTAINER_PASSTHROUGH_ENV = ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_WORK_MAX_INTERVAL", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"] as const;
+export const CONTAINER_PASSTHROUGH_ENV = ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_BOARD_TEAM", "RELAY_BOARD_NAME", "RELAY_BOARD_FROM", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"] as const;
 /** Set in the image; `relay work` inside reads it to know it is the container worker. */
 export const CONTAINER_ENV = "RELAY_ISOLATION";
 /** The worker name and host the container worker registers with (set on the container at create time). */
@@ -62,9 +62,9 @@ export interface ContainerSpec {
   /** The worker's name and the Mac's hostname, both passed into the container as environment. */
   workerName: string;
   host: string;
-  /** `relay work` arguments baked into the container's command (`--lanes`, `--labels`, `--jobs`). */
+  /** `relay work` arguments baked into the container's command (`--lanes`, `--jobs`). */
   args?: string[];
-  /** Extra environment for the worker inside (`RELAY_LANE_ALLOWED_DOMAINS`, `RELAY_WORK_MAX_INTERVAL`). */
+  /** Extra environment for the worker inside (`RELAY_LANE_ALLOWED_DOMAINS`, the `RELAY_BOARD_*` settings). */
   env?: Record<string, string>;
   /** The VM's memory (`container create --memory`); default CONTAINER_MEMORY. The runtime's own default, 1 GB, is too little: PGlite alone reserves about that on first open and the kernel kills the worker. */
   memory?: string;
@@ -304,11 +304,24 @@ export function fmtMemory(bytes: number): string {
   return String(bytes);
 }
 
+/** Options `relay work` took, with a value, before the worker waited on the board. A container made then still carries them. */
+export const RETIRED_WORK_OPTIONS: readonly string[] = ["--interval", "--max-interval", "--labels"];
+
+/** The `relay work` arguments without the options it no longer takes, each dropped with its value. */
+export function currentWorkArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (RETIRED_WORK_OPTIONS.includes(args[i]!)) i++;
+    else out.push(args[i]!);
+  }
+  return out;
+}
+
 export function containerSettingsFrom(listJson: string, name: string = CONTAINER_NAME): ContainerSettings | undefined {
   const row = listRow(listJson, name);
   if (!row) return undefined;
   const argv = row.configuration?.initProcess?.arguments ?? [];
-  const out: ContainerSettings = { args: argv[0] === "relay" && argv[1] === "work" ? argv.slice(2) : [], env: {} };
+  const out: ContainerSettings = { args: argv[0] === "relay" && argv[1] === "work" ? currentWorkArgs(argv.slice(2)) : [], env: {} };
   for (const kv of row.configuration?.initProcess?.environment ?? []) {
     const eq = kv.indexOf("=");
     if (eq < 0) continue;

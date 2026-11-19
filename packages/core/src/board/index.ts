@@ -4,4 +4,4 @@ export * from "./mapping.ts";
 export * from "./schemas.ts";
 export * from "./tasks.ts";
 export * from "./workers.ts";
-export { CLOUD_LANE, CODE_LANES, isCodeLane, laneUnservedProblem } from "../tasks/lanes.ts";
+export { CODE_LANES, isCodeLane, laneUnservedProblem } from "../tasks/lanes.ts";

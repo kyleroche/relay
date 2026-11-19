@@ -9,11 +9,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Board } from "@vercel/board";
 import { HOLD } from "../src/board/mapping.ts";
-import { ASSET_SCHEMA, blocksOf, ensureSchemas, type AssetBlock } from "../src/board/schemas.ts";
-import { getTask, openTask, requestChanges } from "../src/board/tasks.ts";
+import { ASSET_SCHEMA, blocksOf, type AssetBlock } from "../src/board/schemas.ts";
+import { approveTask, getTask, openTask, requestChanges } from "../src/board/tasks.ts";
 import type { NodesResult } from "../src/lanes/nodes.ts";
 import { runJob, type GitHost, type JobOptions, type NodesRunner } from "../src/work/job.ts";
-import { memoryBoard } from "./helpers/board.ts";
+import { relayBoard } from "./helpers/board.ts";
 import { fakeHost, makeOrigin, type Origin } from "./helpers/repo.ts";
 
 const MANIFEST = "```relay-nodes\nworkflow: workflows/cutscene.py\ninputs:\n  Start Flow:\n    prompt: a rainy street\noutputs: [End Flow]\nstage: cutscene\n```";
@@ -44,8 +44,7 @@ function stubRunner(outputs: Array<{ parameter: string; ext: string; mime: strin
 const clear = async () => ({ verdict: "clear" as const, score: 0, reasons: [], grader: "off" as const, model: null });
 
 async function rig(body = `A rainy street at night.\n\n${MANIFEST}`) {
-  const board = memoryBoard();
-  await ensureSchemas(board);
+  const board = await relayBoard();
   const worker = board.as("relay-studio-nodes");
   // the nodes lane attaches to the thread: it must never push or open a pull request
   const never = (what: string) => async (): Promise<never> => {
@@ -121,6 +120,12 @@ describe("runJob on the nodes lane", () => {
     const d = await getTask(r2.board, r2.task.id);
     expect(d.task.reason).toBe("Seedance20VideoGeneration: 402 insufficient credits");
     expect(d.usage.map((u) => u.kind)).toEqual(["run", "media"]);
+  });
+
+  it("approve accepts the outputs and completes the task, with no GitHub involved", async () => {
+    const r = await rig();
+    await runJob(await r.worker.tasks.claim(r.task.id), r.job(stubRunner([{ parameter: "video", ext: "mp4", mime: "video/mp4", content: "x" }])));
+    expect((await approveTask(r.board, undefined, r.task.id, { by: "kyleroche" })).task).toMatchObject({ state: "done", result: "approved 1 output by kyleroche" });
   });
 
   it("request changes on a nodes task has no pull request to comment on and still returns it to the queue", async () => {

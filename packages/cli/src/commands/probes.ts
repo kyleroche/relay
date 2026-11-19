@@ -5,7 +5,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig } from "@relay/core";
+import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, RETIRED_WORK_OPTIONS, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -286,7 +286,8 @@ const RELAY_RUNS = /relay-mcp|relay\.js|hooks\/(?:session-start|session-end|user
  * The files relay wrote a Node path into: the CLIs' hook and MCP config (`configs`, where only relay's own entries
  * are looked at) and the worker's service file (`owned`, relay's from top to bottom). A path in them that is gone
  * means every hook and the MCP server fail silently, which is what a `brew upgrade` of a versioned Cellar directory
- * did before `stableNodePath`. Reads only; the fix is to run setup again.
+ * did before `stableNodePath`; a service file that passes an option `relay work` no longer takes exits at once.
+ * Reads only; the fix is to run setup, or the service install, again.
  */
 export function recordedNodeCheck(files: { configs: string[]; owned?: string[] }, opts: { read?: (p: string) => string | undefined; exists?: (p: string) => boolean } = {}): Check {
   const name = "recorded";
@@ -304,6 +305,11 @@ export function recordedNodeCheck(files: { configs: string[]; owned?: string[] }
   };
   look(files.configs, false);
   look(files.owned ?? [], true);
+  // a service installed before the worker waited on the board still passes options relay work no longer takes, and exits on them
+  for (const f of new Set(files.owned ?? [])) {
+    const stale = RETIRED_WORK_OPTIONS.filter((o) => new RegExp(`${o}\\b`).test(read(f) ?? ""));
+    if (stale.length) broken.push(`${f} passes ${stale.join(", ")}, which relay work no longer takes`);
+  }
   const service = broken.some((b) => (files.owned ?? []).some((f) => b.startsWith(`${f} `)));
   if (broken.length) return { status: "fail", name, detail: `${broken.join("; ")}. The hooks, the MCP server or the worker service cannot start. Run: relay setup --yes${service ? " and relay work --install --yes" : ""}` };
   return { status: "ok", name, detail: seen ? `the Node path in ${seen} relay config file${seen === 1 ? "" : "s"} exists` : "no relay hooks or service installed on this machine yet (relay setup)" };

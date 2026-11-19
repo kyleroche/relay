@@ -160,7 +160,7 @@ describe("relay work: isolation flag", () => {
   });
   it("bakes the worker options into arguments the same way for the service and the container", () => {
     expect(bakedArgs({ jobs: "1" })).toEqual([]);
-    expect(bakedArgs({ lanes: "claude", labels: "gpu", jobs: "2", sandbox: false })).toEqual(["--lanes", "claude", "--labels", "gpu", "--jobs", "2", "--no-sandbox"]);
+    expect(bakedArgs({ lanes: "claude", jobs: "2", sandbox: false })).toEqual(["--lanes", "claude", "--jobs", "2", "--no-sandbox"]);
   });
   it("rejects an unknown isolation before doing anything", async () => {
     const f = fakeDeps();
@@ -222,9 +222,12 @@ describe("relay work --isolation container --install (plan only)", () => {
     expect(f.run).toEqual([]);
     expect(f.sh.map((w) => w.slice(1, 3).join(" "))).toEqual(["system status", "list --all", "volume list"]);
   });
-  it("needs a site: the container cannot see this machine's local database", async () => {
+  it("needs no hosted relay: the worker inside reaches the board with its own Vercel login", async () => {
     const f = fakeDeps();
-    await expect(program(f.deps).parseAsync(["node", "relay", "work", "--isolation", "container", "--install"])).rejects.toThrow(/--site <url>/);
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    await program(f.deps).parseAsync(["node", "relay", "work", "--isolation", "container", "--install"]);
+    expect(f.run).toEqual([]);
+    out.mockRestore();
   });
   it("--install --yes over a running container that already joined: recreates it, skips relay setup, prints the logins still missing", async () => {
     const f = fakeDeps({ list: LIST_RUNNING_OLD, credentials: true, doctor: DOCTOR_PARTIAL });

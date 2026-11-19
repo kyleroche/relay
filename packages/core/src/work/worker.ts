@@ -9,8 +9,8 @@
  *   wait     with nothing to take, the loop blocks on the board until a task under `work/` becomes ready, from a
  *            cursor it noted before it looked, so nothing that happened in between is missed. It never polls on a
  *            timer; the wait ends by itself every few minutes so a lease that ran out elsewhere is found too
- *   live     the worker's thread in `relay/workers` is relabelled on every pass and every few minutes while a job
- *            runs, with the plan meters relay's status line saved under ~/.harness/meters
+ *   live     the worker's message in `relay/workers` is relabelled on every pass and every few minutes while a job
+ *            runs, and rewritten when the plan meters relay's status line saved under ~/.harness/meters change
  *
  * A stop (SIGTERM, `--once` with nothing left) lets running jobs finish, then marks the worker offline.
  */
@@ -60,7 +60,7 @@ export interface WorkerLoopOptions {
 }
 
 export interface WorkerLoopResult {
-  /** The worker's thread in `relay/workers`. */
+  /** The worker's message in `relay/workers`. */
   thread: string;
   ran: number;
   results: JobResult[];
@@ -114,12 +114,13 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
     return h;
   };
 
-  if (!(await ensureSchemas(board))) log("this login cannot register relay's schemas on the board (it takes `manage` everywhere); someone who can should run: relay setup --board");
+  // a job reports in blocks, and the worker's own message is one: without the schemas nothing it does would land
+  if (!(await ensureSchemas(board))) throw new Error("relay's schemas are not on this board and this login cannot register them (it takes `manage` everywhere). Someone who manages the board runs once: relay setup --board");
   const reg: WorkerRegistration = await registerWorker(board, info, meters());
   log(`on the board as ${me.handle} (${me.principal}), worker ${opts.name} serving ${lanes.join(", ") || "no lanes"}${info.labels.length ? ` with labels ${info.labels.join(", ")}` : ""}; taking tasks from ${from.join(", ")}`);
 
-  // the worker's own lane profiles write labels too (the pull request, the eval state); on a board where a profile
-  // is a principal of its own they would otherwise read as strangers
+  // what a run leaves in a thread is trusted by its author; on a board where a profile is a principal of its own
+  // (a local one), this worker's lane profiles would otherwise read as strangers to each other
   const trusted = [...new Set([...from, ...(await Promise.all(lanes.map((l) => handle(l).me()))).map((m) => m.actor)])];
   const results: JobResult[] = [];
   const running = new Map<Promise<void>, string>();
@@ -128,7 +129,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   let lastBeat = Date.now();
   const beat = async (): Promise<void> => {
     lastBeat = Date.now();
-    await reg.beat({ running: running.size, meters: meters() }).catch((e: unknown) => log(`could not update the worker's thread: ${describeBoardError(e)}`));
+    await reg.beat({ running: running.size, meters: meters() }).catch((e: unknown) => log(`could not update the worker's message: ${describeBoardError(e)}`));
   };
   const timer = setInterval(() => {
     if (running.size > 0 && Date.now() - lastBeat >= heartbeatMs) void beat();

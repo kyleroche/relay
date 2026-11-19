@@ -3,7 +3,7 @@
  * caller's own (a deployment's OIDC token, `BOARD_TOKEN`, the machine's `vercel login`), so a worker, the CLI and
  * the site each act as who they are, and `BOARD_URL` points all of them at a local board (`vb serve`) instead.
  */
-import { board, BoardError, type Board, type BoardEventView, type Me } from "@vercel/board";
+import { board, BoardError, type Board, type Me } from "@vercel/board";
 import type { BoardConfig } from "../config.ts";
 
 export type { Board, Me } from "@vercel/board";
@@ -36,17 +36,3 @@ export function describeBoardError(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 export const boardCode = (e: unknown): string | undefined => (e instanceof BoardError ? e.code : undefined);
-
-/** Everything that happened in a thread after its root was written, oldest first: task changes, label changes, replies. */
-export async function threadEvents(b: Board, id: string, limit = 500): Promise<BoardEventView[]> {
-  const out: BoardEventView[] = [];
-  let after = id;
-  while (out.length < limit) {
-    const page = await b.poll({ re: id, after, wait: 0 });
-    if (!page.events.length) break;
-    out.push(...page.events);
-    if (page.cursor === after) break;
-    after = page.cursor;
-  }
-  return out;
-}

@@ -1,19 +1,18 @@
 /**
- * How relay's vocabulary sits on a Vercel Board (docs/ARCHITECTURE.md, "The board"). Pure: no I/O, no handle.
+ * How relay's vocabulary sits on a Vercel Board (docs/WORKERS.md, "The board"). Pure: no I/O, no handle.
  *
- *   channels   work/<project>        the one queue of a project: every thread in it is a task
- *              relay/workers         one thread per worker machine, relabelled as it lives
+ *   channels   work/<project>   the one queue of a project: every thread in it is a task
+ *              relay/workers    one thread per worker machine
  *
  * The queue is `work/<project>`, not `<project>/work`, because a claim names one subtree: `work/` is every project's
  * queue in one request, and Vercel's board refuses a subtree of more than 50 channels, so a project costs one.
  *
- *   labels     lane=<lane>   who may run it: a lane this worker serves, or `any` for the code lanes
- *              model=<id>    the model the lane is asked to use (the lane's default without it)
- *              repo=<owner/name>, base=<branch>, issue=<owner/name#n>, priority=<p>
- *              pr=<owner/name#n>, branch=<name>   written by the runner once the pull request exists
- *              role=plan|review                   what kind of work the text describes
- *              step=<name>, evaluates=<task>      on a step's own task (steps/index.ts); eval=pending|answer|done on the task it looks at
- *              relay=<kind> on a reply            a message relay wrote: log, result, usage, brief, note, asset
+ *   labels     lane=<lane>    who may run it: a lane a worker serves, or `any` for the code lanes. It is the claim's filter.
+ *              model=<id>     the model the lane is asked for (the lane's default without it)
+ *              relay=<kind>   on a reply relay wrote: log, result, usage, brief, note, asset
+ *
+ * Labels only steer and describe. Anyone who may label in a channel can set them, so nothing that decides where a
+ * worker clones, what it pushes or what gets merged is a label: that is in blocks (board/schemas.ts).
  *
  *   states     the board keeps `board.task`; a hold says why in its `kind`. `relayState` folds the two into the
  *              one word relay shows.
@@ -45,51 +44,23 @@ export function projectOfChannel(channel: string): string | undefined {
 export const LABEL = {
   lane: "lane",
   model: "model",
-  repo: "repo",
-  base: "base",
-  issue: "issue",
-  priority: "priority",
-  pr: "pr",
-  branch: "branch",
-  role: "role",
-  /** On a step's own task: which step it runs, and the task whose work it looks at. */
-  step: "step",
-  evaluates: "evaluates",
-  /** On a task whose work a step evaluates: `pending` while the step's task runs, `answer` once its findings are in the thread, `done` after the lane answered them. */
-  eval: "eval",
   /** On a reply: which of relay's own messages it is (`RELAY_MESSAGE`). */
   relay: "relay",
 } as const;
 
 export { ANY_LANE } from "../tasks/lanes.ts";
 
-/**
- * The labels that decide what a worker does with a task: where it clones, what it checks out, which lane and model
- * run it, which pull request settles it. On the board anyone who may label in a channel may set them, which is wider
- * than who may give a worker instructions, so a job checks who set them (`foreignLabelChange` in work/job.ts).
- */
-export const ROUTING_LABELS: readonly string[] = ["lane", "model", "repo", "base", "issue", "pr", "branch", "step", "evaluates", "eval"];
-
-/** Whether an actor is one of the trusted principals or a profile of one (`principal+profile`). */
-export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean => trusted.some((t) => actor === t || actor.startsWith(`${t}+`));
-
 /** What a reply of relay's own is, in its `relay` label. Anything without the label is a person's (or another agent's) words. */
 export const RELAY_MESSAGE = { log: "log", result: "result", usage: "usage", brief: "brief", note: "note", asset: "asset" } as const;
 
 /** Why a task is held, in the hold's `kind`. */
 export const HOLD = {
-  /** The pull request (or the asset) is there: a person approves or sends it back. */
+  /** The pull request (or the outputs) is there: a person approves or sends it back. The reason is the pull request's URL. */
   review: "awaiting_review",
   /** The injection gate flagged the text (tasks/gate.ts). */
   gate: "gate",
-  /** A plan or a spend waits for the owner's yes. */
-  approval: "awaiting_approval",
-  /** The worker asked a question. */
-  input: "needs_input",
-  /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. */
+  /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. The reason names the step's task. */
   eval: "awaiting_eval",
-  /** Someone the worker does not take work from changed a label that routes the task. */
-  labels: "labels_changed",
 } as const;
 
 /**
@@ -128,20 +99,20 @@ export const taskRef = (id: string): string => createHash("sha1").update(id).dig
 
 /** The branch a lane pushes for a task. A re-run of the task replaces its own branch. */
 export const branchFor = (lane: string, id: string): string => `relay/${lane}-${taskRef(id)}`;
-/** Whether a name has the shape of a branch relay made. A label is anyone's to set, so a branch named in one is checked before it is fetched. */
-export const isRelayBranch = (name: string): boolean => /^relay\/[a-z][a-z0-9-]{0,31}-[0-9a-f]{8}$/.test(name);
+/** Whether a branch is one a lane pushed for this task. A pull request is this task's only when its head is. */
+export const isBranchOf = (branch: string, id: string): boolean => /^relay\/[a-z][a-z0-9-]{0,31}-[0-9a-f]{8}$/.test(branch) && branch.endsWith(`-${taskRef(id)}`);
 
 /** A board message holds 10,000 characters; a task's text is cut to this and the rest goes in an attachment. */
 export const TEXT_MAX = 10_000;
 
-/** The text of a task's root: the title as a heading, then the body. */
+/** The words of a task's root: the title as a heading, then the body. `openTask` appends the routing block. */
 export function taskText(title: string, body: string): string {
   const t = title.trim().replace(/\s+/g, " ");
   const b = body.trim();
   return b ? `# ${t}\n\n${b}` : `# ${t}`;
 }
 
-/** The title and body of a task's root, however it was written: a `# heading` first line, or just a first line. */
+/** The title and body of a task's words, however they were written: a `# heading` first line, or just a first line. */
 export function splitTaskText(text: string): { title: string; body: string } {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const first = lines.findIndex((l) => l.trim());
@@ -150,16 +121,17 @@ export function splitTaskText(text: string): { title: string; body: string } {
   return { title, body: lines.slice(first + 1).join("\n").trim() };
 }
 
-/** `owner/name#n` as a pull request or issue label carries it. */
+/** `owner/name#n`, as an issue is named. */
 export function parseRef(v: string | undefined): { repo: string; number: number } | undefined {
   const m = /^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)#(\d+)$/.exec(v ?? "");
   return m ? { repo: m[1]!, number: Number(m[2]) } : undefined;
 }
-export const formatRef = (repo: string, number: number): string => `${repo}#${number}`;
 
-/** A label value holds 256 characters. */
-export const LABEL_VALUE_MAX = 256;
-export const labelValue = (v: string): string => v.replace(/\s+/g, " ").trim().slice(0, LABEL_VALUE_MAX);
+/** The pull request a GitHub URL names: `https://github.com/<owner>/<name>/pull/<n>`, and nothing else. */
+export function parsePullUrl(url: string | undefined): { repo: string; number: number; url: string } | undefined {
+  const m = /^https:\/\/github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\/pull\/(\d+)$/.exec((url ?? "").trim());
+  return m ? { repo: m[1]!, number: Number(m[2]), url: m[0] } : undefined;
+}
 
 /** The profile a worker writes as on a lane: `relay-<worker>-<lane>`, within the board's 32 characters (letters, digits, hyphens, a letter first). */
 export function workerProfile(worker: string, lane: string): string {

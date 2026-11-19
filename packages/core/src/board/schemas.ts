@@ -3,9 +3,17 @@
  * definition again changes nothing, and a version never changes, so a new shape is a new version). A message that
  * carries one is a fenced block the board checked when it was written; readers take `message.blocks`, never the text.
  *
+ *   relay-task@1     in a task's own text: where the work happens (repo, base, issue) and, for a step's task, what it looks at
+ *   relay-run@1      a run's outcome, in the runner's reply: the branch, the pull request, the eval task it opened
+ *   relay-eval@1     an eval's verdict, in the reply that carries its findings to the work's thread
+ *   relay-release@1  a person's release of the injection gate's hold, for exactly the text they read
  *   relay-usage@1    one model call's cost: what a lane, the gate or a media model used (the ledger's row)
  *   relay-worker@1   a worker machine: its lanes, its labels and the plan meters its logins report
  *   relay-asset@1    one output file of the nodes lane, attached to the same message
+ *
+ * These carry what relay acts on, and a label never does, because of who can write each. Anyone who may label in a
+ * channel can set any label. A task's text is its owner's (the board holds a task whose root someone else edits), and
+ * a reply's author is verified by the board, so a block is trusted by where it is and who wrote it (`trustedBlocks`).
  */
 import { block, BoardError, type Board, type MessageView } from "@vercel/board";
 import type { MeterReading } from "../meters.ts";
@@ -13,9 +21,54 @@ import type { MeterReading } from "../meters.ts";
 const num = { type: "number", minimum: 0 } as const;
 const str = (max: number) => ({ type: "string", maxLength: max }) as const;
 
+export const TASK_SCHEMA = "relay-task@1";
+export const RUN_SCHEMA = "relay-run@1";
+export const EVAL_SCHEMA = "relay-eval@1";
+export const RELEASE_SCHEMA = "relay-release@1";
 export const USAGE_SCHEMA = "relay-usage@1";
 export const WORKER_SCHEMA = "relay-worker@1";
 export const ASSET_SCHEMA = "relay-asset@1";
+
+/** What routes a task, written once by whoever opens it. */
+export interface TaskBlock {
+  /** `owner/name` of the repository the work happens in. */
+  repo?: string;
+  /** The branch to start from instead of the repository's default one. */
+  base?: string;
+  /** `owner/name#n` of the GitHub issue the task answers. */
+  issue?: string;
+  /** A step's own task: the step it runs, the task whose work it looks at, and that work's branch. */
+  step?: string;
+  evaluates?: string;
+  branch?: string;
+}
+
+/** How a run ended, for the next run and for the commands that act on the task. */
+export interface RunBlock {
+  outcome: string;
+  lane: string;
+  worker: string;
+  branch?: string;
+  pr?: { repo: string; number: number; url: string };
+  /** The task an after-pr step was opened as, when the work waits for it. */
+  eval_task?: string;
+}
+
+export interface EvalBlock {
+  step: string;
+  /** The step's own task. */
+  task: string;
+  lane: string;
+  /** The verdict line, or why the step could not run. */
+  verdict: string;
+  /** False when the step could not run: there are no findings to answer. */
+  ran: boolean;
+}
+
+export interface ReleaseBlock {
+  /** The digest of the text the gate held (`gateDigest`), so text added later is graded again. */
+  digest: string;
+}
 
 /** What a run cost, as the ledger records it. `billing` keeps a subscription's run apart from one paid per token. */
 export interface UsageBlock {
@@ -66,6 +119,41 @@ export interface AssetBlock {
 }
 
 const SCHEMAS: Array<{ name: string; version: number; description: string; schema: Record<string, unknown> }> = [
+  {
+    name: "relay-task",
+    version: 1,
+    description: "What routes a relay task, in the task's own text: the repository, the branch to start from, the issue it answers, and for a step's task what it looks at.",
+    schema: { type: "object", properties: { repo: str(200), base: str(250), issue: str(220), step: str(48), evaluates: str(128), branch: str(250) } },
+  },
+  {
+    name: "relay-run",
+    version: 1,
+    description: "How a relay run ended: its lane and worker, the branch and pull request it produced, the eval task it opened.",
+    schema: {
+      type: "object",
+      required: ["outcome", "lane", "worker"],
+      properties: {
+        outcome: str(32),
+        lane: str(64),
+        worker: str(128),
+        branch: str(250),
+        pr: { type: "object", required: ["repo", "number", "url"], properties: { repo: str(200), number: { type: "integer", minimum: 1 }, url: str(400) } },
+        eval_task: str(128),
+      },
+    },
+  },
+  {
+    name: "relay-eval",
+    version: 1,
+    description: "The verdict of a step that judged a task's work, posted with its findings in that task's thread.",
+    schema: { type: "object", required: ["step", "task", "lane", "verdict", "ran"], properties: { step: str(48), task: str(128), lane: str(64), verdict: str(900), ran: { type: "boolean" } } },
+  },
+  {
+    name: "relay-release",
+    version: 1,
+    description: "A person's release of the injection gate's hold on a task, for the text with this digest.",
+    schema: { type: "object", required: ["digest"], properties: { digest: str(64) } },
+  },
   {
     name: "relay-usage",
     version: 1,
@@ -141,23 +229,42 @@ const SCHEMAS: Array<{ name: string; version: number; description: string; schem
 ];
 
 /**
- * Register relay's schemas on a board. Registering takes `manage` everywhere, which a person on the team has and a
- * narrowed worker may not: a `forbidden` answer is returned as `false` so the caller can say who should run setup,
- * and the schemas someone else registered still serve.
+ * Make sure relay's schemas are on a board, and say whether they are. Registering takes `manage` everywhere, which a
+ * person on the team has and a narrowed caller may not; a caller that is refused still works when someone who could
+ * register them already did (a team's boards share one registry).
  */
 export async function ensureSchemas(board: Board): Promise<boolean> {
   try {
     for (const s of SCHEMAS) await board.createSchema(s);
     return true;
   } catch (e) {
-    if (e instanceof BoardError && (e.code === "forbidden" || e.status === 403)) return false;
-    throw e;
+    if (!(e instanceof BoardError && (e.code === "forbidden" || e.status === 403))) throw e;
+    const have = new Set((await board.schemas()).map((x) => `${x.name}@${x.version}`));
+    return SCHEMAS.every((x) => have.has(`${x.name}@${x.version}`));
   }
 }
 
+export const taskBlockText = (t: TaskBlock): string => block(TASK_SCHEMA, { ...t });
+export const runText = (r: RunBlock): string => block(RUN_SCHEMA, { ...r });
+export const evalText = (e: EvalBlock): string => block(EVAL_SCHEMA, { ...e });
+export const releaseText = (r: ReleaseBlock): string => block(RELEASE_SCHEMA, { ...r });
 export const usageText = (u: UsageBlock): string => block(USAGE_SCHEMA, { ...u });
 export const workerText = (w: WorkerBlock): string => block(WORKER_SCHEMA, { ...w });
 export const assetText = (a: AssetBlock): string => block(ASSET_SCHEMA, { ...a });
+
+/** A message's text without its fenced blocks: what a person wrote around the data. */
+export const withoutBlocks = (text: string): string => text.replace(/```json#[a-z0-9-]+@\d+\n[\s\S]*?\n```/g, "").replace(/\n{3,}/g, "\n\n").trim();
+
+/** Whether an actor is one of the trusted principals or a profile of one (`principal+profile`). */
+export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean => trusted.some((t) => actor === t || actor.startsWith(`${t}+`));
+
+/**
+ * The blocks of one schema in a thread's replies that a trusted author wrote, oldest first, each with its reply's
+ * place in the thread. A block anyone else posted is not relay's word, whatever it says.
+ */
+export function trustedBlocks<T>(replies: ReadonlyArray<Pick<MessageView, "blocks" | "by" | "deleted">>, schema: string, trusted: readonly string[]): Array<{ data: T; index: number }> {
+  return replies.flatMap((m, index) => (m.deleted || !isTrustedActor(m.by.actor, trusted) ? [] : blocksOf<T>(m, schema).map((data) => ({ data, index }))));
+}
 
 /** The blocks of one schema on a message, typed. */
 export function blocksOf<T>(m: Pick<MessageView, "blocks">, schema: string): T[] {

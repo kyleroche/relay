@@ -6,7 +6,7 @@
  */
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
-import { board, detectGitHub, isLaneName, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, TASK_PRIORITIES, WORKER_LANES, type TaskPriority } from "@relay/core";
+import { board, detectGitHub, isLaneName, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, WORKER_LANES } from "@relay/core";
 import { log, resolveProject } from "./_common.ts";
 import { act, openBoard, repoOf } from "./_board.ts";
 
@@ -25,7 +25,9 @@ function show(d: board.TaskDetail): void {
   console.log(`title: ${t.title}`);
   console.log(`queue: ${t.channel}${t.repo ? `  repo ${t.repo}` : ""}${t.base ? `  base ${t.base}` : ""}`);
   if (t.issue) console.log(`issue: https://github.com/${t.issue.repo}/issues/${t.issue.number}`);
-  if (t.pr) console.log(`pr:    ${t.pr.url}${t.branch ? `\nbranch: ${t.branch}` : ""}`);
+  const pr = t.pr ?? d.thread.replies.flatMap((m) => board.blocksOf<board.RunBlock>(m, board.RUN_SCHEMA)).at(-1)?.pr;
+  if (pr) console.log(`pr:    ${pr.url}`);
+  if (t.evaluates) console.log(`looks at: ${t.evaluates}${t.branch ? ` (${t.branch})` : ""}`);
   if (t.needs.length) console.log(`needs: ${t.needs.join(", ")}`);
   if (t.hold) console.log(`held:  ${t.hold.kind}${t.hold.reason ? `: ${t.hold.reason.slice(0, 200)}` : ""}`);
   if (t.result) console.log(`result: ${t.result.slice(0, 200)}`);
@@ -41,7 +43,7 @@ function show(d: board.TaskDetail): void {
 }
 
 /** The `--lane` help: the built-ins by name; a registered worker's lane is checked against the board's workers. */
-const LANE_HELP = `${WORKER_LANES.join(", ")} (run by relay work), ${board.ANY_LANE} (whichever code lane is free), ${board.CLOUD_LANE} (a Vercel Sandbox, after you approve the spend), or the lane another worker registered (relay work status lists workers and their lanes)`;
+const LANE_HELP = `${WORKER_LANES.join(", ")} (run by relay work), ${board.ANY_LANE} (whichever code lane is free), or the lane another worker registered (relay work status lists workers and their lanes)`;
 
 export function registerTask(program: Command): void {
   const task = program.command("task").description("Tasks: threads in a project's queue on the team's Vercel Board, with the state the board keeps (docs/INTEGRATIONS.md)");
@@ -58,14 +60,12 @@ export function registerTask(program: Command): void {
     .option("--model <id>", "the model the lane should use (fable, gpt-6-astra, …); the lane's default without it")
     .option("--needs <ids>", "tasks that must complete first, comma separated")
     .option("--base <branch>", "start from this branch instead of the repository's default one")
-    .option("--priority <p>", `one of ${TASK_PRIORITIES.join(", ")}`)
     .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
     .option("--cwd <path>")
     .option("--json")
     .description("Open a task in the project's queue, labelled with its lane")
-    .action(async (o: { title: string; lane: string; project?: string; repo?: string; body?: string; bodyFile?: string; manifest?: string; model?: string; needs?: string; base?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
+    .action(async (o: { title: string; lane: string; project?: string; repo?: string; body?: string; bodyFile?: string; manifest?: string; model?: string; needs?: string; base?: string; key?: string; cwd?: string; json?: boolean }) => {
       if (!isLaneName(o.lane)) throw new Error(`--lane: ${laneNameProblem(o.lane)}`);
-      if (o.priority && !(TASK_PRIORITIES as readonly string[]).includes(o.priority)) throw new Error(`--priority must be one of ${TASK_PRIORITIES.join(", ")}`);
       const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
       if (!ref.slug) throw new Error("no project: pass --project or run relay link in the repo");
       let body = o.bodyFile ? readFileSync(o.bodyFile === "-" ? 0 : o.bodyFile, "utf8") : o.body ?? "";
@@ -90,7 +90,6 @@ export function registerTask(program: Command): void {
           ...(o.model ? { model: o.model } : {}),
           ...(o.needs ? { needs: o.needs.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
           ...(o.base ? { base: o.base } : {}),
-          ...(o.priority ? { priority: o.priority as TaskPriority } : {}),
           ...(o.key ? { idempotencyKey: o.key } : {}),
         });
         if (o.json) console.log(JSON.stringify(t, null, 2));
@@ -118,13 +117,13 @@ export function registerTask(program: Command): void {
     .command("approve")
     .argument("<task-id>", "the task's ID on the board")
     .option("--json")
-    .description("Approve a task in review: squash-merge its pull request, delete the branch and complete the task")
+    .description("Approve a task in review: squash-merge its pull request and delete the branch (or accept its attached outputs), and complete the task")
     .action((id: string, o: { json?: boolean }) =>
       act(async () => {
         const b = openBoard();
         const r = await board.approveTask(b, detectGitHub(), id, { by: (await b.me()).handle });
         if (o.json) console.log(JSON.stringify(r, null, 2));
-        else log(`approved ${id}: merged ${r.pr_url}${r.merge_sha ? ` (${r.merge_sha.slice(0, 7)})` : ""}${r.branch_deleted ? ", branch deleted" : ""}${r.settled ? "" : "; a waiting worker took the task and completes it on its next look"}`);
+        else log(`approved ${id}: ${r.pr_url ? `merged ${r.pr_url}${r.merge_sha ? ` (${r.merge_sha.slice(0, 7)})` : ""}${r.branch_deleted ? ", branch deleted" : ""}` : r.task.result}`);
       }),
     );
 
@@ -167,7 +166,7 @@ export function registerTask(program: Command): void {
       act(async () => {
         const r = await board.closeTask(openBoard(), detectGitHub(), id, { ...(o.reason ? { reason: o.reason } : {}) });
         if (o.json) console.log(JSON.stringify(r, null, 2));
-        else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
+        else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.canceled.length ? `; called off ${r.canceled.join(", ")}, which was looking at it` : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
       }),
     );
 
@@ -175,7 +174,7 @@ export function registerTask(program: Command): void {
     .command("release")
     .argument("<task-id>", "the task's ID on the board")
     .option("--json")
-    .description("Lift the injection gate's hold on a task: it returns to the queue and is not graded again")
+    .description("Lift the injection gate's hold on a task for its text as it stands: it returns to the queue, and only text added later is graded again")
     .action((id: string, o: { json?: boolean }) =>
       act(async () => {
         const t = await board.releaseTask(openBoard(), id);

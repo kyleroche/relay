@@ -1,10 +1,18 @@
 /** An in-memory board for tests (`local({ memory: true })`): the whole protocol, tasks and leases included, nothing on disk or the network. */
 import { board, type Board } from "@vercel/board";
 import { local } from "@vercel/board/backend-local";
+import { ensureSchemas } from "../../src/board/schemas.ts";
 import type { GitHubClient, GitHubPull } from "../../src/github/client.ts";
 
 export function memoryBoard(): Board {
   return board({ backend: local({ memory: true }) });
+}
+
+/** A memory board set up the way `relay setup --board` leaves one: relay's schemas registered. */
+export async function relayBoard(): Promise<Board> {
+  const b = memoryBoard();
+  await ensureSchemas(b);
+  return b;
 }
 
 export interface FakeGitHub extends GitHubClient {

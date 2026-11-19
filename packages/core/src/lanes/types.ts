@@ -20,6 +20,8 @@ export interface LaneRequest {
   project?: string;
   task?: string;
   step?: number;
+  /** Aborting it ends the CLI: a job whose claim was lost stops its lane instead of running to the end. */
+  signal?: AbortSignal;
   /** JSON schema for structured output (Claude lane only). */
   jsonSchema?: Record<string, unknown>;
 }

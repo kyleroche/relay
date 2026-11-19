@@ -24,6 +24,13 @@ describe("recordedNodeCheck", () => {
     expect(c.status).toBe("fail");
     expect(c.detail).toContain("relay work --install --yes");
   });
+  it("flags a service file that still passes an option relay work no longer takes", () => {
+    const plist = "<string>/opt/homebrew/opt/node@24/bin/node</string>\n<string>/x/dist/relay.js</string>\n<string>work</string>\n<string>--max-interval</string>\n<string>900</string>";
+    const c = recordedNodeCheck({ configs: [], owned: ["/h/Library/LaunchAgents/house.kyro.relay.work.plist"] }, { read: () => plist, exists: () => true });
+    expect(c.status).toBe("fail");
+    expect(c.detail).toContain("passes --max-interval, which relay work no longer takes");
+    expect(c.detail).toContain("relay work --install --yes");
+  });
   it("is ok when every recorded path exists, and says so when nothing is installed", () => {
     expect(recordedNodeCheck({ configs: Object.keys(files) }, { read, exists: () => true }).status).toBe("ok");
     expect(recordedNodeCheck({ configs: ["/h/none"] }, { read, exists }).detail).toMatch(/no relay hooks or service installed/);

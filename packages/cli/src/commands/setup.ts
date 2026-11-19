@@ -119,7 +119,6 @@ export function registerSetup(program: Command): void {
     });
 }
 
-/** `relay setup --site <url> [--token t | --invite c | (device flow)]`. */
 /**
  * `relay setup --board`: there is no token to fetch, since the board takes this machine's own `vercel login`. What is
  * saved is which board and whose tasks; what is checked is that the login reaches it; and relay's schemas are
@@ -151,6 +150,7 @@ async function connectToBoard(o: SetupOpts): Promise<void> {
   log("next: relay work --once to drain the queue here, or relay work --install --yes to keep a worker running");
 }
 
+/** `relay setup --site <url> [--token t | --invite c | (device flow)]`. */
 async function connectSite(o: SetupOpts): Promise<void> {
   const current = readSiteConfig();
   const site = typeof o.site === "string" ? o.site : current.site;

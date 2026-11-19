@@ -86,6 +86,8 @@ export interface NodesRequest {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
+  /** Aborting it ends the engine run. */
+  signal?: AbortSignal;
   /** Interpreter override (tests, `RELAY_NODES_PYTHON`). */
   python?: string[];
   /** Shim override. */
@@ -241,7 +243,7 @@ export async function runNodes(req: NodesRequest): Promise<NodesResult> {
     const child = execFile(
       interpreter[0]!,
       args,
-      { cwd: req.cwd ?? dirname(req.workflow), env: { ...env, PYTHONUNBUFFERED: "1" }, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? DEFAULT_NODES_TIMEOUT_MS, killSignal: "SIGTERM" },
+      { cwd: req.cwd ?? dirname(req.workflow), env: { ...env, PYTHONUNBUFFERED: "1" }, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? DEFAULT_NODES_TIMEOUT_MS, killSignal: "SIGTERM", ...(req.signal ? { signal: req.signal } : {}) },
       (err, stdout, stderr) => resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
     );
     child.stdin?.on("error", () => {});
