@@ -60,7 +60,7 @@ describe("the ledger", () => {
 
     const first = await syncLedger(db, s);
     expect(first).toMatchObject({ caught_up: true });
-    expect(first.rows).toBe(5);
+    expect(first.written).toHaveLength(5);
     expect(await getSetting(db, LEDGER_CURSOR)).toBe(first.cursor);
     const rows = (await listEvents(db, { project: "demo", limit: 50 })).reverse();
     expect(rows.map((e) => e.kind)).toEqual(["task.created", "run.started", "step.usage", "step.usage", "run.finished"]);
@@ -70,11 +70,11 @@ describe("the ledger", () => {
     expect(rows.filter((e) => e.kind === "step.usage").map((e) => [e.lane, e.subscription, e.cost_equiv, e.payload.kind])).toEqual([["gate", "max", 0.01, "gate"], ["claude", "max", 0.08, "run"]]);
 
     // nothing new: nothing written, and reading the same events again writes nothing either
-    expect(await syncLedger(db, s)).toMatchObject({ events: 0, rows: 0, caught_up: true });
+    expect(await syncLedger(db, s)).toMatchObject({ events: 0, written: [], caught_up: true });
 
     await closeTask(board, undefined, t.id, { reason: "not needed" });
     const later = await syncLedger(db, s);
-    expect(later.rows).toBe(1);
+    expect(later.written.map((e) => e.kind)).toEqual(["task.closed"]);
     expect((await listEvents(db, { project: "demo", limit: 1 }))[0]).toMatchObject({ kind: "task.closed", summary: "Add a greeting: not needed" });
   });
 });

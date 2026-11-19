@@ -14,7 +14,7 @@
  */
 import type { Board, BoardEventView, MessageView } from "@vercel/board";
 import type { Db } from "../db/client.ts";
-import { writeEvent, type EventInput } from "../db/events.ts";
+import { writeEvent, type EventInput, type EventRow } from "../db/events.ts";
 import { getSetting, putSetting } from "../db/settings.ts";
 import type { BoardSession } from "./client.ts";
 import { HOLD, isBranchOf, LABEL, parsePullUrl, projectOfChannel, RELAY_MESSAGE, splitTaskText, taskRef, WORK_SUBTREE } from "./mapping.ts";
@@ -133,8 +133,8 @@ export const LEDGER_CURSOR = "board.ledger.cursor";
 export interface LedgerSync {
   /** Board events read this time. */
   events: number;
-  /** Feed rows written (a row already there is not written again). */
-  rows: number;
+  /** The feed rows written, oldest first (a row already there is not written again): what outbound webhooks fan out. */
+  written: EventRow[];
   cursor: string | null;
   /** False when it stopped at `maxPages` with more to read: call again. */
   caught_up: boolean;
@@ -147,10 +147,15 @@ export interface LedgerSync {
  */
 export async function syncLedger(db: Db, s: BoardSession, opts: { maxPages?: number } = {}): Promise<LedgerSync> {
   let cursor = (await getSetting(db, LEDGER_CURSOR)) ?? null;
-  const out: LedgerSync = { events: 0, rows: 0, cursor, caught_up: false };
+  const out: LedgerSync = { events: 0, written: [], cursor, caught_up: false };
   for (let page = 0; page < (opts.maxPages ?? 20); page++) {
     const r = cursor ? await s.board.poll({ channel: WORK_SUBTREE, after: cursor, wait: 0 }) : await s.board.poll({ channel: WORK_SUBTREE, last: 100 });
-    for (const event of r.events) for (const row of ledgerRows(event, s.from)) if (await writeEvent(db, row)) out.rows++;
+    for (const event of r.events) {
+      for (const input of ledgerRows(event, s.from)) {
+        const row = await writeEvent(db, input);
+        if (row) out.written.push(row);
+      }
+    }
     out.events += r.events.length;
     if (r.cursor && r.cursor !== cursor) {
       cursor = r.cursor;
