@@ -4,8 +4,8 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
-import { existsSync } from "node:fs";
-import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
+import { existsSync, readFileSync } from "node:fs";
+import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -256,6 +256,26 @@ function fmtAge(ms: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.round(m / 60);
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+/**
+ * The files relay wrote a Node path into (the CLIs' hook and MCP config, the worker's service file): a path in them
+ * that is gone means every hook and the MCP server fail silently, which is what a `brew upgrade` of a versioned
+ * Cellar directory did before `stableNodePath`. Reads only; the fix is to run setup again.
+ */
+export function recordedNodeCheck(files: string[], opts: { read?: (p: string) => string | undefined; exists?: (p: string) => boolean } = {}): Check {
+  const name = "recorded";
+  const read = opts.read ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  const broken: string[] = [];
+  let seen = 0;
+  for (const f of files) {
+    const text = read(f);
+    if (text === undefined || !/relay/i.test(text)) continue;
+    seen += 1;
+    for (const gone of missingNodePaths(text, { ...(opts.exists ? { exists: opts.exists } : {}), near: /relay|harness/i })) broken.push(`${f} runs ${gone}, which no longer exists`);
+  }
+  if (broken.length) return { status: "fail", name, detail: `${broken.join("; ")}. The hooks, the MCP server or the worker service cannot start. Run: relay setup --yes${broken.some((b) => /LaunchAgents|systemd/.test(b)) ? " and relay work --install --yes" : ""}` };
+  return { status: "ok", name, detail: seen ? `the Node path in ${seen} relay config file${seen === 1 ? "" : "s"} exists` : "no relay hooks or service installed on this machine yet (relay setup)" };
 }
 
 /**

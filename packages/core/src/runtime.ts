@@ -43,6 +43,37 @@ export interface RuntimePaths {
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * The Node path relay writes into files that outlive this process (the CLIs' hook commands, the MCP entry, the
+ * service file). `process.execPath` is the real path, and under Homebrew that is the versioned Cellar directory
+ * (`…/Cellar/node@24/24.18.0/bin/node`), which `brew upgrade` deletes: every recorded hook then points at nothing.
+ * Homebrew keeps `…/opt/<formula>/bin/node` pointing at the installed version, so that is what gets recorded when it
+ * exists. Any other path (a version manager's, the system's) is returned as it is: those stay where they are.
+ */
+export function stableNodePath(execPath: string = process.execPath, exists: (p: string) => boolean = existsSync): string {
+  const m = /^(.*)\/Cellar\/([^/]+)\/[^/]+\/bin\/(node(?:\.exe)?)$/.exec(execPath);
+  if (!m) return execPath;
+  const stable = `${m[1]}/opt/${m[2]}/bin/${m[3]}`;
+  return exists(stable) ? stable : execPath;
+}
+
+/**
+ * Absolute paths to a `node` binary found in a file's text (a hook command, an MCP server entry, a service file)
+ * that no longer exist on this machine. `near` keeps only the ones written next to a mention of relay (within a few
+ * hundred characters either side), so a user's own entries in the same file are left alone. `relay doctor` prints
+ * what this returns with the fix.
+ */
+export function missingNodePaths(text: string, opts: { exists?: (p: string) => boolean; near?: RegExp } = {}): string[] {
+  const exists = opts.exists ?? existsSync;
+  const found = new Set<string>();
+  for (const m of text.matchAll(/(\/[^\s"'<>,\\]+\/bin\/node)(?![\w.@-])/g)) {
+    const at = m.index ?? 0;
+    if (opts.near && !opts.near.test(text.slice(Math.max(0, at - 200), at + m[1]!.length + 400))) continue;
+    found.add(m[1]!);
+  }
+  return [...found].filter((p) => !exists(p));
+}
+
 function packageAt(root: string): RuntimePaths {
   const dist = join(root, "dist");
   const hooksDir = join(dist, "hooks");
