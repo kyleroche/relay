@@ -13,7 +13,7 @@ const DAY = 24 * H;
 
 interface Seed {
   b: board.Board;
-  /** A person on the site, and a bot with a token: each writes as its own profile, as lib/board.ts `actorBoard` makes them. */
+  /** A person on the site, and a bot with a token: each writes as its own profile, as core's desk does for a caller. */
   person: board.Board;
   bot: board.Board;
 }

@@ -164,6 +164,17 @@ describe("runJob", () => {
     expect(sh(origin.bare, ["log", "-1", "--format=%s", "main"])).toBe("init");
   });
 
+  it("fails a task whose model label or base is not one, before anything reaches a CLI or git", async () => {
+    const r = await rig();
+    const t = await r.open();
+    await r.board.as("preview-deploy").label(t.id, { set: { model: "--dangerously-skip-permissions" } });
+    let ran = false;
+    const out = await runJob(await r.claim(t.id), r.job({ laneRunner: async () => ((ran = true), Promise.reject(new Error("the lane must not run"))) }));
+    expect(out).toMatchObject({ outcome: "failed", error: expect.stringMatching(/is not a model id/) });
+    expect(ran).toBe(false);
+    expect(r.host.pushes).toEqual([]);
+  });
+
   it("request changes: the next run sees the reviewer's note, replaces its branch and reuses the open PR", async () => {
     const r = await rig();
     const t = await r.open();

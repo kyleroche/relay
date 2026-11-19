@@ -4,7 +4,6 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { board, migrate, openDb, repo, type Db } from "@relay/core";
-import { actorBoard } from "../lib/board.ts";
 import { approveFor, closeFor, openTaskFor, releaseFor, requestChangesFor, requeueFor, TaskRefusal, type Asker } from "../lib/task-ops.ts";
 
 const person: Asker = { actor: "human:kyle" };
@@ -97,7 +96,7 @@ describe("a bot and its own work", () => {
   it("never approves a task it opened; another bot with tasks:write approves its outputs", async () => {
     const opened = await openTaskFor(db, session, bot, { project: "demo", title: "Render the poster", lane: "claude" });
     const id = opened.task.id;
-    const runner = actorBoard(session, "bot:runner");
+    const runner = session.board.as(board.actorProfile("bot:runner"));
     const claim = await runner.tasks.claim(id);
     const file = await runner.upload({ data: new TextEncoder().encode("png"), name: "poster.png", type: "image/png" });
     await runner.reply(id, { text: board.assetText({ node: "End Flow", parameter: "image", index: 1, version: 1, workflow: "workflows/poster.py", mime: "image/png", bytes: 3, attachment: file.id }), attachments: [file], labels: { relay: "asset" } });

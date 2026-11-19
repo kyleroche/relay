@@ -27,7 +27,7 @@ import { BoardError, type Board, type ClaimedTask, type ThreadView } from "@verc
 import { describeBoardError } from "../board/client.ts";
 import { branchFor, evalHoldReason, HOLD, isBranchName, isBranchOf, LABEL, parseEvalHold, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
 import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, prose, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
-import { fullBody, gateInput, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
+import { fullBody, gateInput, isModelId, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
 import { findOnPath } from "../github/client.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
@@ -792,6 +792,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     // a base reaches git as an argument, and a task can be opened by hand on the board with anything in its block
     if (task.base && !isBranchName(task.base)) return await fail(`the task's base '${task.base.slice(0, 80)}' is not a branch name`);
     const base = task.base ?? trunk;
+    // the model is a label, which anyone who may label in the queue can set, and it reaches the lane's CLI as an argument
+    if (task.model && !isModelId(task.model)) return await fail(`the task's model '${task.model.slice(0, 80)}' is not a model id`);
     await git(["fetch", "-q", "origin", trunk, ...(base === trunk ? [] : [base])]);
     // the project's steps as its default branch has them, whatever branch the task starts from, so a task cannot pick its own judges
     const steps = projectSteps({ relayDir: opts.stepsDir ?? runtimePaths().stepsDir, userDir: join(home, "steps"), project: gitFiles(dir, `origin/${trunk}`) });

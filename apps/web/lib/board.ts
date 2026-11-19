@@ -5,8 +5,8 @@
  * watchers the board wakes this deployment for (lib/board-watch.ts, served at /api/board). In mock mode it is an
  * in-memory board seeded with demo tasks and workers (lib/board-demo.ts).
  *
- * The site acts as its deployment whoever asked, so every write it makes for a person or a bot goes through
- * `actorBoard(session, actor)`: the board then shows who opened, approved or closed a task. Reads use the session's own handle.
+ * The site acts as its deployment whoever asked, so what it does to a task for a person or a bot goes through core's
+ * desk (lib/task-ops.ts), which writes their words as a profile named for them. Reads use the session's own handle.
  */
 import { board, loadConfig } from "@relay/core";
 import { siteWatchers } from "./board-watch.ts";
@@ -45,9 +45,6 @@ export function siteBoard(): Promise<board.BoardSession> {
   });
   return globalThis.__relayBoard;
 }
-
-/** A session's handle writing as the profile of whoever asked (`human:kyleroche`, `bot:grok-bot`). */
-export const actorBoard = (session: board.BoardSession, actor: string): board.Board => session.board.as(board.actorProfile(actor));
 
 const WORKERS_TTL_MS = 20_000;
 
