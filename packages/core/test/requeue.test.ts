@@ -7,7 +7,6 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
-import { getQueueVersion } from "../src/db/queue.ts";
 import { requeueTask, TaskRequeueError } from "../src/tasks/requeue.ts";
 import { GitHubError, type GitHubClient, type GitHubIssue } from "../src/github/client.ts";
 import { seedClaim, seedWorker } from "./helpers/claims.ts";
@@ -79,7 +78,6 @@ describe("requeueTask", () => {
     const t = await open("claude-cloud");
     await repo.writeEvent(db, { project: "demo", repo: t.repo, issue: t.issue, lane: "claude-cloud", kind: "run.dispatched", actor: "bot:grok", summary: "Dispatched", ts: at(1) });
     expect(await state(t)).toBe("running");
-    const before = await getQueueVersion(db);
     const { gh, removed, added } = fakeGitHub({ labels: ["agent:claude-cloud", "priority:high"] });
 
     const r = await requeueTask(db, gh, t.id, "human:kyle", { lane: "claude", reason: "the cloud lane is not wired" });
@@ -95,7 +93,6 @@ describe("requeueTask", () => {
     expect(ev.lane).toBe("claude");
     expect(ev.summary).toBe("Requeued #101 on the claude lane (was claude-cloud), was running: the cloud lane is not wired");
     expect(ev.payload).toMatchObject({ previous_state: "running", previous_lane: "claude-cloud", lane: "claude", reason: "the cloud lane is not wired", github: { relabelled: true, removed: ["agent:claude-cloud"], added: "agent:claude" }, claim_released: null });
-    expect(await getQueueVersion(db)).toBeGreaterThan(before);
   });
 
   it("releases a live claim on a running task so it can be claimed again", async () => {

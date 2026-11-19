@@ -10,7 +10,6 @@ import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
 import { materializeTask } from "../src/db/task-state.ts";
-import { getQueueVersion } from "../src/db/queue.ts";
 import { Ledger } from "../src/ledger/ledger.ts";
 import type { LaneRequest, LaneResult } from "../src/lanes/types.ts";
 import { GATE_MARKERS, GATE_SCHEMA, GATE_TEXT_CAP, gateModel, gatePrompt, gateText, gradeTask, heldEvent, heldInfo, parseGrade, precheckTask, releaseTask, TaskGateError } from "../src/tasks/gate.ts";
@@ -245,10 +244,8 @@ describe("a held task in the views", () => {
     await repo.writeEvent(db, heldEvent(t, "runner:mini", { score: 1, reasons: ["pre-check: .ssh"], grader: "precheck", model: null }));
     expect((await repo.taskView(db, t)).state).toBe("held");
     expect((await repo.listTaskViews(db, { state: "held" })).map((v) => v.id)).toContain(t.id);
-    const before = await getQueueVersion(db);
     const r = await releaseTask(db, t.id, "human:kyle");
     expect(r.task.state).toBe("queued");
-    expect(await getQueueVersion(db)).toBeGreaterThan(before);
   });
 });
 

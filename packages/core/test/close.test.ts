@@ -6,7 +6,6 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
-import { getQueueVersion } from "../src/db/queue.ts";
 import { liveClaim } from "../src/db/workers.ts";
 import { closeComment, closeTask, TaskCloseError } from "../src/tasks/close.ts";
 import { GitHubError, type GitHubClient, type GitHubIssue, type GitHubPull } from "../src/github/client.ts";
@@ -70,7 +69,6 @@ describe("closeTask", () => {
   it("closes a queued task: the issue closes as not planned with the reason, task.closed folds to done, the queue version moves", async () => {
     const t = await open("claude");
     expect(await state(t)).toBe("queued");
-    const version = await getQueueVersion(db);
     const { gh, calls, comments } = fakeGitHub();
     const r = await closeTask(db, gh, t.id, "human:kyle", { reason: "opened against a spec the repo does not match" });
     expect(r.task.state).toBe("done");
@@ -81,7 +79,6 @@ describe("closeTask", () => {
     expect(comments).toEqual([`${t.issue}: ${closeComment("human:kyle", "opened against a spec the repo does not match")}`]);
     expect(calls).toEqual([`PATCH /repos/acme/shut/issues/${t.issue} {"state":"closed","state_reason":"not_planned"}`]);
     expect(await state(t)).toBe("done");
-    expect(await getQueueVersion(db)).toBeGreaterThan(version);
   });
 
   it("closes a task in review: the open PR is commented on and closed too, unmerged", async () => {

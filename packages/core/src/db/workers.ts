@@ -5,7 +5,6 @@
  */
 import { type Db, iso, num } from "./client.ts";
 import { sanitizeMeters, type MeterReading } from "../meters.ts";
-import { bumpQueueVersion } from "./queue.ts";
 import { refreshTaskState } from "./task-state.ts";
 
 /** A worker whose last heartbeat is older than this is shown offline. */
@@ -100,13 +99,10 @@ export async function listWorkers(db: Db): Promise<WorkerRow[]> {
   return r.map(toWorker);
 }
 
-/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again, so the queue version moves and their state cache is rewritten). */
+/** Live claims whose lease ran out: mark them expired and return them (their tasks are queued again, so their state cache is rewritten). */
 export async function expireLeases(db: Db, now: number = Date.now()): Promise<ClaimRow[]> {
   const r = await db.query(`UPDATE claims SET released_at = $1::timestamptz, outcome = 'expired' WHERE released_at IS NULL AND lease_until < $1::timestamptz RETURNING ${C}`, [new Date(now).toISOString()]);
-  if (r.length) {
-    for (const c of r) await refreshTaskState(db, c.task_id as string, now);
-    await bumpQueueVersion(db);
-  }
+  for (const c of r) await refreshTaskState(db, c.task_id as string, now);
   return r.map(toClaim);
 }
 
@@ -155,7 +151,6 @@ export async function releaseClaim(db: Db, taskId: string, workerId: string, out
   const r = await db.query(`UPDATE claims SET released_at = $3::timestamptz, outcome = $4 WHERE task_id = $1 AND worker_id = $2 AND released_at IS NULL RETURNING ${C}`, [taskId, workerId, new Date(now).toISOString(), outcome]);
   if (r[0]) {
     await refreshTaskState(db, taskId, now); // `claimed` ends: the cache says what the feed says now
-    await bumpQueueVersion(db); // the task left the queue (or, for `released`, is back in it)
   }
   return r[0] ? toClaim(r[0]) : undefined;
 }

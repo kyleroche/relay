@@ -23,7 +23,6 @@
  */
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventInput, type EventRow } from "../db/events.ts";
-import { bumpQueueVersion } from "../db/queue.ts";
 import { deriveTaskStatus, getTask, taskClaims, taskEvents, taskView, type TaskRow, type TaskView } from "../db/tasks.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
 import { recordLane, type LaneRequest, type LaneResult } from "../lanes/types.ts";
@@ -312,6 +311,5 @@ export async function releaseTask(db: Db, taskId: string, actor: string, opts: T
     payload: { note, held: held ?? null, previous_state: "held" },
   });
   if (row) written.push(row);
-  await bumpQueueVersion(db); // the task is queued again: idle workers' doorbells ring
   return { task: await taskView(db, task), events: written };
 }

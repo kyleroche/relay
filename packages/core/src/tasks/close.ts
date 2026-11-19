@@ -3,7 +3,7 @@
  * mistake or against a spec the repo does not match, a run that would only waste a subscription window, a duplicate.
  * relay closes the issue on GitHub as "not planned" with the reason as a comment (best effort, recorded in the
  * payload), closes an open PR the same way, releases the worker's claim if one is live, writes `task.closed` (which
- * `deriveTaskStatus` folds to `done`) and bumps the queue version so the doorbells stop counting it.
+ * `deriveTaskStatus` folds to `done`).
  *
  * One function behind every surface: the board card's and the task page's "Close", `relay_task_close`,
  * `POST /api/v1/tasks/{id}/close` and `relay task close`. Allowed from every state except `done`: a merged or
@@ -15,7 +15,6 @@
  */
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
-import { bumpQueueVersion } from "../db/queue.ts";
 import { getTask, taskClaims, taskEvents, deriveTaskStatus, taskView, type TaskRow, type TaskStatus, type TaskView } from "../db/tasks.ts";
 import { getWorker, liveClaim, releaseClaim } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
@@ -96,7 +95,7 @@ export async function assertClosable(db: Db, taskId: string, actor: string, opts
 
 /**
  * Close the task: the issue (and an open PR) on GitHub, best effort; a live claim released so the worker stops;
- * `task.closed` written; the queue version bumped so the doorbells drop it.
+ * `task.closed` written.
  */
 export async function closeTask(db: Db, github: GitHubClient | undefined, taskId: string, actor: string, opts: CloseOptions = {}): Promise<CloseResult> {
   const { task, status } = await assertClosable(db, taskId, actor, opts);
@@ -129,6 +128,5 @@ export async function closeTask(db: Db, github: GitHubClient | undefined, taskId
     },
   });
   if (row) events.push(row);
-  await bumpQueueVersion(db); // one task fewer looks queued or running: the doorbells see the version move
   return { task: await taskView(db, (await getTask(db, task.id)) ?? task), events };
 }

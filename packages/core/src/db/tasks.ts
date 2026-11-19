@@ -8,7 +8,6 @@
  */
 import { type Db, iso, num } from "./client.ts";
 import { EVENT_COLS, toEvent, type EventRow } from "./events.ts";
-import { bumpQueueVersion } from "./queue.ts";
 import { refreshTaskState } from "./task-state.ts";
 
 export interface TaskRow {
@@ -149,7 +148,6 @@ export async function createTask(db: Db, t: { project: string; repo: string; iss
   );
   if (r[0]) {
     await refreshTaskState(db, id);
-    await bumpQueueVersion(db); // a new task: idle workers' doorbells ring (docs/WORKERS.md)
     return { task: toTask(r[0]), created: true };
   }
   const existing = await getTask(db, id);
@@ -158,7 +156,6 @@ export async function createTask(db: Db, t: { project: string; repo: string; iss
   if (t.lane && existing.lane !== t.lane) {
     await db.query("UPDATE tasks SET lane = $2 WHERE id = $1", [id, t.lane]);
     existing.lane = t.lane;
-    await bumpQueueVersion(db);
   }
   if (title && !existing.title) {
     await db.query("UPDATE tasks SET title = $2 WHERE id = $1", [id, title]);

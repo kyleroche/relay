@@ -16,7 +16,6 @@
  */
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
-import { bumpQueueVersion } from "../db/queue.ts";
 import { getTask, taskClaims, taskEvents, deriveTaskStatus, taskView, type TaskRow, type TaskStatus, type TaskView } from "../db/tasks.ts";
 import { GitHubError, type GitHubClient } from "../github/client.ts";
 
@@ -172,7 +171,6 @@ export async function requestChanges(db: Db, github: GitHubClient | undefined, t
     payload: { note: text, comment_id: comment.id, comment_url: comment.html_url, branch: status.branch },
   });
   if (row) events.push(row);
-  await bumpQueueVersion(db); // the task is queued again: idle workers' doorbells ring
   return { task: await taskView(db, task), events };
 }
 

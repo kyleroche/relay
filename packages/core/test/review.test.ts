@@ -3,7 +3,6 @@ import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus, previewMatches } from "../src/db/tasks.ts";
-import { getQueueVersion } from "../src/db/queue.ts";
 import { compileBrief } from "../src/brief/index.ts";
 import { approveTask, requestChanges, reviewNotes, TaskReviewError } from "../src/tasks/review.ts";
 import { GitHubError, type GitHubClient, type GitHubIssue, type GitHubPull } from "../src/github/client.ts";
@@ -234,7 +233,6 @@ describe("requestChanges", () => {
   it("comments on the PR, writes task.changes_requested, queues the task, rings the doorbell, and the brief carries the note", async () => {
     const t = await seedReviewTask(301);
     const { gh, comments } = fakeGitHub();
-    const before = await getQueueVersion(db);
     const r = await requestChanges(db, gh, t.id, "human:kyle", "The toggle has no focus ring.\nMatch the one on /settings.");
     expect(comments).toEqual([{ repo: "acme/demo", issue: 7, body: "relay: changes requested by human:kyle:\n\nThe toggle has no focus ring.\nMatch the one on /settings.\n" }]);
     expect(r.events.map((e) => e.kind)).toEqual(["task.changes_requested"]);
@@ -242,7 +240,6 @@ describe("requestChanges", () => {
     expect(r.events[0]?.payload).toMatchObject({ note: "The toggle has no focus ring.\nMatch the one on /settings.", branch: "relay/claude-301" });
     expect(r.task.state).toBe("queued");
     expect(r.task.review).toMatchObject({ decided: "changes_requested", by: "human:kyle", note: "The toggle has no focus ring.\nMatch the one on /settings." });
-    expect(await getQueueVersion(db)).toBeGreaterThan(before);
 
     expect(await reviewNotes(db, t)).toMatchObject([{ by: "human:kyle", pr: 7, note: "The toggle has no focus ring.\nMatch the one on /settings." }]);
     const brief = await compileBrief(db, { project: "demo", intent: "implement issue #301: Add dark mode", issue: { number: 301, title: "Add dark mode 301" }, lane: "claude", maxTokens: 3000 });

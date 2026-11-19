@@ -3,8 +3,7 @@
  * exists for: a task opened on a cloud lane that nobody has wired (`run.dispatched` makes it look `running` for ever),
  * a run that died without a release, a PR nobody wants to iterate on, or simply the wrong lane. The operator relabels
  * nothing by hand: relay moves the `agent:*` label on the issue, releases the worker's claim if one is live, writes
- * `task.requeued` (which `deriveTaskStatus` folds to `queued`) and rings the doorbell, so the next idle worker that
- * serves the lane claims it and starts over from the base branch.
+ * `task.requeued` (which `deriveTaskStatus` folds to `queued`), so the next run starts over from the base branch.
  *
  * One function behind every surface: the task page's "Requeue" sheet, `relay_task_requeue`,
  * `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`. Allowed from every state except `done`: a merged or
@@ -16,7 +15,6 @@
  */
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventRow } from "../db/events.ts";
-import { bumpQueueVersion } from "../db/queue.ts";
 import { getTask, taskClaims, taskEvents, deriveTaskStatus, taskView, type TaskRow, type TaskStatus, type TaskView } from "../db/tasks.ts";
 import { getWorker, liveClaim, releaseClaim } from "../db/workers.ts";
 import type { GitHubClient } from "../github/client.ts";
@@ -110,7 +108,7 @@ export async function assertRequeueable(db: Db, taskId: string, actor: string, o
 
 /**
  * Requeue the task: update its lane when a different one is given (relay's row first, then the GitHub labels, best
- * effort), release the live claim so a worker can claim again, write `task.requeued` and bump the queue version.
+ * effort), release the live claim and write `task.requeued`.
  */
 export async function requeueTask(db: Db, github: GitHubClient | undefined, taskId: string, actor: string, opts: RequeueOptions = {}): Promise<RequeueResult> {
   const { task, status } = await assertRequeueable(db, taskId, actor, opts);
@@ -150,6 +148,5 @@ export async function requeueTask(db: Db, github: GitHubClient | undefined, task
     },
   });
   if (row) events.push(row);
-  await bumpQueueVersion(db); // the task is queued (again): idle workers' doorbells ring
   return { task: await taskView(db, (await getTask(db, task.id)) ?? task), events };
 }

@@ -2,7 +2,6 @@
  * How relay's vocabulary sits on a Vercel Board (docs/ARCHITECTURE.md, "The board"). Pure: no I/O, no handle.
  *
  *   channels   work/<project>        the one queue of a project: every thread in it is a task
- *              decisions/<project>   what waits for the owner (a plan's approval, a cloud run's spend)
  *              relay/workers         one thread per worker machine, relabelled as it lives
  *
  * The queue is `work/<project>`, not `<project>/work`, because a claim names one subtree: `work/` is every project's
@@ -23,7 +22,6 @@ import { createHash } from "node:crypto";
 import type { MessageView, TaskView } from "@vercel/board";
 
 export const WORK_ROOT = "work";
-export const DECISIONS_ROOT = "decisions";
 export const WORKERS_CHANNEL = "relay/workers";
 
 /** The subtree a claim names: every project's queue. */
@@ -37,11 +35,10 @@ function slug(project: string): string {
   return project;
 }
 export const workChannel = (project: string): string => `${WORK_ROOT}/${slug(project)}`;
-export const decisionsChannel = (project: string): string => `${DECISIONS_ROOT}/${slug(project)}`;
 
-/** The project a queue or decisions channel belongs to; undefined for any other channel. */
+/** The project a queue belongs to; undefined for any other channel. */
 export function projectOfChannel(channel: string): string | undefined {
-  const m = /^(?:work|decisions)\/([^/]+)$/.exec(channel);
+  const m = /^work\/([^/]+)$/.exec(channel);
   return m && PROJECT_SLUG.test(m[1]!) ? m[1] : undefined;
 }
 
@@ -78,7 +75,6 @@ export const isTrustedActor = (actor: string, trusted: readonly string[]): boole
 
 /** What a reply of relay's own is, in its `relay` label. Anything without the label is a person's (or another agent's) words. */
 export const RELAY_MESSAGE = { log: "log", result: "result", usage: "usage", brief: "brief", note: "note", asset: "asset" } as const;
-export type RelayMessageKind = (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE];
 
 /** Why a task is held, in the hold's `kind`. */
 export const HOLD = {
@@ -95,9 +91,6 @@ export const HOLD = {
   /** Someone the worker does not take work from changed a label that routes the task. */
   labels: "labels_changed",
 } as const;
-
-/** The board's own states for a task. */
-export type BoardTaskState = TaskView["state"];
 
 /**
  * The one word relay shows for a task:

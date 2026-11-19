@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { branchFor, decisionsChannel, parseRef, projectOfChannel, relayState, splitTaskText, taskRef, taskText, workChannel, workerProfile } from "../src/board/mapping.ts";
+import { branchFor, parseRef, projectOfChannel, relayState, splitTaskText, taskRef, taskText, workChannel, workerProfile } from "../src/board/mapping.ts";
 
 describe("channels", () => {
-  it("keeps a project's queue and its decisions under one root each", () => {
+  it("keeps every project's queue under one root", () => {
     expect(workChannel("valor-store")).toBe("work/valor-store");
-    expect(decisionsChannel("valor-store")).toBe("decisions/valor-store");
     expect(projectOfChannel("work/valor-store")).toBe("valor-store");
-    expect(projectOfChannel("decisions/mission-learn")).toBe("mission-learn");
+    expect(projectOfChannel("decisions/mission-learn")).toBeUndefined();
     expect(projectOfChannel("relay/workers")).toBeUndefined();
     expect(projectOfChannel("work/a/b")).toBeUndefined();
   });

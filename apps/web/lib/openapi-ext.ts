@@ -202,7 +202,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["tasks"],
         summary: "Close a task without a merge",
         description:
-          "For a task opened by mistake, against a spec the repository does not match, or a duplicate. Relay closes the issue on GitHub as not planned with `reason` as a comment and closes an open PR the same way (best effort: a GitHub failure is recorded in the event payload, not fatal), releases a live worker claim, writes `task.closed`, which folds to `done`, and moves the queue version so the workers' doorbells drop it. Allowed from every state except `done`. A signed-in person may close anything; a bot's token must hold `tasks:write`. Reopening the issue on GitHub is the way to start the task again.",
+          "For a task opened by mistake, against a spec the repository does not match, or a duplicate. Relay closes the issue on GitHub as not planned with `reason` as a comment and closes an open PR the same way (best effort: a GitHub failure is recorded in the event payload, not fatal), releases a live worker claim, writes `task.closed`, which folds to `done`. Allowed from every state except `done`. A signed-in person may close anything; a bot's token must hold `tasks:write`. Reopening the issue on GitHub is the way to start the task again.",
         security: [{ bearer: ["tasks:write"] }],
         parameters: [
           { name: "owner", in: "path", required: true, schema: { type: "string" } },
@@ -238,7 +238,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["tasks"],
         summary: "Put a task back in the queue, optionally on another lane",
         description:
-          "For a task that is stuck (`running` on a cloud lane nobody wired, a run that never reported) or on the wrong lane. With `lane`, relay updates the task's lane and moves the `agent:*` label on the GitHub issue (best effort: a GitHub failure is recorded in the event payload, not fatal). A live worker claim is released. Relay writes `task.requeued`, which folds to `queued`, and rings the workers' doorbell; the next idle worker that serves the lane claims it and starts over from the base branch. Allowed from every state except `done`. A signed-in person may requeue anything; a bot's token must hold `tasks:write`.",
+          "For a task that is stuck (`running` on a cloud lane nobody wired, a run that never reported) or on the wrong lane. With `lane`, relay updates the task's lane and moves the `agent:*` label on the GitHub issue (best effort: a GitHub failure is recorded in the event payload, not fatal). A live worker claim is released. Relay writes `task.requeued`, which folds to `queued`; the next run starts over from the base branch. Allowed from every state except `done`. A signed-in person may requeue anything; a bot's token must hold `tasks:write`.",
         security: [{ bearer: ["tasks:write"] }],
         parameters: [
           { name: "owner", in: "path", required: true, schema: { type: "string" } },
