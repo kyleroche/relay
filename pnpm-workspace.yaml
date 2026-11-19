@@ -12,3 +12,7 @@ overrides:
 # build scripts pnpm may run (pnpm 12 blocks the rest); esbuild downloads its binary in postinstall
 allowBuilds:
   esbuild: true
+# pnpm holds back releases younger than its minimum age; Board ships daily while it is experimental, so the pinned
+# version is named here. Drop the entry once the version in use is older than the window.
+minimumReleaseAgeExclude:
+  - '@vercel/board@0.52.0'

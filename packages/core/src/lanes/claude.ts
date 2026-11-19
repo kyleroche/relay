@@ -1,7 +1,7 @@
 /**
  * Claude lane: one `claude -p` process per call, on the Max subscription (official CLI only; the harness never
  * touches the OAuth token). Plan calls use --json-schema for structured output; review calls are read-only.
- * `claude auth status` must report loggedIn=true for the user running the daemon.
+ * `claude auth status` must report loggedIn=true for the user running the worker.
  */
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
