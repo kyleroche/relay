@@ -10,7 +10,7 @@
  */
 
 /** The logins the container worker needs, in the order `login all` makes them: gh before the optional fx lanes. */
-export const LOGIN_PROVIDERS = ["claude", "gh", "codex", "grok"] as const;
+export const LOGIN_PROVIDERS = ["claude", "gh", "vercel", "codex", "grok"] as const;
 export type LoginProvider = (typeof LOGIN_PROVIDERS)[number];
 /** The two the browser redirects for: fx's authorize URL is parsed and the redirect caught on the Mac. */
 export const OAUTH_PROVIDERS: readonly LoginProvider[] = ["codex", "grok"];
@@ -123,6 +123,8 @@ export function manualLoginSteps(provider: LoginProvider): string[] {
       return ["relay work container shell", "claude   # then /login; open the URL it prints on this Mac, paste the code back, then /exit"];
     case "gh":
       return ["relay work container shell", "gh auth login --git-protocol https --web && gh auth setup-git   # the device code prints here; enter it at github.com/login/device"];
+    case "vercel":
+      return ["relay work container shell", "vercel login   # the device code prints here; confirm it in this Mac's browser. The worker reaches the board as this login."];
     case "codex":
       return ["relay work container shell", "fx login codex   # open the printed URL on this Mac; the redirect to localhost:1455 reaches the container through its published port"];
     case "grok":

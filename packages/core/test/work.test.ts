@@ -196,14 +196,15 @@ describe("container plan (relay work --isolation container)", () => {
     "warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it",
     "ok    mode          site: https://relay.example.com (memory, feed, token, invite, task and webhook commands and the hooks use it)",
     "ok    auth          approved on /activate (device flow) as oauth:relay-cli@mac-container, expires 2026-11-16T22:10:02.000Z; renews itself with a refresh token",
+    "fail  board         You're not logged in to Vercel. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board",
   ].join("\n");
 
   it("reads the logins from `relay doctor` output inside: fx covers codex and grok, an expired fx counts as missing", () => {
-    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE)).toEqual({ claude: true, gh: false, codex: true, grok: false });
-    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in"))).toEqual({ claude: true, gh: true, codex: true, grok: true });
-    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "warn  login:fx      connected: codex; token expired and not refreshable, run: fx login"))).toEqual({ claude: true, gh: false, codex: false, grok: false });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE)).toEqual({ claude: true, gh: false, vercel: false, codex: true, grok: false });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in").replace(/^fail  board .*$/m, "warn  board         General at api.vercel.com as kyleroche; relay's schemas are not registered there yet. Run: relay setup --board"))).toEqual({ claude: true, gh: true, vercel: true, codex: true, grok: true });
+    expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "warn  login:fx      connected: codex; token expired and not refreshable, run: fx login"))).toEqual({ claude: true, gh: false, vercel: false, codex: false, grok: false });
     expect(loginStatesFromDoctorOutput(DOCTOR_INSIDE.replace("warn  cli:grok      not on PATH", "ok    cli:grok      /usr/local/bin/grok")).grok).toBe(true);
-    expect(loginStatesFromDoctorOutput("")).toEqual({ claude: false, gh: false, codex: false, grok: false });
+    expect(loginStatesFromDoctorOutput("")).toEqual({ claude: false, gh: false, vercel: false, codex: false, grok: false });
   });
   it("reads the token's name from doctor's auth line", () => {
     expect(tokenNameFromDoctorOutput(DOCTOR_INSIDE)).toBe("oauth:relay-cli@mac-container");
@@ -222,13 +223,14 @@ describe("container plan (relay work --isolation container)", () => {
       ["relay work container shell", undefined],
       ["claude", true],
       ["gh auth login && gh auth setup-git", false],
+      ["vercel login", false],
       ["fx login codex", true],
       ["FX_NO_OPEN_BROWSER=1 fx login grok", false],
       ["exit", undefined],
     ]);
-    const all = containerLoginSteps(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in"));
+    const all = containerLoginSteps(DOCTOR_INSIDE.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok").replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in").replace(/^fail  board .*$/m, "ok    board         General at api.vercel.com as kyleroche; takes tasks from 1 owner; 1 worker (1 online)"));
     expect(all.allKept).toBe(true);
-    expect(all.steps.filter((s) => s.kept).map((s) => s.login)).toEqual(["claude", "gh", "codex", "grok"]);
+    expect(all.steps.filter((s) => s.kept).map((s) => s.login)).toEqual(["claude", "gh", "vercel", "codex", "grok"]);
   });
   it("reads the settings an update carries over from the container's row: the baked arguments, the passthrough env, the name, the size", () => {
     const row = {
@@ -283,10 +285,11 @@ describe("container login helpers (relay work container login)", () => {
     expect(replayUrl(codex, "/auth/callback?code=c0de&state=xyz")).toBe("http://localhost:1455/auth/callback?code=c0de&state=xyz");
   });
   it("names the providers, their words and the by-hand steps", () => {
-    expect(LOGIN_PROVIDERS).toEqual(["claude", "gh", "codex", "grok"]);
+    expect(LOGIN_PROVIDERS).toEqual(["claude", "gh", "vercel", "codex", "grok"]);
     expect(OAUTH_PROVIDERS).toEqual(["codex", "grok"]);
     expect(isLoginProvider("grok")).toBe(true);
-    expect(isLoginProvider("vercel")).toBe(false);
+    expect(isLoginProvider("vercel")).toBe(true);
+    expect(isLoginProvider("npm")).toBe(false);
     expect(fxLoginWords("grok")).toEqual(["env", "FX_NO_OPEN_BROWSER=1", "fx", "login", "grok"]);
     expect(manualLoginSteps("grok")[1]).toContain("paste only the code value");
     expect(manualLoginSteps("codex")[1]).toContain("fx login codex");

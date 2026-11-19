@@ -110,7 +110,7 @@ export interface ContainerPlan {
   exec: (argv: string[], interactive?: boolean) => string[];
   /**
    * `relay work container login` (login.ts): fx with its browser turned off, stdin kept open (`-i`, no TTY) so the
-   * Mac side can paste the code; Claude Code and gh as TTY passthroughs; `gh auth setup-git` after gh's login; and a
+   * Mac side can paste the code; Claude Code, gh and the Vercel CLI as TTY passthroughs; `gh auth setup-git` after gh's login; and a
    * `curl` inside to replay the browser's redirect to a login server on the container's loopback.
    */
   login: {
@@ -118,6 +118,7 @@ export interface ContainerPlan {
     claude: string[];
     gh: string[];
     ghSetupGit: string[];
+    vercel: string[];
     replay: (url: string) => string[];
   };
 }
@@ -185,6 +186,7 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
       claude: exec(["claude"], true),
       gh: exec(["gh", "auth", "login", "--git-protocol", "https", "--web"], true),
       ghSetupGit: exec(["gh", "auth", "setup-git"]),
+      vercel: exec(["vercel", "login"], true),
       replay: (url) => exec(["curl", "-fsS", "-o", "/dev/null", url]),
     },
   };
@@ -192,7 +194,7 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
 
 /** The one command that makes every missing login from the Mac (docs/WORKERS.md, "Isolation"; login.ts). */
 export const CONTAINER_LOGIN_COMMAND = "relay work container login all";
-export const CONTAINER_LOGIN_COMMAND_WHY = "one command; opens this Mac's browser for each login and skips the ones already in the volume (claude, gh, then the optional codex and grok)";
+export const CONTAINER_LOGIN_COMMAND_WHY = "one command; opens this Mac's browser for each login and skips the ones already in the volume (claude, gh, vercel for the board, then the optional codex and grok)";
 
 /**
  * The manual fallback: the login commands the operator runs inside, in order; printed under CONTAINER_LOGIN_COMMAND
@@ -203,6 +205,7 @@ export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; lo
   { cmd: "relay work container shell", why: "a shell inside the container, as the relay user" },
   { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back, /exit)", login: "claude" },
   { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as (device code)", login: "gh" },
+  { cmd: "vercel login", why: "the login the worker reaches the board with (device code)", login: "vercel" },
   { cmd: "fx login codex", why: "optional: the codex lane (the browser's redirect to localhost:1455 reaches the container through the published port)", login: "codex" },
   {
     cmd: "FX_NO_OPEN_BROWSER=1 fx login grok",
@@ -216,6 +219,8 @@ export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; lo
 export interface LoginStates {
   claude: boolean;
   gh: boolean;
+  /** The Vercel login the board takes: doctor's `board` line answers (a warning there is a login that works). */
+  vercel: boolean;
   /** The codex CLI's login, or an fx Codex login. */
   codex: boolean;
   /** The grok CLI, or an fx Grok login. */
@@ -238,6 +243,7 @@ export function loginStatesFromDoctorOutput(text: string): LoginStates {
   return {
     claude: doctorLine(text, "login:claude")?.status === "ok",
     gh: doctorLine(text, "login:gh")?.status === "ok",
+    vercel: ["ok", "warn"].includes(doctorLine(text, "board")?.status ?? ""),
     codex: doctorLine(text, "login:codex")?.status === "ok" || fx.includes("codex"),
     grok: doctorLine(text, "cli:grok")?.status === "ok" || fx.includes("grok"),
   };

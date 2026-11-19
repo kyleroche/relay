@@ -516,7 +516,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         results.push({ provider: p, outcome: "skipped" });
         continue;
       }
-      const r = p === "claude" || p === "gh" ? ttyLogin(c.plan, p) : await oauthLogin(c.plan, p, { open: o.open, timeoutMs });
+      const r = p === "claude" || p === "gh" || p === "vercel" ? ttyLogin(c.plan, p) : await oauthLogin(c.plan, p, { open: o.open, timeoutMs });
       results.push(r);
       console.log(`${p.padEnd(7)} ${r.outcome === "ok" ? "signed in" : `FAILED: ${r.detail ?? ""}`}${r.outcome === "ok" && r.detail ? ` (${r.detail})` : ""}`);
       if (r.outcome === "failed" && r.manual) {
@@ -531,8 +531,14 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     if (results.some((r) => r.outcome === "failed")) process.exitCode = 1;
   }
 
-  /** Claude Code's /login (paste a code) and gh's device flow: the CLI runs in this terminal, inside the container. */
-  function ttyLogin(p: ContainerPlan, provider: "claude" | "gh"): LoginResult {
+  /** Claude Code's /login (paste a code), and gh's and Vercel's device flows: the CLI runs in this terminal, inside the container. */
+  function ttyLogin(p: ContainerPlan, provider: "claude" | "gh" | "vercel"): LoginResult {
+    if (provider === "vercel") {
+      console.log(`vercel  ${p.login.vercel.join(" ")}`);
+      console.log("        the device code prints below; confirm it in this Mac's browser. The worker inside reaches the board as this login");
+      const code = deps.run(p.login.vercel);
+      return code === 0 ? { provider, outcome: "ok" } : { provider, outcome: "failed", detail: `vercel login exited ${code}`, manual: true };
+    }
     if (provider === "claude") {
       console.log(`claude  ${p.login.claude.join(" ")}`);
       console.log("        type /login, open the URL it prints on this Mac, paste the code back, then /exit");
