@@ -108,7 +108,7 @@ export function ledgerRows(event: BoardEventView, trusted: readonly string[]): E
   const lane = m.labels?.[LABEL.lane] ?? null;
   const title = splitTaskText(withoutBlocks(m.text)).title || m.id;
   const row = (kind: string, summary: string, extra: Record<string, unknown> = {}): EventInput[] => [
-    { ...base, kind, actor: feedActor(by, null), summary: summary.slice(0, 300), lane, payload: { task: root, title, ...extra }, dedupe_key: `board:${event.type}:${event.cursor}` },
+    { ...base, kind, actor: feedActor(by, event.actor?.handle ?? (by && m.by.actor === by.actor ? m.author?.handle : null) ?? null), summary: summary.slice(0, 300), lane, payload: { task: root, title, ...extra }, dedupe_key: `board:${event.type}:${event.cursor}` },
   ];
   switch (event.type) {
     case "task.created":
