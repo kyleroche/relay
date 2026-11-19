@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Board } from "@vercel/board";
-import { approveTask, closeTask, gateInput, getTask, listTasks, openTask, openTaskHeldBack, releaseTask, reholdTask, requestChanges, requeueTask, settleTask, TaskError } from "../src/board/tasks.ts";
+import { approveTask, closeTask, gateInput, getTask, listTasks, openTask, openTaskHeldBack, recentTasks, releaseTask, reholdTask, requestChanges, requeueTask, settleTask, TaskError } from "../src/board/tasks.ts";
 import { branchFor, HOLD } from "../src/board/mapping.ts";
 import { RELEASE_SCHEMA, runText, trustedBlocks, usageText, type ReleaseBlock } from "../src/board/schemas.ts";
 import { fakeGitHub, memoryBoard, relayBoard } from "./helpers/board.ts";
@@ -269,5 +269,48 @@ describe("release, requeue and close", () => {
     const r = await closeTask(b, undefined, t.id);
     expect(r.task).toMatchObject({ state: "closed", reason: "closed without a merge" });
     expect(r.github).toEqual({ pr_closed: false, issue_closed: false });
+  });
+});
+
+describe("listTasks", () => {
+  it("counts a failed task as open, since a requeue retries it, and leaves out done and closed", async () => {
+    const b = await relayBoard();
+    const [queued, failed, done, closed] = await Promise.all(["queued", "failed", "done", "closed"].map((title) => openTask(b, { project: "demo", repo: REPO, title, lane: "claude" })));
+    await (await b.as("relay-mini-claude").tasks.claim(failed!.id)).fail("claude exited 1");
+    await (await b.as("relay-mini-claude").tasks.claim(done!.id)).complete("merged");
+    await closeTask(b, undefined, closed!.id);
+    expect((await listTasks(b)).map((t) => t.state).sort()).toEqual(["failed", "queued"]);
+    expect((await listTasks(b, { state: "failed" })).map((t) => t.id)).toEqual([failed!.id]);
+    expect(await listTasks(b, { state: "all" })).toHaveLength(4);
+    expect(queued!.state).toBe("queued");
+  });
+});
+
+describe("recentTasks", () => {
+  it("reads newest first across projects, narrows by relay's own state, and pages one project back", async () => {
+    const b = await relayBoard();
+    const made: string[] = [];
+    for (let n = 1; n <= 5; n++) {
+      const t = await openTask(b, { project: n % 2 ? "alpha" : "beta", repo: REPO, title: `task ${n}`, lane: "claude" });
+      made.push(t.id);
+      if (n <= 3) await (await b.as("relay-mini-claude").tasks.claim(t.id)).complete(`merged ${n}`);
+    }
+    await closeTask(b, undefined, made[3]!, { reason: "not needed" });
+    // held by the gate and held for review share the board's `blocked`: relay's state tells them apart
+    await (await b.as("relay-mini-claude").tasks.claim(made[4]!)).block("held at the gate", { kind: HOLD.gate });
+
+    const finished = await recentTasks(b, { states: ["done", "closed"] });
+    expect(finished.older).toBeNull();
+    expect(finished.tasks.map((t) => [t.title, t.state])).toEqual([["task 4", "closed"], ["task 3", "done"], ["task 2", "done"], ["task 1", "done"]]);
+    expect((await recentTasks(b, { states: ["held"] })).tasks.map((t) => t.title)).toEqual(["task 5"]);
+    expect((await recentTasks(b, { states: ["review"] })).tasks).toEqual([]);
+    expect((await recentTasks(b, { limit: 2 })).tasks.map((t) => t.title)).toEqual(["task 5", "task 4"]);
+
+    const first = await recentTasks(b, { project: "alpha", limit: 2 });
+    expect(first.tasks.map((t) => t.title)).toEqual(["task 5", "task 3"]);
+    expect(first.older).toBeTruthy();
+    const second = await recentTasks(b, { project: "alpha", limit: 2, before: first.older! });
+    expect(second.tasks.map((t) => t.title)).toEqual(["task 1"]);
+    expect((await recentTasks(b, { project: "nobody-yet" })).tasks).toEqual([]);
   });
 });

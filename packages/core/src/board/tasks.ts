@@ -293,15 +293,17 @@ export interface ListTasksOptions {
 
 const BOARD_STATE: Record<RelayState, TaskView["state"]> = { waiting: "waiting", queued: "ready", running: "claimed", review: "blocked", held: "blocked", blocked: "blocked", done: "completed", failed: "failed", closed: "canceled" };
 
-/** Tasks oldest first, the order a queue works them in. */
+/**
+ * Tasks oldest first, the order a queue works them in. relay's `open` is everything not done or closed, so a failed
+ * task counts (a requeue retries it); the board's own `open` leaves failed ones out, and they are read beside it.
+ */
 export async function listTasks(board: Board, opts: ListTasksOptions = {}): Promise<BoardTask[]> {
   const limit = Math.min(Math.max(1, opts.limit ?? 100), 1000);
   const want = opts.state ?? "open";
-  const state = want === "open" || want === "all" ? want : BOARD_STATE[want];
-  if (!state) throw new TaskError(`state must be one of ${[...OPEN_STATES, "done", "closed", "open", "all"].join(", ")}`, 400);
-  const out: BoardTask[] = [];
-  let after: string | undefined;
-  try {
+  if (want !== "open" && want !== "all" && !BOARD_STATE[want]) throw new TaskError(`state must be one of ${[...OPEN_STATES, "done", "closed", "open", "all"].join(", ")}`, 400);
+  const read = async (state: TaskView["state"] | "open" | "all"): Promise<BoardTask[]> => {
+    const out: BoardTask[] = [];
+    let after: string | undefined;
     for (;;) {
       const page = await board.tasks.list({ channel: opts.project ? workChannel(opts.project) : WORK_SUBTREE, state, ...(opts.lane ? { label: { [LABEL.lane]: opts.lane } } : {}), ...(after ? { after } : {}), limit: 50 });
       for (const t of page.tasks) {
@@ -313,6 +315,55 @@ export async function listTasks(board: Board, opts: ListTasksOptions = {}): Prom
       if (page.tasks.length < 50 || page.cursor === after) return out;
       after = page.cursor;
     }
+  };
+  try {
+    if (want !== "open") return await read(want === "all" ? "all" : BOARD_STATE[want]);
+    const [open, failed] = await Promise.all([read("open"), read("failed")]);
+    if (!failed.length) return open;
+    const seen = new Set(open.map((t) => t.id));
+    return [...open, ...failed.filter((t) => !seen.has(t.id))].sort((a, z) => a.created_at.localeCompare(z.created_at)).slice(0, limit);
+  } catch (e) {
+    throw asTaskError(e);
+  }
+}
+
+export interface RecentTasksOptions {
+  /** One project's queue; without it, every project's. */
+  project?: string;
+  /** Only these states; without it, every task. */
+  states?: readonly RelayState[];
+  limit?: number;
+  /** The `older` of the page before, to read one project's queue further back. */
+  before?: string;
+}
+
+/**
+ * Tasks by latest activity, newest first: what a person reads, where `listTasks` is the order a queue is worked in.
+ * The board reads threads by activity one channel at a time, so one project pages back through everything with
+ * `older`, and without a project this is the newest `limit` across all of them and `older` is null.
+ */
+export async function recentTasks(board: Board, opts: RecentTasksOptions = {}): Promise<{ tasks: BoardTask[]; older: string | null }> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 50), 500);
+  const states = opts.states?.length ? new Set(opts.states) : undefined;
+  // review, held and blocked share one board state, so the board narrows and relay's own state decides
+  const label = [states ? `board.task=${[...new Set([...states].map((s) => BOARD_STATE[s]))].join("|")}` : "board.task"];
+  const read = async (channel: string, before?: string) => {
+    const page = await board.threads({ channel, label, limit, ...(before ? { before } : {}) });
+    const rows = page.threads
+      .filter((t) => t.message.task)
+      .map((t) => ({ task: toTask(t.message), at: t.last?.createdAt ?? t.message.createdAt }))
+      .filter((r) => !states || states.has(r.task.state))
+      .reverse();
+    return { rows, older: page.older ?? null };
+  };
+  try {
+    if (opts.project) {
+      const page = await read(workChannel(opts.project), opts.before);
+      return { tasks: page.rows.map((r) => r.task), older: page.older };
+    }
+    const queues = (await board.channels({ prefix: WORK_SUBTREE, limit: 500 })).channels.map((c) => c.path).filter((path) => projectOfChannel(path));
+    const rows = (await Promise.all(queues.map((channel) => read(channel)))).flatMap((p) => p.rows);
+    return { tasks: rows.sort((a, z) => z.at.localeCompare(a.at)).slice(0, limit).map((r) => r.task), older: null };
   } catch (e) {
     throw asTaskError(e);
   }
