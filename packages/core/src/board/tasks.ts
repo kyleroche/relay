@@ -27,7 +27,7 @@ import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
 import { HOLD, isBranchOf, LABEL, OPEN_STATES, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
-import { ASSET_SCHEMA, blocksOf, evalText, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
+import { ASSET_SCHEMA, blocksOf, evalText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 
 /** A refusal with the HTTP status a route would answer: 400 bad input, 404 no such task, 409 wrong state, 502/503 GitHub. */
 export class TaskError extends Error {
@@ -169,7 +169,7 @@ async function make(board: Board, input: OpenTaskInput): Promise<Made> {
   const routing: TaskBlock = {};
   for (const key of ["repo", "base", "issue", "step", "evaluates", "branch"] as const) if (input[key]) routing[key] = input[key];
   const block = Object.keys(routing).length ? `\n\n${taskBlockText(routing)}` : "";
-  let text = `${taskText(title, body)}${block}`;
+  let text = `${taskText(title, prose(body))}${block}`;
   const attachments = [];
   if (text.length > TEXT_MAX) {
     attachments.push(await board.upload({ data: new TextEncoder().encode(body), name: "task.md", type: "text/markdown" }));
@@ -359,7 +359,7 @@ export async function skipStep(board: Board, id: string, stepTask: string, why: 
   const task = toTask((await readThread(board, id)).message);
   const waits = task.hold?.kind === HOLD.eval ? parseEvalHold(task.hold.reason) : undefined;
   if (!waits || waits.task !== stepTask) return false;
-  const said = why.trim().replace(/\.+$/, "").slice(0, 600);
+  const said = prose(why.trim().replace(/\.+$/, "").slice(0, 600));
   try {
     await board.reply(id, { text: `The ${waits.step} step could not run on the ${waits.lane} lane: ${said}. The work goes to review without it.`, labels: { [LABEL.relay]: RELAY_MESSAGE.log } });
     await board.reply(id, { text: evalText({ step: waits.step, task: stepTask, lane: waits.lane, verdict: said, ran: false }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
@@ -418,7 +418,7 @@ export async function approveTask(board: Board, github: GitHubClient | undefined
       sha = merge.sha || null;
     } catch (e) {
       const reason = describeGitHub(e);
-      await board.reply(id, { text: `Merge of #${number} refused: ${reason}`.slice(0, 900), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true }).catch(() => undefined);
+      await board.reply(id, { text: prose(`Merge of #${number} refused: ${reason}`.slice(0, 900)), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true }).catch(() => undefined);
       throw new TaskError(`GitHub refused to merge #${number}: ${reason}`, 502);
     }
     if (!opts.keepBranch && pull.head_ref) {
@@ -439,7 +439,7 @@ export async function requestChanges(board: Board, github: GitHubClient | undefi
   const { task } = await getTask(board, id);
   if (task.state !== "review") throw new TaskError(`${task.id} is ${task.state}, not in review; only a task in review can be sent back.`, 409);
   try {
-    await board.reply(id, { text, labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
+    await board.reply(id, { text: prose(text), labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
     if (github && task.pr) await github.createComment(task.pr.repo, task.pr.number, `**Changes requested** (relay task ${task.id})\n\n${text}`).catch(() => undefined);
     return toTask(await board.tasks.unblock(id));
   } catch (e) {

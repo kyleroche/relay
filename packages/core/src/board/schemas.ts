@@ -252,6 +252,14 @@ export const usageText = (u: UsageBlock): string => block(USAGE_SCHEMA, { ...u }
 export const workerText = (w: WorkerBlock): string => block(WORKER_SCHEMA, { ...w });
 export const assetText = (a: AssetBlock): string => block(ASSET_SCHEMA, { ...a });
 
+/**
+ * Words that are not relay's own, made safe to post: a fence that would be a data block (`json#name@1`) becomes a
+ * plain json fence. Relay believes a block by who wrote the message, and relay writes other people's words (a lane's
+ * summary, an eval's findings, a review note) as itself, so those words must never carry one. It also keeps a
+ * malformed fence in a model's output from making the board refuse the whole message.
+ */
+export const prose = (text: string): string => text.replace(/(`{3,}[ \t]*)json#/g, "$1json ");
+
 /** A message's text without its fenced blocks: what a person wrote around the data. */
 export const withoutBlocks = (text: string): string => text.replace(/```json#[a-z0-9-]+@\d+\n[\s\S]*?\n```/g, "").replace(/\n{3,}/g, "\n\n").trim();
 

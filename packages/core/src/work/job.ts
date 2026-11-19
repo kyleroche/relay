@@ -26,7 +26,7 @@ import { basename, join, relative, resolve, sep } from "node:path";
 import { BoardError, type Board, type ClaimedTask, type ThreadView } from "@vercel/board";
 import { describeBoardError } from "../board/client.ts";
 import { branchFor, evalHoldReason, HOLD, isBranchOf, LABEL, parseEvalHold, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
-import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
+import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, prose, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
 import { fullBody, gateInput, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
 import { findOnPath } from "../github/client.ts";
@@ -516,7 +516,7 @@ async function runStepTask(j: Job, at: { step: string; evaluates: string; branch
   if (j.keeper.lost()) return j.finish("lost", undefined);
   if (!result.ok || !findings) return j.fail(result.error ?? `the ${step.name} step said nothing`, findings ? findings.slice(0, 4000) : undefined);
   const verdict = findings.split("\n").map((l) => l.trim()).find((l) => /^verdict:/i.test(l)) ?? findings.split("\n").find((l) => l.trim())!.trim().slice(0, 200);
-  await board.reply(subject.id, { text: `Eval (${step.name}) by the ${lane} lane${result.model ? `, ${result.model}` : ""}:\n\n${findings.slice(0, 9_000)}`, labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
+  await board.reply(subject.id, { text: prose(`Eval (${step.name}) by the ${lane} lane${result.model ? `, ${result.model}` : ""}:\n\n${findings.slice(0, 9_000)}`), labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
   await board.reply(subject.id, { text: evalText({ step: step.name, task: id, lane, verdict: verdict.slice(0, 900), ran: true }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
   await board.tasks.unblock(subject.id);
   return j.finish("done", () => j.claim.complete(verdict.slice(0, 900)), { text: `${step.name} of task ${subject.id}: ${verdict}` });
@@ -731,7 +731,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   let gateUsage: UsageBlock | undefined;
   let verdict: GateVerdict | undefined;
   const keeper = keepClaim(claim, { ...(opts.renewMs ? { everyMs: opts.renewMs } : {}), log });
-  const say = (text: string, kind: (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE], sync = false) => board.reply(id, { text: text.slice(0, 9_000), labels: { [LABEL.relay]: kind }, ...(sync ? {} : { noSync: true }) });
+  /** Words in the thread: a log line, a lane's summary. Never data: `prose` sees to that. */
+  const say = (text: string, kind: (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE], sync = false) => board.reply(id, { text: prose(text.slice(0, 9_000)), labels: { [LABEL.relay]: kind }, ...(sync ? {} : { noSync: true }) });
   const usageOf: Job["usageOf"] = (r, kind) => ({ kind, lane: kind === "gate" ? "gate" : lane, tool: r.tool, model: r.model ?? null, subscription: r.subscription ?? null, billing, tokens_in: r.tokensIn, tokens_out: r.tokensOut, cache_read: r.cacheRead, cache_write: r.cacheWrite, cost_equiv: r.costEquiv, duration_ms: r.durationMs, worker: opts.workerName });
 
   /** Report how the job ended: the words for people, then the run and its usage as data, then the task's own state. */
@@ -743,7 +744,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
       try {
         if (extra.text) await say(extra.text, RELAY_MESSAGE.result, true);
         const rows = [...(gateUsage ? [gateUsage] : []), ...(report.usage !== empty || outcome !== "held" ? [{ ...report.usage, outcome }] : []), ...report.more];
-        await say([runText({ outcome, lane, worker: opts.workerName, ...extra.run }), ...rows.map(usageText)].join("\n\n"), RELAY_MESSAGE.usage);
+        await board.reply(id, { text: [runText({ outcome, lane, worker: opts.workerName, ...extra.run }), ...rows.map(usageText)].join("\n\n"), labels: { [LABEL.relay]: RELAY_MESSAGE.usage }, noSync: true });
         await settle();
       } catch (e) {
         if (!isClaimLost(e)) throw e;
