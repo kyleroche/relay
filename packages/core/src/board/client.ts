@@ -9,9 +9,12 @@ import type { BoardConfig } from "../config.ts";
 export type { Board, Me } from "@vercel/board";
 export { BoardError } from "@vercel/board";
 
-/** The team's board: the default one, or the named one. A name the team does not have is an error, never a new board. */
-export function openBoard(cfg: Partial<BoardConfig> = {}): Board {
-  return board({ ...(cfg.team ? { team: cfg.team } : {}), ...(cfg.name ? { name: cfg.name, ensure: false } : {}) });
+/**
+ * The team's board: the default one, or the named one. A name the team does not have is an error, never a new
+ * board, unless `create` says to make it (`relay setup --board --create`).
+ */
+export function openBoard(cfg: Partial<BoardConfig> = {}, opts: { create?: boolean } = {}): Board {
+  return board({ ...(cfg.team ? { team: cfg.team } : {}), ...(cfg.name ? { name: cfg.name, ensure: opts.create === true } : {}) });
 }
 
 /** A board with who the caller is on it and whose tasks it takes. */

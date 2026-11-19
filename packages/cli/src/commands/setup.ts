@@ -51,6 +51,7 @@ interface SetupOpts {
   team?: string;
   boardName?: string;
   from?: string;
+  create?: boolean;
 }
 
 export function registerSetup(program: Command): void {
@@ -70,6 +71,7 @@ export function registerSetup(program: Command): void {
     .option("--board", "set this machine up on the team's Vercel Board: save which board it works from, check this machine's Vercel login on it, and register relay's schemas there")
     .option("--team <id-or-slug>", "with --board: the Vercel team that owns the board (default: the login's default team)")
     .option("--board-name <name>", "with --board: a named board of that team instead of its default one ('default' goes back)")
+    .option("--create", "with --board and --board-name: make the named board if the team does not have it")
     .option("--from <actors>", "with --board: whose tasks a worker here claims besides your own, as comma-separated actor IDs ('none' clears it), such as the project that runs relay's site")
     .action(async (o: SetupOpts) => {
       if (o.only && !(CLI_NAMES as readonly string[]).includes(o.only)) throw new Error(`--only must be one of ${CLI_NAMES.join(", ")}`);
@@ -132,7 +134,10 @@ async function connectToBoard(o: SetupOpts): Promise<void> {
   const cfg = loadConfig().board;
   let session: board.BoardSession;
   try {
-    session = await board.connectBoard(board.openBoard(cfg), cfg);
+    const handle = board.openBoard(cfg, { create: !!o.create });
+    // a named board is made by its first use, so one harmless read is what creates it
+    if (o.create && cfg.name) await handle.channels();
+    session = await board.connectBoard(handle, cfg);
   } catch (e) {
     throw new Error(`cannot reach the board: ${board.describeBoardError(e)}. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board again.`);
   }

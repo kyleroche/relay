@@ -274,6 +274,7 @@ export async function boardCheck(cfg: BoardConfig, connect: (cfg: BoardConfig) =
     if (!registered) return { status: "warn", name, detail: `${detail}; relay's schemas are not registered there yet. Run: relay setup --board` };
     return { status: "ok", name, detail };
   } catch (e) {
+    if (board.boardCode(e) === "no_board") return { status: "fail", name, detail: `the team has no board named '${cfg.name}' that this login can see. Make it with: relay setup --board --board-name ${cfg.name} --create (or go back to the team's own board: relay setup --board --board-name default)` };
     return { status: "fail", name, detail: `${board.describeBoardError(e).slice(0, 240)}. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board` };
   }
 }
