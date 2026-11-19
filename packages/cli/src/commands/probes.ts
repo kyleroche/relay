@@ -258,23 +258,33 @@ function fmtAge(ms: number): string {
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
 }
 
+/** What marks a command as relay's in a CLI's config: its MCP entry, its bundle, or one of its hook scripts (a checkout's path need not say "relay"). */
+const RELAY_RUNS = /relay-mcp|relay\.js|hooks\/(?:session-start|session-end|user-prompt|statusline)\.mjs/;
+
 /**
- * The files relay wrote a Node path into (the CLIs' hook and MCP config, the worker's service file): a path in them
- * that is gone means every hook and the MCP server fail silently, which is what a `brew upgrade` of a versioned
- * Cellar directory did before `stableNodePath`. Reads only; the fix is to run setup again.
+ * The files relay wrote a Node path into: the CLIs' hook and MCP config (`configs`, where only relay's own entries
+ * are looked at) and the worker's service file (`owned`, relay's from top to bottom). A path in them that is gone
+ * means every hook and the MCP server fail silently, which is what a `brew upgrade` of a versioned Cellar directory
+ * did before `stableNodePath`. Reads only; the fix is to run setup again.
  */
-export function recordedNodeCheck(files: string[], opts: { read?: (p: string) => string | undefined; exists?: (p: string) => boolean } = {}): Check {
+export function recordedNodeCheck(files: { configs: string[]; owned?: string[] }, opts: { read?: (p: string) => string | undefined; exists?: (p: string) => boolean } = {}): Check {
   const name = "recorded";
   const read = opts.read ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  const exists = opts.exists ? { exists: opts.exists } : {};
   const broken: string[] = [];
   let seen = 0;
-  for (const f of files) {
-    const text = read(f);
-    if (text === undefined || !/relay/i.test(text)) continue;
-    seen += 1;
-    for (const gone of missingNodePaths(text, { ...(opts.exists ? { exists: opts.exists } : {}), near: /relay|harness/i })) broken.push(`${f} runs ${gone}, which no longer exists`);
-  }
-  if (broken.length) return { status: "fail", name, detail: `${broken.join("; ")}. The hooks, the MCP server or the worker service cannot start. Run: relay setup --yes${broken.some((b) => /LaunchAgents|systemd/.test(b)) ? " and relay work --install --yes" : ""}` };
+  const look = (paths: string[], whole: boolean): void => {
+    for (const f of new Set(paths)) {
+      const text = read(f);
+      if (text === undefined || (!whole && !RELAY_RUNS.test(text))) continue;
+      seen += 1;
+      for (const gone of missingNodePaths(text, { ...exists, ...(whole ? {} : { runs: RELAY_RUNS }) })) broken.push(`${f} runs ${gone}, which no longer exists`);
+    }
+  };
+  look(files.configs, false);
+  look(files.owned ?? [], true);
+  const service = broken.some((b) => (files.owned ?? []).some((f) => b.startsWith(`${f} `)));
+  if (broken.length) return { status: "fail", name, detail: `${broken.join("; ")}. The hooks, the MCP server or the worker service cannot start. Run: relay setup --yes${service ? " and relay work --install --yes" : ""}` };
   return { status: "ok", name, detail: seen ? `the Node path in ${seen} relay config file${seen === 1 ? "" : "s"} exists` : "no relay hooks or service installed on this machine yet (relay setup)" };
 }
 

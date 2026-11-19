@@ -143,7 +143,7 @@ program
     checks.push(metersCheck(cfg.home));
     // a Node path relay recorded that has since been removed (a Homebrew upgrade): hooks and the MCP server fail silently
     const hookCtx = defaultHookContext(RELAY_ROOT);
-    checks.push(recordedNodeCheck([...planSetup(hookCtx).flatMap((p) => p.files.map((f) => f.path)), join(hookCtx.userHome, ".claude.json"), join(hookCtx.userHome, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`), join(hookCtx.userHome, ".config", "systemd", "user", SYSTEMD_UNIT)]));
+    checks.push(recordedNodeCheck({ configs: planSetup(hookCtx).flatMap((p) => p.files.map((f) => f.path)), owned: [join(hookCtx.userHome, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`), join(hookCtx.userHome, ".config", "systemd", "user", SYSTEMD_UNIT)] }));
 
     for (const c of checks) console.log(`${c.status.padEnd(5)} ${c.name.padEnd(13)} ${c.detail}`);
     if (checks.some((c) => c.status === "fail")) process.exitCode = 1;

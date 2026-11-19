@@ -59,18 +59,21 @@ export function stableNodePath(execPath: string = process.execPath, exists: (p: 
 
 /**
  * Absolute paths to a `node` binary found in a file's text (a hook command, an MCP server entry, a service file)
- * that no longer exist on this machine. `near` keeps only the ones written next to a mention of relay (within a few
- * hundred characters either side), so a user's own entries in the same file are left alone. `relay doctor` prints
- * what this returns with the fix.
+ * that no longer exist on this machine. `runs` keeps only the ones that run a matching file: the pattern has to
+ * appear after the path and before the next `node` path (or within 400 characters), which is where a command's
+ * script or an entry's `args` are written, so a neighbouring entry of the user's own is left alone. `relay doctor`
+ * prints what this returns with the fix.
  */
-export function missingNodePaths(text: string, opts: { exists?: (p: string) => boolean; near?: RegExp } = {}): string[] {
+export function missingNodePaths(text: string, opts: { exists?: (p: string) => boolean; runs?: RegExp } = {}): string[] {
   const exists = opts.exists ?? existsSync;
+  const matches = [...text.matchAll(/(\/[^\s"'<>,\\]+\/bin\/node)(?![\w.@-])/g)];
   const found = new Set<string>();
-  for (const m of text.matchAll(/(\/[^\s"'<>,\\]+\/bin\/node)(?![\w.@-])/g)) {
-    const at = m.index ?? 0;
-    if (opts.near && !opts.near.test(text.slice(Math.max(0, at - 200), at + m[1]!.length + 400))) continue;
+  matches.forEach((m, i) => {
+    const end = (m.index ?? 0) + m[1]!.length;
+    const next = matches[i + 1]?.index ?? text.length;
+    if (opts.runs && !opts.runs.test(text.slice(end, Math.min(next, end + 400)))) return;
     found.add(m[1]!);
-  }
+  });
   return [...found].filter((p) => !exists(p));
 }
 

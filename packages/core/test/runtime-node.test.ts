@@ -21,11 +21,14 @@ describe("missingNodePaths", () => {
     expect(missingNodePaths(settings, { exists: () => false })).toEqual([gone]);
     expect(missingNodePaths(settings, { exists: () => true })).toEqual([]);
   });
-  it("with `near`, leaves a user's own entries alone and still sees a pretty-printed MCP entry", () => {
+  it("with `runs`, leaves a user's own entries alone and still sees a pretty-printed MCP entry", () => {
     const other = JSON.stringify({ mcpServers: { mine: { command: "/gone/elsewhere/bin/node", args: ["/Users/k/tools/server.js"] } } }, null, 2);
-    expect(missingNodePaths(other, { exists: () => false, near: /relay|harness/i })).toEqual([]);
+    expect(missingNodePaths(other, { exists: () => false, runs: /relay/i })).toEqual([]);
     const mcp = JSON.stringify({ mcpServers: { relay: { type: "stdio", command: gone, args: ["/Users/k/pkg/dist/relay-mcp.js"] } } }, null, 2);
-    expect(missingNodePaths(mcp, { exists: () => false, near: /relay|harness/i })).toEqual([gone]);
+    expect(missingNodePaths(mcp, { exists: () => false, runs: /relay/i })).toEqual([gone]);
+    // an entry of the user's own right after relay's is not relay's
+    const both = JSON.stringify({ mcpServers: { relay: { command: "/ok/bin/node", args: ["/x/relay-mcp.mjs"] }, mine: { command: "/gone/elsewhere/bin/node", args: ["/y/server.js"] } } }, null, 2);
+    expect(missingNodePaths(both, { exists: () => false, runs: /relay/i })).toEqual(["/ok/bin/node"]);
   });
   it("does not mistake node_modules or a longer name for the binary", () => {
     expect(missingNodePaths("/a/bin/node_modules/x /a/bin/nodejs /a/bin/node.exe", { exists: () => false })).toEqual([]);
