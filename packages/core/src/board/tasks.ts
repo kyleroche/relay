@@ -26,8 +26,8 @@ import { gateText, precheckTask } from "../tasks/gate.ts";
 import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
-import { HOLD, isBranchOf, LABEL, OPEN_STATES, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
-import { ASSET_SCHEMA, blocksOf, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
+import { HOLD, isBranchOf, LABEL, OPEN_STATES, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
+import { ASSET_SCHEMA, blocksOf, evalText, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 
 /** A refusal with the HTTP status a route would answer: 400 bad input, 404 no such task, 409 wrong state, 502/503 GitHub. */
 export class TaskError extends Error {
@@ -94,7 +94,7 @@ export function toTask(m: MessageView): BoardTask {
     step: routing.step ?? null,
     evaluates: routing.evaluates ?? null,
     branch: routing.branch ?? null,
-    pr: hold?.kind === HOLD.review ? (parsePullUrl(hold.reason) ?? null) : null,
+    pr: (hold?.kind === HOLD.review ? parsePullUrl(hold.reason) : hold?.kind === HOLD.eval ? parsePullUrl(parseEvalHold(hold.reason)?.pr) : undefined) ?? null,
     hold,
     result: m.task.result ?? null,
     reason: m.task.reason ?? null,
@@ -351,6 +351,25 @@ export async function reholdTask(board: Board, id: string, lane: string | null, 
   }
 }
 
+/**
+ * Send work that waits for a step's task to a person as it is, because that step is not coming (its task failed, was
+ * held or was closed). Nothing happens unless the work is held for exactly that task. True when the work moved.
+ */
+export async function skipStep(board: Board, id: string, stepTask: string, why: string): Promise<boolean> {
+  const task = toTask((await readThread(board, id)).message);
+  const waits = task.hold?.kind === HOLD.eval ? parseEvalHold(task.hold.reason) : undefined;
+  if (!waits || waits.task !== stepTask) return false;
+  const said = why.trim().replace(/\.+$/, "").slice(0, 600);
+  try {
+    await board.reply(id, { text: `The ${waits.step} step could not run on the ${waits.lane} lane: ${said}. The work goes to review without it.`, labels: { [LABEL.relay]: RELAY_MESSAGE.log } });
+    await board.reply(id, { text: evalText({ step: waits.step, task: stepTask, lane: waits.lane, verdict: said, ran: false }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    await reholdTask(board, id, task.lane, { kind: HOLD.review, reason: task.pr?.url ?? `${waits.step} could not run: ${said}` });
+    return true;
+  } catch (e) {
+    throw asTaskError(e);
+  }
+}
+
 export interface ApproveOptions {
   method?: "squash" | "merge" | "rebase";
   keepBranch?: boolean;
@@ -483,11 +502,13 @@ export interface CloseResult {
   github: { pr_closed: boolean; issue_closed: boolean; error?: string };
   /** Step tasks that were looking at this one, called off with it. */
   canceled: string[];
+  /** The work this task was a step of, when closing it sent that work to review without the step. */
+  to_review: string | null;
 }
 
 /**
  * Finish a task without a merge: canceled on the board with the reason, which also ends a run in progress at its
- * next look. On GitHub, its open pull requests (the ones whose head is a branch a lane pushed for this task) are closed
+ * next look. Work that was waiting for this task (it was a step's task, such as an eval) goes to review without it. On GitHub, its open pull requests (the ones whose head is a branch a lane pushed for this task) are closed
  * and their branches deleted, and the issue its own text names is closed. Step tasks that were looking at it are called off.
  */
 export async function closeTask(board: Board, github: GitHubClient | undefined, id: string, opts: { reason?: string } = {}): Promise<CloseResult> {
@@ -497,6 +518,7 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
   if (task.state === "done" || task.state === "closed") throw new TaskError(`${task.id} is already ${task.state}.`, 409);
   let canceled;
   const dependents: string[] = [];
+  let toReview: string | null = null;
   try {
     canceled = toTask(await board.tasks.cancel(id, reason || "closed without a merge"));
     for (const other of task.project ? await listTasks(board, { project: task.project }) : []) {
@@ -504,6 +526,7 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
       await board.tasks.cancel(other.id, `the task it was to look at, ${id}, was closed`);
       dependents.push(other.id);
     }
+    if (task.evaluates) toReview = (await skipStep(board, task.evaluates, id, `its task was closed${reason ? ` (${reason})` : ""}`).catch(() => false)) ? task.evaluates : null;
   } catch (e) {
     throw asTaskError(e);
   }
@@ -531,5 +554,5 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
       gh.error = describeGitHub(e).slice(0, 300);
     }
   }
-  return { task: canceled, github: gh, canceled: dependents };
+  return { task: canceled, github: gh, canceled: dependents, to_review: toReview };
 }

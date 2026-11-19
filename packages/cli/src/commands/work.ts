@@ -13,17 +13,17 @@
  *
  * Isolation tier 2 (docs/WORKERS.md, "Isolation"): `--isolation container` runs the whole worker inside one
  * persistent Linux container made with Apple's `container` CLI. `--install` builds the image, creates the container
- * with a named volume at /home/relay, runs `relay setup --site` inside (the device flow's code streams to this
- * terminal), prints the login commands and installs a service that keeps the container running.
+ * with a named volume at /home/relay, runs `relay setup --site` inside when this machine is in site mode (the device
+ * flow's code streams to this terminal), prints the login commands and installs a service that keeps the container running.
  * `relay work container shell|status|stop|start|rm|logs` wrap the container commands; `relay work container update`
  * rebuilds the image from this relay and recreates the container on the same volume (the site token and the logins
  * in it are kept, so no new device flow), which is also what `--install --yes` does over an existing container.
- * `relay work container login [claude|gh|codex|grok|all]` makes the logins inside from the Mac: Claude Code and gh in
- * this terminal, fx's codex and grok with the authorize URL opened here and the browser's redirect caught on this Mac
+ * `relay work container login [claude|gh|vercel|codex|grok|all]` makes the logins inside from the Mac: Claude Code, gh
+ * and the Vercel CLI (the board's login) in this terminal, fx's codex and grok with the authorize URL opened here and the browser's redirect caught on this Mac
  * and handed to the login server inside (@relay/core work/login.ts).
  * Inside the container the image
  * sets RELAY_ISOLATION=container and `relay work` adds the labels `isolation:container` and `sandbox:on` or
- * `sandbox:container`, waits for the site and the logins instead of exiting, and names itself `<host>-container`.
+ * `sandbox:container`, waits for the board and the logins instead of exiting, and names itself `<host>-container`.
  */
 import type { Command } from "commander";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
@@ -240,7 +240,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .option("--invite <code>", "container mode: redeem an invite inside instead of the device flow")
     .option("--memory <size>", `container mode: the VM's memory (default ${CONTAINER_MEMORY}; the runtime's 1G default is too little for PGlite)`)
     .option("--cpus <n>", `container mode: the VM's CPUs (default ${CONTAINER_CPUS})`)
-    .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it. With --isolation container: build the image, create the container, join the site inside, install the service that keeps it running")
+    .option("--install", "print the service file that runs `relay work` at login (LaunchAgent on macOS, systemd --user on Linux); --yes writes and starts it. With --isolation container: build the image, create the container, join the site inside (site mode only), install the service that keeps it running")
     .option("--uninstall", "stop and remove that service (and, with --isolation container, the container; the volume with the logins stays); --yes to do it")
     .option("--yes", "write files and start/stop the service")
     .action(async (o: WorkOptions) => {
@@ -351,7 +351,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         console.log("workers:");
         for (const w of workers) console.log(`  ${fmtWorker(w, now)}`);
         const retired = workers.filter((w) => w.retired);
-        if (retired.length) console.log(`  retired: offline for more than 7 days (${retired.map((w) => w.name).join(", ")}); relay work forget <name> removes one, and it comes back if that machine runs relay work again`);
+        if (retired.length) console.log(`  retired: offline for more than 7 days (${retired.map((w) => w.name).join(", ")}); relay work forget <name> hides one, and it comes back if that machine runs relay work again`);
       }
       if (logTail.length) {
         console.log(`log:      ${p.logPath}`);
@@ -362,7 +362,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
   work
     .command("forget")
     .argument("<name>", "the worker as `relay work status` lists it")
-    .description("Remove a retired worker (a renamed or decommissioned machine) from the board's workers; its past runs stay in their threads, and it comes back if it runs relay work again")
+    .description("Hide a retired worker (a renamed or decommissioned machine) from the board's workers; its past runs stay in their threads, and it comes back if it runs relay work again")
     .action(async (name: string) => {
       const { session } = await openWorkBoard();
       const w = await board.forgetWorker(session.board, name);
@@ -465,7 +465,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
   container
     .command("login [provider]")
     .description(
-      `make the vendor logins inside ${CONTAINER_NAME} from this Mac: ${LOGIN_PROVIDERS.join(", ")} or all (default). The ones relay doctor inside already reports are skipped. codex and grok: fx's authorize URL opens in this Mac's browser and the redirect is caught here; claude and gh: the CLI runs in this terminal (paste a code, device code)`,
+      `make the vendor logins inside ${CONTAINER_NAME} from this Mac: ${LOGIN_PROVIDERS.join(", ")} or all (default). The ones relay doctor inside already reports are skipped. codex and grok: fx's authorize URL opens in this Mac's browser and the redirect is caught here; claude, gh and vercel: the CLI runs in this terminal (paste a code, device code)`,
     )
     .option("--force", "log in again even when the volume already holds that login")
     .option("--no-open", "print each authorize URL instead of opening this Mac's browser")

@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Board } from "@vercel/board";
 import { HOLD } from "../src/board/mapping.ts";
+import { evalText, runText } from "../src/board/schemas.ts";
 import { closeTask, getTask, listTasks, openTask, requeueTask } from "../src/board/tasks.ts";
 import type { LaneRequest } from "../src/lanes/types.ts";
 import { connectBoard } from "../src/board/client.ts";
@@ -96,7 +97,7 @@ describe("an after-pr step", () => {
     expect(ev.owner).toBe(r.principal);
     expect((await r.board.as("relay-mini-codex").tasks.claim({ channel: "work/", label: { lane: "codex" }, from: [r.principal] }))?.task.id).toBe(ev.id);
     // the answer is the same lane's to give, so `any` is pinned to the lane that did the work
-    expect(work.task).toMatchObject({ state: "blocked", lane: "claude", hold: { kind: HOLD.eval, reason: `eval on the codex lane: task ${ev.id}` } });
+    expect(work.task).toMatchObject({ state: "blocked", lane: "claude", pr: { number: 1 }, hold: { kind: HOLD.eval, reason: `eval on the codex lane: task ${ev.id} on https://github.com/acme/demo/pull/1` } });
     expect(runState(work.thread, r.trusted)).toMatchObject({ evaluated: true, last: { outcome: "eval", branch: out.branch, eval_task: ev.id, pr: { number: 1 } } });
     expect(runState(work.thread, r.trusted).answer).toBeUndefined();
   });
@@ -174,6 +175,41 @@ describe("an after-pr step", () => {
     expect(work.task).toMatchObject({ state: "review", lane: "claude", pr: { number: 1 } });
     expect(work.thread.replies.some((m) => /The eval step could not run on the codex lane: codex exited 1: usage limit reached\. The work goes to review without it\./.test(m.text))).toBe(true);
     expect(runState(work.thread, r.trusted).answer).toBeUndefined();
+  });
+
+  it("the work never waits for a step that is not coming: its task held at the gate, failing before it starts, or closed by a person", async () => {
+    const inReview = async (r: Awaited<ReturnType<typeof rig>>, why: RegExp) => {
+      const work = await getTask(r.board, r.task.id);
+      expect(work.task).toMatchObject({ state: "review", lane: "claude", pr: { number: 1 } });
+      expect(work.thread.replies.some((m) => why.test(m.text) && m.text.endsWith("The work goes to review without it."))).toBe(true);
+      expect(r.lane.calls.filter((c) => c.kind === "eval")).toEqual([]);
+    };
+    const held = await rig();
+    await runJob(await held.claim("claude", held.task.id), held.job("claude"));
+    const gate = async () => ({ verdict: "hold" as const, score: 0.9, reasons: ["asks for credentials"], grader: "model" as const, model: null });
+    expect((await runJob(await held.claim("codex", (await evalTaskOf(held.board, held.task.id)).id), held.job("codex", { gate }))).outcome).toBe("held");
+    await inReview(held, /could not run on the codex lane: the injection gate holds its task: asks for credentials\./);
+
+    const early = await rig();
+    await runJob(await early.claim("claude", early.task.id), early.job("claude"));
+    const noClone = { ...early.host, clone: async () => Promise.reject(new Error("gh: could not clone acme/demo")) };
+    expect((await runJob(await early.claim("codex", (await evalTaskOf(early.board, early.task.id)).id), early.job("codex", { gitHost: noClone }))).outcome).toBe("failed");
+    await inReview(early, /could not run on the codex lane: gh: could not clone acme\/demo\./);
+
+    const called = await rig();
+    await runJob(await called.claim("claude", called.task.id), called.job("claude"));
+    const closed = await closeTask(called.board, undefined, (await evalTaskOf(called.board, called.task.id)).id, { reason: "codex is out of quota" });
+    expect(closed.to_review).toBe(called.task.id);
+    await inReview(called, /could not run on the codex lane: its task was closed \(codex is out of quota\)\./);
+  });
+
+  it("an answer continues only a branch that is this task's own, whatever a run block says", async () => {
+    const r = await rig();
+    await r.board.reply(r.task.id, { text: runText({ outcome: "eval", lane: "claude", worker: "mini", branch: "main", eval_task: "msg_x" }), noSync: true });
+    await r.board.reply(r.task.id, { text: evalText({ step: "eval", task: "msg_x", lane: "codex", verdict: "fix first", ran: true }), noSync: true });
+    const state = runState((await getTask(r.board, r.task.id)).thread, r.trusted);
+    expect(state).toMatchObject({ evaluated: true, last: { branch: "main" } });
+    expect(state.answer).toBeUndefined();
   });
 
   it("an eval that comes in late changes nothing: the work was requeued, or closed", async () => {

@@ -2,7 +2,7 @@
  * `relay task …`: open, read, review, requeue, close and release tasks. A task is a thread in its project's queue
  * on the team's Vercel Board (`work/<project>`), addressed by the ID the board gave it. Every command acts as this
  * machine's own Vercel login, so what it may do is what the board's grants give that login; approve merges the
- * pull request with the machine's gh login (docs/INTEGRATIONS.md).
+ * pull request with the machine's gh login (docs/WORKERS.md).
  */
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
@@ -46,7 +46,7 @@ function show(d: board.TaskDetail): void {
 const LANE_HELP = `${WORKER_LANES.join(", ")} (run by relay work), ${board.ANY_LANE} (whichever code lane is free), or the lane another worker registered (relay work status lists workers and their lanes)`;
 
 export function registerTask(program: Command): void {
-  const task = program.command("task").description("Tasks: threads in a project's queue on the team's Vercel Board, with the state the board keeps (docs/INTEGRATIONS.md)");
+  const task = program.command("task").description("Tasks: threads in a project's queue on the team's Vercel Board, with the state the board keeps (docs/WORKERS.md)");
 
   task
     .command("create")
@@ -166,7 +166,7 @@ export function registerTask(program: Command): void {
       act(async () => {
         const r = await board.closeTask(openBoard(), detectGitHub(), id, { ...(o.reason ? { reason: o.reason } : {}) });
         if (o.json) console.log(JSON.stringify(r, null, 2));
-        else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.canceled.length ? `; called off ${r.canceled.join(", ")}, which was looking at it` : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
+        else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.to_review ? `; ${r.to_review} goes to review without it` : ""}${r.canceled.length ? `; called off ${r.canceled.join(", ")}, which was looking at it` : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
       }),
     );
 

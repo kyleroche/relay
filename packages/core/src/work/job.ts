@@ -25,9 +25,9 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { BoardError, type Board, type ClaimedTask, type ThreadView } from "@vercel/board";
 import { describeBoardError } from "../board/client.ts";
-import { branchFor, HOLD, LABEL, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
+import { branchFor, evalHoldReason, HOLD, isBranchOf, LABEL, parseEvalHold, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
 import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
-import { fullBody, gateInput, openTaskHeldBack, reholdTask, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
+import { fullBody, gateInput, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
 import { findOnPath } from "../github/client.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
@@ -419,7 +419,7 @@ export function runState(thread: ThreadView, trusted: readonly string[]): { last
   const last = runs.at(-1);
   const evaluated = runs.some((r) => r.data.eval_task);
   if (!last) return { evaluated };
-  const verdict = last.data.outcome === "eval" && last.data.branch ? trustedBlocks<EvalBlock>(thread.replies, EVAL_SCHEMA, trusted).filter((e) => e.index > last.index && e.data.ran && e.data.task === last.data.eval_task).at(-1) : undefined;
+  const verdict = last.data.outcome === "eval" && last.data.branch && isBranchOf(last.data.branch, thread.message.id) ? trustedBlocks<EvalBlock>(thread.replies, EVAL_SCHEMA, trusted).filter((e) => e.index > last.index && e.data.ran && e.data.task === last.data.eval_task).at(-1) : undefined;
   return { last: last.data, evaluated, ...(verdict ? { answer: { branch: last.data.branch!, step: verdict.data.step } } : {}) };
 }
 
@@ -496,21 +496,14 @@ async function runStepTask(j: Job, at: { step: string; evaluates: string; branch
   if (!step || step.when !== "after-pr") return j.fail(`'${at.step}' is not an after-pr step of ${j.repo} (relay steps ls)`);
   const subjectThread = await board.thread(at.evaluates);
   const subject = toTask(subjectThread.message);
-  const waiting = subject.hold?.kind === HOLD.eval && subject.hold.reason.endsWith(`task ${id}`);
+  const waiting = subject.hold?.kind === HOLD.eval && parseEvalHold(subject.hold.reason)?.task === id;
   if (!waiting) {
     j.report.summary = `${subject.id} is ${subject.state} and no longer waits for this ${step.name}; nothing ran`;
     log(`${id}: ${j.report.summary}`);
     return j.finish("done", () => j.claim.complete(j.report.summary));
   }
-  /** The work goes to a person as it is when the step cannot say anything about it: it must not wait for an eval that is not coming. */
-  const giveUp = async (why: string, said?: string): Promise<JobResult> => {
-    const pr = runState(subjectThread, j.opts.trusted).last?.pr;
-    await board.reply(subject.id, { text: `The ${step.name} step could not run on the ${lane} lane: ${why.slice(0, 600)}. The work goes to review without it.`, labels: { [LABEL.relay]: RELAY_MESSAGE.log } });
-    await board.reply(subject.id, { text: evalText({ step: step.name, task: id, lane, verdict: why.slice(0, 900), ran: false }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
-    await reholdTask(board, subject.id, subject.lane, { kind: HOLD.review, reason: pr?.url ?? `${step.name} could not run: ${why}` });
-    return j.fail(why, said);
-  };
-  if (!at.branch || !(await fetched(j, at.branch))) return giveUp(`the branch ${at.branch ?? "(none)"} it was to look at is not on ${j.repo}`);
+  // every failure from here is `j.fail`, which sends the work to a person as it is (runJob)
+  if (!at.branch || !(await fetched(j, at.branch))) return j.fail(`the branch ${at.branch ?? "(none)"} it was to look at is not on ${j.repo}`);
   j.report.branch = at.branch;
   await j.git(["checkout", "-q", "--detach", `origin/${at.branch}`]);
   const model = step.model ?? j.task.model ?? undefined;
@@ -521,7 +514,7 @@ async function runStepTask(j: Job, at: { step: string; evaluates: string; branch
   const findings = result.text.trim();
   j.report.summary = findings;
   if (j.keeper.lost()) return j.finish("lost", undefined);
-  if (!result.ok || !findings) return giveUp(result.error ?? `the ${step.name} step said nothing`, findings ? findings.slice(0, 4000) : undefined);
+  if (!result.ok || !findings) return j.fail(result.error ?? `the ${step.name} step said nothing`, findings ? findings.slice(0, 4000) : undefined);
   const verdict = findings.split("\n").map((l) => l.trim()).find((l) => /^verdict:/i.test(l)) ?? findings.split("\n").find((l) => l.trim())!.trim().slice(0, 200);
   await board.reply(subject.id, { text: `Eval (${step.name}) by the ${lane} lane${result.model ? `, ${result.model}` : ""}:\n\n${findings.slice(0, 9_000)}`, labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
   await board.reply(subject.id, { text: evalText({ step: step.name, task: id, lane, verdict: verdict.slice(0, 900), ran: true }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
@@ -683,7 +676,7 @@ async function runCodeTask(j: Job): Promise<JobResult> {
       "eval",
       async () => {
         try {
-          await j.claim.block(`${after.name} on the ${judge.lane} lane: task ${judge.task.id}`, { kind: HOLD.eval });
+          await j.claim.block(evalHoldReason({ step: after.name, lane: judge.lane, task: judge.task.id, pr: pr.url }), { kind: HOLD.eval });
         } catch (e) {
           await judge.cancel("the work it was to look at could not be held for it").catch(() => undefined);
           throw e;
@@ -768,12 +761,24 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     log(`${id}: ${final}${report.pr ? ` ${report.pr.url}` : ""}${extra.error ? ` (${extra.error})` : ""} in ${Math.round(durationMs / 1000)}s`);
     return out;
   };
-  const fail: Job["fail"] = (error, text) => finish("failed", () => claim.fail(error.slice(0, 900)), { error: error.slice(0, 300), ...(text ? { text } : {}) });
+  /** Set for a step's own task (an eval): the work it looks at must not wait for a step that is not coming. */
+  let passOn: ((why: string) => Promise<void>) | undefined;
+  const fail: Job["fail"] = async (error, text) => {
+    await passOn?.(error);
+    return finish("failed", () => claim.fail(error.slice(0, 900)), { error: error.slice(0, 300), ...(text ? { text } : {}) });
+  };
 
   try {
     const thread = await board.thread(id);
     const task = toTask(thread.message);
     const repo = task.repo;
+    if (task.step && task.evaluates) {
+      const work = task.evaluates;
+      passOn = async (why) => {
+        if (keeper.lost()) return; // whoever holds the task now decides
+        await skipStep(board, work, id, why).catch((e: unknown) => log(`${id}: could not send ${work} to review (${e instanceof Error ? e.message : String(e)}); relay task requeue ${work} gets it out`));
+      };
+    }
     if (!repo) return await fail("the task's text names no repository (its relay-task block), so there is nothing to clone; open it with relay task create, which writes one");
     const project = task.project ?? repo.split("/")[1]!;
 
@@ -802,6 +807,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
       if (verdict.verdict === "hold") {
         report.summary = `held at the gate (${verdict.grader}, ${verdict.score.toFixed(2)}): ${verdict.reasons.join("; ")}`;
         log(`${id}: ${report.summary}`);
+        await passOn?.(`the injection gate holds its task: ${verdict.reasons.join("; ")}`);
         return await finish("held", () => claim.block(report.summary.slice(0, 900), { kind: HOLD.gate }), { error: report.summary.slice(0, 300) });
       }
     }

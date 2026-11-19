@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchFor, parseRef, projectOfChannel, relayState, splitTaskText, taskRef, taskText, workChannel, workerProfile } from "../src/board/mapping.ts";
+import { branchFor, evalHoldReason, parseEvalHold, parseRef, projectOfChannel, relayState, splitTaskText, taskRef, taskText, workChannel, workerProfile } from "../src/board/mapping.ts";
 
 describe("channels", () => {
   it("keeps every project's queue under one root", () => {
@@ -62,5 +62,15 @@ describe("task text", () => {
     expect(parseRef("kyleroche/valor-store#26")).toEqual({ repo: "kyleroche/valor-store", number: 26 });
     expect(parseRef("valor-store#26")).toBeUndefined();
     expect(parseRef(undefined)).toBeUndefined();
+  });
+});
+
+describe("the eval hold's reason", () => {
+  it("names the step, the lane, the step's task and the pull request, and reads back", () => {
+    const h = { step: "eval", lane: "codex", task: "msg_1_2", pr: "https://github.com/acme/demo/pull/7" };
+    expect(evalHoldReason(h)).toBe("eval on the codex lane: task msg_1_2 on https://github.com/acme/demo/pull/7");
+    expect(parseEvalHold(evalHoldReason(h))).toEqual(h);
+    expect(parseEvalHold("eval on the codex lane: task msg_1_2")).toEqual({ step: "eval", lane: "codex", task: "msg_1_2" });
+    expect(parseEvalHold("https://github.com/acme/demo/pull/7")).toBeUndefined();
   });
 });

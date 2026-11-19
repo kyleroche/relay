@@ -59,9 +59,16 @@ export const HOLD = {
   review: "awaiting_review",
   /** The injection gate flagged the text (tasks/gate.ts). */
   gate: "gate",
-  /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. The reason names the step's task. */
+  /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. The reason is `evalHoldReason`. */
   eval: "awaiting_eval",
 } as const;
+
+/** The reason of an eval hold: the step, the lane it runs on, its task, and the pull request it looks at. */
+export const evalHoldReason = (h: { step: string; lane: string; task: string; pr?: string }): string => `${h.step} on the ${h.lane} lane: task ${h.task}${h.pr ? ` on ${h.pr}` : ""}`;
+export function parseEvalHold(reason: string | undefined): { step: string; lane: string; task: string; pr?: string } | undefined {
+  const m = /^(\S+) on the (\S+) lane: task (\S+)(?: on (\S+))?$/.exec((reason ?? "").trim());
+  return m ? { step: m[1]!, lane: m[2]!, task: m[3]!, ...(m[4] ? { pr: m[4] } : {}) } : undefined;
+}
 
 /**
  * The one word relay shows for a task:
