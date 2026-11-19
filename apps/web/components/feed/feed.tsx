@@ -266,9 +266,9 @@ function FeedEmpty({ filtered }: { filtered: boolean }) {
       title="No events yet"
       command={`GitHub  → POST /api/webhooks/github   (X-Hub-Signature-256, GITHUB_WEBHOOK_SECRET)
 Vercel  → POST /api/webhooks/vercel   (x-vercel-signature, VERCEL_WEBHOOK_SECRET)
-Workers → relay work … writes run.* and step.usage through @relay/core`}
+Board   → relay work reports runs and usage in each task's thread; relay copies them here`}
     >
-      Events arrive three ways. GitHub sends issues, labels, pull requests, reviews and workflow runs to the webhook. Vercel sends deployments. Workers write run.* and step.usage rows as they execute a lane.
+      Events arrive three ways. GitHub sends issues, labels, pull requests, reviews and workflow runs to the webhook. Vercel sends deployments. Workers report each run and its usage in the task's thread on the team's Vercel Board, and relay copies a task's turns, its runs and its model calls from there.
     </EmptyState>
   );
 }

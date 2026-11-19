@@ -1,139 +1,118 @@
 import { ArrowUpRight, Cpu } from "lucide-react";
 import Link from "next/link";
-import { CLOUD_LANES, WORKER_LANES, type TaskState } from "@relay/core";
-import { Thumb } from "@/components/assets/asset-card";
-import { AssetReviewActions } from "@/components/assets/asset-review-actions";
+import { board } from "@relay/core";
 import { CloseAction } from "@/components/tasks/close-action";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
-import { PreviewBadge } from "@/components/tasks/state-badge";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
-import { STATE_HINT, STATE_TONE, taskPagePath, TONE_TEXT } from "@/lib/tasks";
-import type { AssetKind, BoardTask, Worker } from "@/lib/types";
+import { BUILTIN_LANES, workerOfClaim } from "@/lib/board-read";
+import { claimProfile, COLUMNS, columnOf, decisionsFor, evalWait, taskPagePath, TONE_TEXT } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
 /**
  * The board: one column per step a task can be at, cards for the tasks there, the decision a card waits for as buttons
- * on the card itself (the same client components and server actions as the task page, so the feed row is the same
- * whoever decided and wherever). Held and Failed appear only when they hold something, Held first because the gate
- * stopped those and a person should read them before anything else; Queue, Running, Review and Done are always there
- * so an empty board still says what the steps are. The cards come from one query over the task state cache
- * (`boardTasks`), not a fold per task. Each column shows its newest `cap` cards; "Show N more" (`?all=<column>`)
- * opens the whole column in place, keeping the project filter. Done holds only the newest ten the query returns and
- * Failed only the last week's, so each ends in a link to the history (`/history?state=…`), where every task is. A card whose deliverable is an asset (a production)
- * shows the asset's thumbnail and kind where a PR card shows its PR line, and Approve / Reject with a note in Review
- * instead of Approve-and-merge. DESIGN.md, "Board".
+ * on the card itself (the same client components and server actions as the task page, so a decision is the same
+ * wherever it was made). The cards are the tasks of the team's Vercel Board, read as they are (lib/board-read.ts);
+ * `columnOf` (lib/tasks.ts) puts each of relay's nine states in one of six columns. Held and Failed appear only when
+ * they hold something, Held first because a person should read those before anything else; Queue, Running, Review and
+ * Done are always there so an empty board still says what the steps are. Each column shows its newest `cap` cards;
+ * "Show N more" (`?all=<column>`) opens the whole column in place, keeping the project filter. Done ends in a link to
+ * the history, where every task is. DESIGN.md, "Board".
  */
 
-interface Column {
-  key: string;
-  label: string;
-  states: readonly TaskState[];
-  /** Drawn even when empty. */
-  always: boolean;
-  cap: number;
-  /** The column is a window on the history page: the link's label. */
-  archive?: string;
-}
+type Task = board.BoardTask;
 
-const COLUMNS: readonly Column[] = [
-  { key: "held", label: "Held", states: ["held"], always: false, cap: 25 },
-  { key: "queued", label: "Queue", states: ["queued"], always: true, cap: 25 },
-  { key: "running", label: "Running", states: ["claimed", "running"], always: true, cap: 25 },
-  { key: "review", label: "Review", states: ["review"], always: true, cap: 25 },
-  { key: "failed", label: "Failed", states: ["failed"], always: false, cap: 10, archive: "Older failures" },
-  { key: "done", label: "Done", states: ["done"], always: true, cap: 10, archive: "Everything merged and closed" },
-];
-
-const workerName = (runner: string | null): string | null => (runner ? runner.replace(/^runner:/, "") : null);
-
-/** The asset a task delivered: its thumbnail (or the kind's icon when the store rendered none, as for audio), kind, version and a link to the library. */
-function AssetLine({ t, title }: { t: BoardTask & { asset_id: string }; title: string }) {
-  const kind = (t.asset_kind ?? "file") as AssetKind;
-  return (
-    <div className="mt-2 flex items-center gap-2.5">
-      <Link href={`/assets/${t.asset_id}`} className="shrink-0 overflow-hidden rounded border hover:border-primary/50" aria-label={`Open ${title} in the asset library`}>
-        <Thumb asset={{ thumb_url: t.asset_thumb_url, kind, title, url: null }} className="h-14 w-[5.6rem]" />
-      </Link>
-      <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <Pill size="sm">{kind}</Pill>
-        {t.asset_version != null && <span className="font-mono">v{t.asset_version}</span>}
-        <Link href={`/assets/${t.asset_id}`} className="inline-flex items-center gap-0.5 hover:text-primary">
-          Open <ArrowUpRight className="size-3" aria-hidden="true" />
-        </Link>
+/** Why a card is where it is, when its state alone does not say: what it waits on, why it is held, how it failed. */
+function Why({ t }: { t: Task }) {
+  const waits = evalWait(t);
+  if (t.state === "waiting")
+    return (
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        Waits for{" "}
+        {t.needs.map((id, i) => (
+          <span key={id}>
+            {i > 0 && ", "}
+            <Link href={taskPagePath(id)} className="font-mono hover:text-primary">
+              {id}
+            </Link>
+          </span>
+        ))}
+        .
       </p>
-    </div>
-  );
+    );
+  if (t.state === "held") return <p className="mt-1.5 line-clamp-3 text-xs text-warn">Stopped by the injection gate{t.hold?.reason ? `: ${t.hold.reason}` : ""}. Read the task on its page before releasing it.</p>;
+  if (waits)
+    return (
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        The <span className="font-mono">{waits.step}</span> step on the <span className="font-mono">{waits.lane}</span> lane is looking at it (
+        <Link href={taskPagePath(waits.task)} className="font-mono hover:text-primary">
+          {waits.task}
+        </Link>
+        ); it comes to you after.
+      </p>
+    );
+  if (t.state === "blocked") return <p className="mt-1.5 line-clamp-3 text-xs text-warn">Held{t.hold?.kind ? ` (${t.hold.kind})` : ""}{t.hold?.reason ? `: ${t.hold.reason}` : "."}</p>;
+  if (t.state === "failed" && t.reason) return <p className="mt-1.5 line-clamp-2 text-xs text-bad">{t.reason}</p>;
+  if (t.state === "closed" && t.reason) return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">Closed: {t.reason}</p>;
+  if (t.state === "review" && !t.pr) return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{t.hold?.reason || "Outputs attached"}: look at them on the task&apos;s page.</p>;
+  return null;
 }
 
-function Card({ t, now, workers, canWrite, registeredLanes }: { t: BoardTask; now: number; workers: Worker[]; canWrite: boolean; registeredLanes: readonly string[] }) {
-  const title = t.title ?? `#${t.issue}`;
-  const inFlight = t.state === "claimed" || t.state === "running";
-  const name = workerName(t.runner);
-  const worker = name ? workers.find((w) => w.name === name) : undefined;
-  const requeue = t.state !== "done";
-  const asset = t.asset_id != null;
+function Card({ t, now, workers, canWrite, servedLanes }: { t: Task; now: number; workers: readonly board.WorkerView[]; canWrite: boolean; servedLanes: readonly string[] }) {
+  const can = decisionsFor(t.state);
+  const worker = workerOfClaim(workers, t.claim);
   return (
     <li className="rounded-md border bg-card p-3 text-sm">
-      <Link href={taskPagePath(t)} className="line-clamp-2 font-medium leading-snug hover:text-primary">
-        {title}
+      <Link href={taskPagePath(t.id)} className="line-clamp-2 font-medium leading-snug hover:text-primary">
+        {t.title || t.id}
       </Link>
       <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-        <span className="font-mono">{t.id}</span>
+        <span className="font-mono">{t.project ?? t.channel}</span>
         {t.lane ? (
           <Pill mono size="sm">
             {t.lane}
           </Pill>
         ) : (
-          <span>no lane</span>
+          // a finished task has given its lane up; only one still to be run is missing something
+          (can.requeue || t.state === "running") && <span>no lane</span>
         )}
-        {t.since && <RelTime iso={t.since} now={now} />}
+        {t.model && <span className="font-mono">{t.model}</span>}
+        <RelTime iso={t.created_at} now={now} />
       </p>
-      {inFlight && name && (
-        <p className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground" title={worker ? `${name}: ${worker.status}` : name}>
+      {t.state === "running" && t.claim && (
+        <p className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground" title={worker ? `${worker.name}: ${worker.state}` : t.claim.actor}>
           <Cpu className="size-3" aria-hidden="true" />
           <Link href="/workers" className="hover:text-foreground">
-            {name}
+            {worker?.name ?? claimProfile(t.claim.actor)}
           </Link>
-          {worker && worker.status !== "online" && <span className="text-warn">{worker.status}</span>}
+          {worker && worker.state !== "online" && <span className="text-warn">{worker.state}</span>}
         </p>
       )}
-      {t.state === "held" && <p className="mt-1.5 text-xs text-warn">Stopped by the injection gate. Read the issue on its page before releasing it.</p>}
-      {t.state === "failed" && t.last_error && <p className="mt-1.5 line-clamp-2 text-xs text-bad">{t.last_error}</p>}
-      {t.asset_id != null && <AssetLine t={{ ...t, asset_id: t.asset_id }} title={title} />}
-      {!asset && (t.pr || t.preview_url || t.preview_state !== "none") && (
-        <p className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-          {t.pr && (
-            <a href={t.pr_url ?? "#"} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono text-muted-foreground hover:text-primary">
-              PR #{t.pr} <ArrowUpRight className="size-3" aria-hidden="true" />
-            </a>
-          )}
-          {t.preview_url ? (
-            <a href={t.preview_url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 hover:text-primary" title="Open the preview">
-              <PreviewBadge state={t.preview_state} />
-              <ArrowUpRight className="size-3" aria-hidden="true" />
-            </a>
-          ) : (
-            t.preview_state !== "none" && <PreviewBadge state={t.preview_state} />
-          )}
+      <Why t={t} />
+      {t.pr && (
+        <p className="mt-1.5 text-xs">
+          <a href={t.pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono text-muted-foreground hover:text-primary">
+            PR #{t.pr.number} <ArrowUpRight className="size-3" aria-hidden="true" />
+          </a>
         </p>
       )}
-      {(t.state === "review" || t.state === "held" || requeue) && (
+      {(can.review || can.release || can.requeue || can.close) && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t pt-2.5">
-          {t.state === "review" && (t.asset_id != null ? <AssetReviewActions assetId={t.asset_id} version={t.asset_version} canWrite={canWrite} size="sm" /> : <ReviewActions taskId={t.id} pr={t.pr} canWrite={canWrite} size="sm" />)}
-          {t.state === "held" && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
-          {requeue && <RequeueAction taskId={t.id} lane={t.lane} state={t.state} workerLanes={WORKER_LANES} registeredLanes={registeredLanes} cloudLanes={CLOUD_LANES} canWrite={canWrite} size="sm" />}
-          {requeue && <CloseAction taskId={t.id} state={t.state} pr={t.pr} canWrite={canWrite} size="sm" />}
+          {can.review && <ReviewActions taskId={t.id} pr={t.pr?.number ?? null} canWrite={canWrite} size="sm" />}
+          {can.release && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
+          {can.requeue && <RequeueAction taskId={t.id} lane={t.lane} model={t.model} state={t.state} builtinLanes={BUILTIN_LANES} servedLanes={servedLanes} canWrite={canWrite} size="sm" />}
+          {can.close && <CloseAction taskId={t.id} state={t.state} pr={t.pr?.number ?? null} canWrite={canWrite} size="sm" />}
         </div>
       )}
     </li>
   );
 }
 
-export function Board({ tasks, workers, now, canWrite, all, project, registeredLanes = [] }: { tasks: BoardTask[]; workers: Worker[]; now: number; canWrite: boolean; all?: string; project?: string; registeredLanes?: readonly string[] }) {
-  const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => c.states.includes(t.state)) })).filter((c) => c.always || c.list.length > 0);
+export function Board({ tasks, workers, now, canWrite, all, project }: { tasks: Task[]; workers: readonly board.WorkerView[]; now: number; canWrite: boolean; all?: string; project?: string }) {
+  const servedLanes = board.servedLanes([...workers]);
+  const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => columnOf(t) === c.key) })).filter((c) => c.always || c.list.length > 0);
   const href = (column?: string) => {
     const qs = new URLSearchParams();
     if (project) qs.set("project", project);
@@ -144,13 +123,12 @@ export function Board({ tasks, workers, now, canWrite, all, project, registeredL
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-flow-col lg:auto-cols-fr lg:grid-cols-none" aria-label="Board">
       {columns.map((c) => {
-        const tone = STATE_TONE[c.states[0]!];
         const shown = all === c.key ? c.list : c.list.slice(0, c.cap);
         const more = c.list.length - shown.length;
         return (
           <section key={c.key} aria-labelledby={`col-${c.key}`} className="flex min-w-0 flex-col rounded-lg border bg-muted/30">
-            <h2 id={`col-${c.key}`} className="flex items-baseline gap-2 px-3 py-2 text-xs font-medium" title={STATE_HINT[c.states[0]!]}>
-              <span className={cn(TONE_TEXT[tone])}>{c.label}</span>
+            <h2 id={`col-${c.key}`} className="flex items-baseline gap-2 px-3 py-2 text-xs font-medium" title={c.hint}>
+              <span className={cn(TONE_TEXT[c.tone])}>{c.label}</span>
               <span className="font-mono tabular-nums text-foreground">{c.list.length}</span>
             </h2>
             {shown.length === 0 ? (
@@ -158,7 +136,7 @@ export function Board({ tasks, workers, now, canWrite, all, project, registeredL
             ) : (
               <ul className="flex flex-col gap-2 px-2 pb-2">
                 {shown.map((t) => (
-                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} registeredLanes={registeredLanes} />
+                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} servedLanes={servedLanes} />
                 ))}
               </ul>
             )}
@@ -172,9 +150,9 @@ export function Board({ tasks, workers, now, canWrite, all, project, registeredL
                 Show fewer
               </Link>
             )}
-            {c.archive && (
-              <Link href={`/history?state=${c.states[0]}${project ? `&project=${encodeURIComponent(project)}` : ""}`} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
-                {c.archive} →
+            {c.key === "done" && (
+              <Link href={`/history${project ? `?project=${encodeURIComponent(project)}` : ""}`} className="px-3 pb-2 text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground">
+                Every task, in History →
               </Link>
             )}
           </section>

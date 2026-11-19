@@ -2,29 +2,12 @@ import { describe, expect, it } from "vitest";
 import { githubEvents } from "../lib/webhooks/github.ts";
 import { productionFromLabels, resolveProject } from "../lib/webhooks/project.ts";
 
-const hint = (over: Partial<Parameters<typeof resolveProject>[0]> = {}) => ({ repo: "acme/productions", issue: 7, labels: [], repoName: "productions", ...over });
-
 describe("resolveProject", () => {
-  it("prefers the task row, then a production label, then the repository's name", async () => {
-    expect(await resolveProject(hint(), async () => "nightfall")).toBe("nightfall");
-    expect(await resolveProject(hint({ labels: [{ name: "agent:claude" }, { name: "production:daybreak" }] }), async () => "nightfall")).toBe("nightfall");
-    expect(await resolveProject(hint({ labels: [{ name: "agent:claude" }, { name: "production:daybreak" }] }), async () => null)).toBe("daybreak");
-    expect(await resolveProject(hint({ labels: [{ name: "agent:claude" }] }), async () => undefined)).toBe("productions");
-    expect(await resolveProject(hint())).toBe("productions");
-    expect(await resolveProject(hint({ repoName: null }))).toBeNull();
-  });
-
-  it("asks the store only with a repo and an issue, and shrugs off a failing lookup", async () => {
-    let asked = 0;
-    const lookup = async () => (asked++, "x");
-    expect(await resolveProject(hint({ issue: null }), lookup)).toBe("productions");
-    expect(await resolveProject(hint({ repo: null }), lookup)).toBe("productions");
-    expect(asked).toBe(0);
-    expect(
-      await resolveProject(hint({ labels: ["production:daybreak"] }), async () => {
-        throw new Error("store down");
-      }),
-    ).toBe("daybreak");
+  it("prefers a production label, then the repository's name", () => {
+    expect(resolveProject({ labels: [{ name: "agent:claude" }, { name: "production:daybreak" }], repoName: "productions" })).toBe("daybreak");
+    expect(resolveProject({ labels: [{ name: "agent:claude" }], repoName: "productions" })).toBe("productions");
+    expect(resolveProject({ labels: undefined, repoName: "productions" })).toBe("productions");
+    expect(resolveProject({ labels: [], repoName: null })).toBeNull();
   });
 
   it("reads production labels as strings or GitHub label objects and ignores the rest", () => {
@@ -44,11 +27,9 @@ describe("githubEvents on a shared repo", () => {
     sender: { login: "kyle", type: "User" },
   });
 
-  it("names the task's project, else the label's, else the repo's; the lane label is read from core's lanes", async () => {
-    const fromTask = await githubEvents("issues", payload([{ name: "agent:claude" }, { name: "production:daybreak" }]), "d1", { taskProject: async () => "nightfall" });
-    expect(fromTask).toMatchObject([{ kind: "issue.labeled", project: "nightfall", repo: "acme/productions", issue: 7, lane: "claude" }]);
-    const fromLabel = await githubEvents("issues", payload([{ name: "agent:claude" }, { name: "production:daybreak" }]), "d2", { taskProject: async () => null });
-    expect(fromLabel[0]?.project).toBe("daybreak");
+  it("names the label's project, else the repo's; the lane label is read from core's lanes", async () => {
+    const fromLabel = await githubEvents("issues", payload([{ name: "agent:claude" }, { name: "production:daybreak" }]), "d2");
+    expect(fromLabel).toMatchObject([{ kind: "issue.labeled", project: "daybreak", repo: "acme/productions", issue: 7, lane: "claude" }]);
     const fromRepo = await githubEvents("issues", payload([{ name: "agent:claude" }]), "d3");
     expect(fromRepo[0]?.project).toBe("productions");
     // a label that is not a lane is not an event of record

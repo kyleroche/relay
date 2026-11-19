@@ -1,11 +1,11 @@
-import { repo } from "@relay/core";
-import { NextResponse, type NextRequest } from "next/server";
+import { board } from "@relay/core";
+import { after, NextResponse, type NextRequest } from "next/server";
 import { problem } from "@/lib/api";
+import { siteBoard } from "@/lib/board";
 import { dataMode, writeEvent } from "@/lib/data";
 import { getDb } from "@/lib/db";
-import { dispatchAfter } from "@/lib/dispatch";
 import { githubApp, githubWebhookSecrets } from "@/lib/github-app";
-import type { NewEvent } from "@/lib/types";
+import { openIssueTask, settleMergedPull } from "@/lib/webhooks/board";
 import { githubEvents } from "@/lib/webhooks/github";
 import { installationEvents, isInstallationEvent } from "@/lib/webhooks/github-app";
 import { senderMayOpenTasks } from "@/lib/webhooks/usage";
@@ -20,6 +20,9 @@ export const dynamic = "force-dynamic";
  * workflow_run, deployment_status; the app also sends installation and installation_repositories, which become
  * project.github_connected / project.github_disconnected rows and may register a project when relay.md is present.
  * Replays are idempotent via the delivery id (and the comment id for usage rows).
+ *
+ * Two deliveries also act on the team's board, after the response (lib/webhooks/board.ts): an `agent:<lane>` label on
+ * an issue opens a task, and a merged pull request completes the task that waited on it.
  */
 export async function POST(req: NextRequest) {
   const secrets = await githubWebhookSecrets();
@@ -48,47 +51,29 @@ export async function POST(req: NextRequest) {
     events = outcome.events;
     registered = outcome.registered;
   } else {
-    // a shared (productions) repo: the task row names the issue's project before the label or the repo name does
-    const taskProject = dataMode() === "db" ? async (repoName: string, issue: number) => (await repo.getTask(await getDb(), repo.taskId(repoName, issue)))?.project : undefined;
-    events = await githubEvents(eventName, payload, delivery, { ...(taskProject ? { taskProject } : {}) });
+    events = await githubEvents(eventName, payload, delivery);
+    if (dataMode() === "db" && (eventName === "issues" || eventName === "pull_request")) after(() => onBoard(eventName, payload));
   }
   if (!events.length) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });
 
   const written = [];
-  const rows = [];
   for (const event of events) {
     const row = await writeEvent(event);
-    rows.push(row);
     written.push({ id: row?.id ?? null, kind: event.kind, deduped: row === null });
   }
-  dispatchAfter(rows);
-  await Promise.all(events.map((e) => recordLabelledTask(e)));
   return NextResponse.json({ ok: true, events: written, ...(registered.length ? { registered } : {}) }, { status: 201 });
 }
 
-/**
- * An `agent:<lane>` label put on an issue by hand (docs/WORKERS.md): the issue becomes a task row so a worker can
- * claim it, exactly as if it had been opened through `relay task create`. Only repos linked as a project count, and
- * only when the login that added the label is in `RELAY_ALLOWED_SENDERS` (`senderMayOpenTasks`; an unset allowlist
- * refuses): anyone with triage on the repo can add a label, and a task spends a subscription on a worker.
- */
-async function recordLabelledTask(e: NewEvent): Promise<void> {
-  if (e.kind !== "issue.labeled" || !e.repo || !e.issue || !e.lane || dataMode() !== "db") return;
+/** The delivery's effects on the board. Best effort: a failure is logged, and GitHub's delivery was already answered. */
+async function onBoard(eventName: string, payload: Record<string, unknown>): Promise<void> {
   try {
-    const login = e.actor.replace(/^(human|bot):/, "");
-    if (!(await senderMayOpenTasks(e.repo, login))) {
-      console.warn(`[relay] ${e.repo}#${e.issue}: label by ${e.actor} ignored; not in RELAY_ALLOWED_SENDERS`);
-      return;
-    }
-    const db = await getDb();
-    // on a shared repo, the project the delivery resolved to (a production: label); else whichever project has the repo
-    const candidates = await repo.projectsOnRepo(db, e.repo);
-    const project = candidates.find((p) => p.slug === e.project) ?? candidates[0];
-    if (!project) return;
-    const title = typeof e.payload?.title === "string" ? e.payload.title : null;
-    await repo.createTask(db, { project: project.slug, repo: e.repo, issue: e.issue, createdBy: e.actor, lane: e.lane, title });
-  } catch (err) {
-    console.error(`[relay] task row for ${e.repo}#${e.issue}: ${err instanceof Error ? err.message : String(err)}`);
+    const session = await siteBoard();
+    const opened = await openIssueTask({ db: await getDb(), session, mayOpen: senderMayOpenTasks }, eventName, payload);
+    if (opened) console.info(`[relay] task ${opened.id} opened in ${opened.channel} for ${opened.issue ? `${opened.issue.repo}#${opened.issue.number}` : "an issue"} [${opened.state}]`);
+    const settled = await settleMergedPull(session, eventName, payload);
+    if (settled) console.info(`[relay] task ${settled.id} completed: ${settled.result ?? "merged on GitHub"}`);
+  } catch (e) {
+    console.error(`[relay] board effects of a ${eventName} delivery: ${board.describeBoardError(e)}`);
   }
 }
 

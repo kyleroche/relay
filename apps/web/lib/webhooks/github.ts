@@ -6,7 +6,7 @@
  */
 import { isLaneName, LANE_NAME_PATTERN } from "@relay/core";
 import type { Lane, NewEvent } from "@/lib/types";
-import { resolveProject, type TaskProjectLookup } from "./project.ts";
+import { resolveProject } from "./project.ts";
 import { parseUsageComment, senderTrusted, usageEvents } from "./usage.ts";
 
 type Json = Record<string, unknown>;
@@ -14,7 +14,8 @@ type Json = Record<string, unknown>;
 const get = <T = unknown>(obj: unknown, path: string): T | undefined =>
   path.split(".").reduce<unknown>((o, k) => (o && typeof o === "object" ? (o as Json)[k] : undefined), obj) as T | undefined;
 
-function actorOf(payload: Json): string {
+/** Who a delivery is from, as the feed names actors: `bot:<name>` for an app or a `[bot]` login, `human:<login>` otherwise. */
+export function actorOf(payload: Json): string {
   const login = get<string>(payload, "sender.login") ?? "unknown";
   const type = get<string>(payload, "sender.type");
   if (type === "Bot" || login.endsWith("[bot]")) return `bot:${login.replace(/\[bot\]$/, "")}`;
@@ -22,7 +23,7 @@ function actorOf(payload: Json): string {
 }
 
 /**
- * The lane registry is open (packages/core/src/tasks/create.ts): an `agent:<lane>` label names any lane whose name
+ * The lane registry is open (packages/core/src/tasks/lanes.ts): an `agent:<lane>` label names any lane whose name
  * fits `LANE_NAME_PATTERN`, a built-in one or one an app registered, so a lane added anywhere is read here without
  * another edit. The branch pattern takes the shortest lane that leaves an issue number (`relay/laser-cut-42` is lane
  * `laser-cut`, issue 42; `relay/claude-7-fix` is `claude`, 7).
@@ -85,14 +86,13 @@ function linkedIssue(pr: Json): number | null {
 }
 
 /**
- * Every row a delivery produces, with its project resolved (`resolveProject`: the task row, a `production:<slug>`
- * label, the repository's name). Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`.
+ * Every row a delivery produces, with its project resolved (`resolveProject`: a `production:<slug>` label, else the
+ * repository's name). Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`.
  */
-export async function githubEvents(eventName: string, payload: Json, deliveryId: string, deps: { taskProject?: TaskProjectLookup } = {}): Promise<NewEvent[]> {
+export async function githubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
   const rows = await rawGithubEvents(eventName, payload, deliveryId);
-  const labels = get(payload, "issue.labels") ?? get(payload, "pull_request.labels");
-  const repoName = get<string>(payload, "repository.name") ?? null;
-  return Promise.all(rows.map(async (e) => ({ ...e, project: await resolveProject({ repo: e.repo ?? null, issue: e.issue ?? null, labels, repoName }, deps.taskProject) })));
+  const project = resolveProject({ labels: get(payload, "issue.labels") ?? get(payload, "pull_request.labels"), repoName: get<string>(payload, "repository.name") ?? null });
+  return rows.map((e) => ({ ...e, project }));
 }
 
 async function rawGithubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
@@ -237,7 +237,7 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         issue: relayBranch(ref)?.issue ?? null,
         summary: state === "success" ? `${env} deployed for ${ref}` : `${env} deployment ${state} for ${ref}`,
         url: get<string>(status, "environment_url") ?? get<string>(status, "target_url") ?? null,
-        // ref and sha let deriveTaskStatus match the deployment to a task's branch (a deployment carries no PR number)
+        // ref and sha say which branch and commit was deployed (a deployment carries no PR number)
         payload: { environment: env, state, ref: ref || null, sha: get<string>(payload, "deployment.sha") ?? null, description: get<string>(status, "description") ?? null },
       };
     }

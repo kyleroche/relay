@@ -1,7 +1,6 @@
 import { EXTERNAL_KIND, repo } from "@relay/core";
 import { api, json, problem } from "@/lib/api";
 import { getDb } from "@/lib/db";
-import { dispatchAfter } from "@/lib/dispatch";
 import { needsDb, readJson, str, writerActor } from "@/lib/integrations";
 import { sanitizeEvent } from "@/lib/sanitize";
 import { toFeedEvent } from "@/lib/data-db";
@@ -35,7 +34,6 @@ export const POST = api(
     const source = str(body.source);
     const payload = body.payload && typeof body.payload === "object" && !Array.isArray(body.payload) ? (body.payload as Record<string, unknown>) : {};
     const row = await repo.writeEvent(db, { kind, actor: await writerActor(req), project, summary, url: url ?? null, cost_equiv: cost, payload: { ...payload, ...(source ? { source } : {}) } });
-    dispatchAfter([row]);
     return json({ event: row ? sanitizeEvent(toFeedEvent(row)) : null }, { status: 201 });
   },
   { scope: "events:write" },

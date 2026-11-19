@@ -26,7 +26,7 @@
 
 Do not ask the person for a token. Request access yourself and they approve it once:
 
-1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write` → `device_code`, `user_code`, `verification_uri`
+1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write` → `device_code`, `user_code`, `verification_uri`
 2. Tell the person to approve `<user_code>` at https://relay.kyro.house/activate (a bot they trust with `tokens:write` can approve it for them with the `relay_access_approve` MCP tool, for scopes it holds itself), and poll `POST https://relay.kyro.house/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code`, `client_id` every 5 seconds until it returns `access_token` and `refresh_token`
 3. Call /mcp or /api/v1 with `Authorization: Bearer <access_token>`; `relay_whoami` confirms who you are; refresh with `grant_type=refresh_token` before 24 hours
 

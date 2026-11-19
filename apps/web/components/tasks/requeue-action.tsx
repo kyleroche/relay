@@ -5,36 +5,34 @@ import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { requeueTaskAction, type TaskActionResult } from "@/app/tasks/actions";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet";
 
 /**
- * "Requeue": put the task back in the queue, optionally on another lane. A sheet that opens from a button, like the
- * other forms (DESIGN.md, item 7): the lane (the built-in worker lanes first, then the lanes registered workers serve
- * beyond those, from core's `knownLanes` and fetched once by the page, then the cloud lanes under their own heading
- * because nothing dispatches them until the operator wires them) and an optional reason. The same core call as
+ * "Requeue": put the task back in the queue, optionally on another lane or model. A sheet that opens from a button,
+ * like the other forms (DESIGN.md, item 7): the lane (the built-in lanes and `any` first, then the lanes other
+ * workers on the board serve, fetched once by the page) and the model the lane is asked for. The same core call as
  * `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue` and `relay task requeue`. Renders into the parent's
  * flex-wrap row beside the review buttons; its outcome takes a full-width line under them.
  */
-export function RequeueAction({ taskId, lane, state, workerLanes, registeredLanes = [], cloudLanes, canWrite, size = "default" }: { taskId: string; lane: string | null; state: string; workerLanes: readonly string[]; registeredLanes?: readonly string[]; cloudLanes: readonly string[]; canWrite: boolean; size?: "default" | "sm" }) {
+export function RequeueAction({ taskId, lane, model, state, builtinLanes, servedLanes = [], canWrite, size = "default" }: { taskId: string; lane: string | null; model: string | null; state: string; builtinLanes: readonly string[]; servedLanes?: readonly string[]; canWrite: boolean; size?: "default" | "sm" }) {
   const router = useRouter();
   const [result, setResult] = useState<TaskActionResult | null>(null);
   const [open, setOpen] = useState(false);
-  // a task's own lane is always offered, even when its worker has since been forgotten
-  const registered = lane && ![...workerLanes, ...registeredLanes, ...cloudLanes].includes(lane) ? [...registeredLanes, lane] : registeredLanes;
-  const [target, setTarget] = useState<string>(lane && [...workerLanes, ...registered, ...cloudLanes].includes(lane) ? lane : workerLanes[0] ?? "claude");
-  const [reason, setReason] = useState("");
+  // a task's own lane is always offered, even when no worker lists it any more
+  const others = [...new Set([...servedLanes, ...(lane ? [lane] : [])])].filter((l) => !builtinLanes.includes(l));
+  const [target, setTarget] = useState<string>(lane ?? builtinLanes[0] ?? "claude");
+  const [wanted, setWanted] = useState(model ?? "");
   const [pending, start] = useTransition();
 
   const send = () => {
     if (pending) return;
+    const next = wanted.trim();
     start(async () => {
-      const r = await requeueTaskAction(taskId, { lane: target !== lane ? target : null, reason });
+      const r = await requeueTaskAction(taskId, { ...(target !== lane ? { lane: target } : {}), ...(next !== (model ?? "") ? { model: next || null } : {}) });
       setResult(r);
-      if (r.ok) {
-        setReason("");
-        setOpen(false);
-      }
+      if (r.ok) setOpen(false);
       router.refresh();
     });
   };
@@ -59,7 +57,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, registeredLane
                   on the <span className="font-mono">{lane}</span> lane
                 </>
               ) : null}
-              . Requeue puts it back in the queue: a live worker claim is released, the <code className="font-mono">agent:*</code> label on the issue follows the lane you pick, and the next idle worker that serves that lane claims it and starts over from the base branch. An open PR is kept and reused.
+              . Requeue puts it back in the queue: a failed task is reopened, a hold is lifted, and the next idle worker that serves the lane you pick claims it and starts over from the base branch with the whole thread to read. An open pull request is kept and reused.
             </SheetDescription>
           </SheetHeader>
           <div className="flex flex-col gap-3 px-4">
@@ -71,27 +69,17 @@ export function RequeueAction({ taskId, lane, state, workerLanes, registeredLane
                 </SelectTrigger>
                 <SelectContent>
                   <SelectGroup>
-                    <SelectLabel>Workers (machines running relay work)</SelectLabel>
-                    {workerLanes.map((l) => (
+                    <SelectLabel>Built in (machines running relay work)</SelectLabel>
+                    {builtinLanes.map((l) => (
                       <SelectItem key={l} value={l} className="font-mono">
                         {l}
                       </SelectItem>
                     ))}
                   </SelectGroup>
-                  {registered.length > 0 && (
+                  {others.length > 0 && (
                     <SelectGroup>
-                      <SelectLabel>Registered (apps serving their own lane)</SelectLabel>
-                      {registered.map((l) => (
-                        <SelectItem key={l} value={l} className="font-mono">
-                          {l}
-                        </SelectItem>
-                      ))}
-                    </SelectGroup>
-                  )}
-                  {cloudLanes.length > 0 && (
-                    <SelectGroup>
-                      <SelectLabel>Cloud (dispatches only once wired)</SelectLabel>
-                      {cloudLanes.map((l) => (
+                      <SelectLabel>Other workers on the board</SelectLabel>
+                      {others.map((l) => (
                         <SelectItem key={l} value={l} className="font-mono">
                           {l}
                         </SelectItem>
@@ -100,20 +88,15 @@ export function RequeueAction({ taskId, lane, state, workerLanes, registeredLane
                   )}
                 </SelectContent>
               </Select>
-              {relaning && <span className="text-muted-foreground">Moves the issue&apos;s label from {lane ? <code className="font-mono">agent:{lane}</code> : "none"} to <code className="font-mono">agent:{target}</code>.</span>}
+              {relaning && (
+                <span className="text-muted-foreground">
+                  Moves the task from {lane ? <code className="font-mono">{lane}</code> : "no lane"} to <code className="font-mono">{target}</code>.
+                </span>
+              )}
             </label>
             <label className="flex flex-col gap-1 text-xs">
-              <span className="text-muted-foreground">Reason (optional, goes in the feed)</span>
-              <textarea
-                value={reason}
-                onChange={(e) => setReason(e.target.value)}
-                rows={3}
-                maxLength={2000}
-                disabled={pending}
-                placeholder="The cloud lane is not wired; run it on a worker."
-                className="min-h-16 rounded-md border bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
-                aria-label="Reason"
-              />
+              <span className="text-muted-foreground">Model (optional; empty is the lane&apos;s default)</span>
+              <Input value={wanted} onChange={(e) => setWanted(e.target.value)} maxLength={128} disabled={pending} placeholder="fable" className="font-mono" aria-label="Model" />
             </label>
             <div>
               <Button onClick={send} disabled={pending}>
@@ -130,7 +113,7 @@ export function RequeueAction({ taskId, lane, state, workerLanes, registeredLane
       </Sheet>
       {result && !open && (
         <p role={result.ok ? "status" : "alert"} className={result.ok ? "basis-full text-xs text-ok" : "basis-full text-xs text-destructive"}>
-          {result.ok ? `Requeued; the task is ${result.state}.${result.message ? ` ${result.message}` : ""}` : result.message}
+          {result.ok ? `Requeued; the task is ${result.state}.` : result.message}
         </p>
       )}
     </>

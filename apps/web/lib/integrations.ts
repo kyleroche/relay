@@ -1,5 +1,5 @@
 /**
- * Shared bits for the integration routes (/api/v1/tasks, /events, /tokens, /webhooks, /projects/{slug} uploads):
+ * Shared bits for the integration routes (/api/v1/tasks, /events, /tokens, /projects/{slug} uploads):
  * JSON body parsing, the GitHub client the site uses to open issues, the actor rule for external writers, and the
  * "needs a database" refusal mock deployments answer with.
  */

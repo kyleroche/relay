@@ -2,9 +2,12 @@
  * Event kinds the web app reads and the webhooks emit.
  *
  * The `events` table is append-only and `kind` is free text, so this file is the
- * documentation of what each kind means and where it comes from. Lanes (packages/core)
- * emit `run.*`, `step.usage`, `decision.*`, `memory.*`, `onboard.*`; the GitHub and
- * Vercel webhooks under app/api/webhooks emit the rest.
+ * documentation of what each kind means and where it comes from. A task's turns, its runs and
+ * its model calls (`task.*`, `run.*`, `step.usage`) are copied from the team's Vercel Board by
+ * the ledger (packages/core/src/board/site.ts, lib/board-watch.ts); `decision.*`, `memory.*` and
+ * `onboard.*` come from the CLI and the lanes; the GitHub and Vercel webhooks under
+ * app/api/webhooks emit the rest. Kinds nothing writes any more stay here so rows already in a
+ * feed keep their label.
  */
 
 export const EVENT_KINDS = {
@@ -12,25 +15,25 @@ export const EVENT_KINDS = {
   "issue.opened": { group: "task", source: "github", label: "Issue opened", description: "A task entered the bus." },
   "issue.labeled": { group: "task", source: "github", label: "Lane assigned", description: "An agent:* label picked the lane." },
   "issue.closed": { group: "task", source: "github", label: "Issue closed", description: "The task is done or dropped." },
-  // Worker lifecycle (relay work, docs/WORKERS.md)
+  // Worker lifecycle, from before the workers moved to the board (their state is now their message there, /workers)
   "worker.registered": { group: "run", source: "runner", label: "Worker registered", description: "A machine ran relay work for the first time; payload has its lanes and labels." },
   "worker.online": { group: "run", source: "runner", label: "Worker online", description: "A worker came (back) online and is claiming tasks." },
   "worker.offline": { group: "run", source: "runner", label: "Worker offline", description: "A worker shut down cleanly, or was marked offline after an hour of silence." },
-  // Run lifecycle (relay work; also from GitHub workflow_job on the optional Actions runners)
-  "run.started": { group: "run", source: "runner", label: "Run started", description: "A worker claimed the task, cloned the repo and is running the lane." },
-  "run.finished": { group: "run", source: "runner", label: "Run finished", description: "The lane finished; payload.conclusion and the PR are set." },
+  // Run lifecycle (relay work, docs/WORKERS.md): a worker's claim on the board and the run block it reports
+  "run.started": { group: "run", source: "runner", label: "Run started", description: "A worker's lane claimed the task on the board and is running it; payload.task is the task's ID." },
+  "run.finished": { group: "run", source: "runner", label: "Run finished", description: "The lane finished; payload.conclusion says how, and the PR is set when it opened one." },
   "run.failed": { group: "run", source: "runner", label: "Run failed", description: "The lane exited with an error, made no changes, or timed out." },
-  "run.dispatched": { group: "run", source: "web", label: "Dispatched to cloud", description: "The site handed a cloud-lane task to the vendor's hosted tier with a mention comment." },
+  "run.dispatched": { group: "run", source: "web", label: "Dispatched to cloud", description: "An earlier relay handed a task to a vendor's hosted tier with a mention comment." },
   "step.usage": { group: "usage", source: "lane", label: "Model call", description: "One headless CLI call with tokens, cache and cost equivalent. The ledger is a view over these." },
-  // Tasks (packages/core/src/tasks: create.ts, review.ts, requeue.ts)
-  "task.created": { group: "task", source: "api", label: "Task opened", description: "relay opened the issue itself (relay_task_create, POST /api/v1/tasks, relay task create); payload has the task id, lane and priority." },
-  "task.approved": { group: "pr", source: "web", label: "Approved and merged", description: "A reviewer approved the task: relay squash-merged the PR and deleted its branch; payload has the merge sha. The task is done." },
-  "task.changes_requested": { group: "pr", source: "web", label: "Changes requested", description: "A reviewer sent the PR back with a note (also posted on the PR); the task is queued again and the next run's brief carries the note." },
-  "task.merge_failed": { group: "pr", source: "web", label: "Merge refused", description: "GitHub refused the merge an approval asked for (conflicts, checks, permissions); payload.error has its message. The task stays in review." },
-  "task.requeued": { group: "task", source: "web", label: "Requeued", description: "An operator put the task back in the queue, perhaps on another lane (payload.lane, previous_lane, previous_state, reason); a live claim was released and the issue's agent:* label moved. The task is queued again." },
-  "task.closed": { group: "task", source: "web", label: "Closed", description: "An operator closed the task without a merge (payload.previous_state, reason, github, claim_released, pr); the issue was closed on GitHub as not planned and an open PR with it. The task is done." },
-  "task.held": { group: "task", source: "runner", label: "Held at the gate", description: "The injection gate flagged the task's text before a lane ran it: payload.score, reasons and grader (precheck or model). The worker gave its claim back; the task is held until a person or a tokens:write bot releases it." },
-  "task.released": { group: "task", source: "web", label: "Released", description: "A person or a tokens:write bot released a held task (payload.note, held); the task is queued again and the next worker grades it again." },
+  // Tasks: threads on the board (packages/core/src/board/tasks.ts); every row's payload.task is the task's ID
+  "task.created": { group: "task", source: "api", label: "Task opened", description: "A task was opened in its project's queue on the board (relay task create, relay_task_create, POST /api/v1/tasks, or an agent:<lane> label on a GitHub issue); payload has its title, lane and model." },
+  "task.approved": { group: "pr", source: "web", label: "Approved", description: "The task was completed: its pull request was merged (by an approval or on GitHub) or its outputs were approved; payload.result says which. The task is done." },
+  "task.changes_requested": { group: "pr", source: "web", label: "Changes requested", description: "An earlier relay's row for a pull request sent back with a note; the note is now a reply in the task's thread." },
+  "task.merge_failed": { group: "pr", source: "web", label: "Merge refused", description: "An earlier relay's row for a merge GitHub refused; the refusal is now a line in the task's thread." },
+  "task.requeued": { group: "task", source: "web", label: "Requeued", description: "A failed task was reopened (relay task requeue, the Requeue sheet); it is queued again and the next run starts over." },
+  "task.closed": { group: "task", source: "web", label: "Closed", description: "The task was called off without a merge; payload.reason says why. Its open pull request and the issue it answered were closed on GitHub." },
+  "task.held": { group: "task", source: "runner", label: "Held at the gate", description: "The injection gate held the task before a lane ran it; payload.reason says what it saw. It stays held until a person or a tokens:write bot releases it." },
+  "task.released": { group: "task", source: "web", label: "Released", description: "An earlier relay's row for a released hold; a release is now a block in the task's thread." },
   // GitHub webhook: pull requests, reviews, CI
   "pr.opened": { group: "pr", source: "github", label: "PR opened", description: "The runner pushed a branch and opened the result." },
   "pr.review": { group: "pr", source: "github", label: "Review", description: "A review was submitted (approved, changes requested or commented)." },

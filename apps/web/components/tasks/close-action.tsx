@@ -9,7 +9,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 
 /**
  * "Close": finish a task without a merge. A sheet that opens from a button, like Requeue (DESIGN.md, item 7): what
- * closing does, an optional reason that goes on the issue and in the feed, and the one button that does it. The same
+ * closing does, an optional reason that goes on the board and on GitHub, and the one button that does it. The same
  * core call as `relay_task_close`, `POST /api/v1/tasks/{id}/close` and `relay task close`. Renders into the parent's
  * flex-wrap row beside Requeue; its outcome takes a full-width line under them.
  */
@@ -45,17 +45,17 @@ export function CloseAction({ taskId, state, pr, canWrite, size = "default" }: {
           <SheetHeader>
             <SheetTitle>Close without a merge</SheetTitle>
             <SheetDescription>
-              The task is {state}. Close finishes it: the issue is closed on GitHub as not planned with your reason as a comment{pr ? `, PR #${pr} is closed unmerged` : ""}, a worker that holds it is told to stop, and the task moves to Done. Reopening the issue on GitHub is the way to start it again.
+              The task is {state}. Close calls it off on the board with your reason, which also stops a run in progress at its next look{pr ? `; PR #${pr} is closed unmerged and its branch deleted` : ""}; the issue it answers, if any, is closed on GitHub as not planned. A closed task is not requeued: open a new one to start again.
             </SheetDescription>
           </SheetHeader>
           <div className="flex flex-col gap-3 px-4">
             <label className="flex flex-col gap-1 text-xs">
-              <span className="text-muted-foreground">Reason (optional, goes on the issue and in the feed)</span>
+              <span className="text-muted-foreground">Reason (optional, shown on the task and as a comment on GitHub)</span>
               <textarea
                 value={reason}
                 onChange={(e) => setReason(e.target.value)}
                 rows={3}
-                maxLength={2000}
+                maxLength={900}
                 disabled={pending}
                 placeholder="Opened against a spec the repo does not match."
                 className="min-h-16 rounded-md border bg-background px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"

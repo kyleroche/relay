@@ -4,6 +4,7 @@ import { ActorChip } from "@/components/feed/actor-chip";
 import { KindIcon } from "@/components/feed/kind-icon";
 import { Pill } from "@/components/ui/pill";
 import { kindInfo } from "@/lib/events";
+import { taskPagePath } from "@/lib/task-path";
 import { fmtCost, fmtDuration, fmtTokens } from "@/lib/format";
 import { clockIn } from "@/lib/tz";
 import type { FeedEvent } from "@/lib/types";
@@ -79,11 +80,13 @@ export function EventRow({
           <span className="truncate" title={e.summary}>
             {e.summary}
           </span>
-          {e.repo && e.issue != null && (
-            // every row about an issue is a row about a task: the task page is where its preview and review live
-            <Link href={`/tasks/${e.repo}/${e.issue}`} className="hidden shrink-0 font-mono text-[11px] text-muted-foreground hover:text-primary sm:inline" title={`Task ${e.repo}#${e.issue}`}>
-              #{e.issue}
+          {typeof e.payload.task === "string" && e.payload.task ? (
+            // a row the ledger copied from the board names its task: the task page is where its thread and review live
+            <Link href={taskPagePath(e.payload.task)} className="hidden shrink-0 font-mono text-[11px] text-muted-foreground hover:text-primary sm:inline" title={`Task ${e.payload.task}`}>
+              task {e.payload.task}
             </Link>
+          ) : (
+            e.repo && e.issue != null && <span className="hidden shrink-0 font-mono text-[11px] text-muted-foreground sm:inline">#{e.issue}</span>
           )}
           {e.lane && e.kind !== "issue.labeled" && (
             <Pill size="sm" mono className="hidden md:inline-flex">

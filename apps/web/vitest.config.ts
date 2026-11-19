@@ -1,7 +1,8 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
 
-// Pure modules only (session tokens, route classification); nothing here boots Next or a database.
+// Modules under lib/, without Next: the pure ones (session tokens, route classification), and the board surfaces on an
+// in-memory board and an in-memory database.
 export default defineConfig({
   resolve: { alias: { "@": path.resolve(import.meta.dirname) } },
   test: {

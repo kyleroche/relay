@@ -35,12 +35,14 @@ const nextConfig: NextConfig = {
     "/usage": migrations,
     "/workers": migrations,
   },
-  // The Access page moved from /tokens to /access; the flow map and the tasks list gave way to the board at /. Old links keep working.
+  // The Access page moved from /tokens to /access; the flow map and the tasks list gave way to the board at /. A task's
+  // page is /tasks/<its ID on the board>; the address it had as a GitHub issue (/tasks/owner/repo/n) lands on the board.
   async redirects() {
     return [
       { source: "/tokens", destination: "/access", permanent: true },
       { source: "/flow", destination: "/", permanent: true },
       { source: "/tasks", destination: "/", permanent: true },
+      { source: "/tasks/:owner/:repo/:n", destination: "/", permanent: true },
     ];
   },
   // proxy.ts holds the sign-in gate (lib/access.ts says what is public) and the Accept negotiation for /info and /docs.

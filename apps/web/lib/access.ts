@@ -6,7 +6,8 @@
  * `lib/negotiate.ts` decides which), the agent-readiness surface (info, about, contact, privacy, docs, well-known
  * files, OpenAPI, llms.txt, the install skill), the sign-in flow itself, the OAuth endpoints under /oauth/ (the
  * authorize page asks for a session itself, with a `next` that returns to it), the endpoints that carry their own
- * authentication (/mcp and /api/v1 bearer tokens, webhook and cron secrets, signed asset URLs), and anonymous /api/v1
+ * authentication (/mcp and /api/v1 bearer tokens, webhook and cron secrets, signed asset URLs, /api/board where the
+ * team's Vercel Board wakes the deployment and the board's handle verifies the caller), and anonymous /api/v1
  * reads when the deploy enables public read. The app's own pages — tasks, projects, usage, workers, the asset pages, tokens,
  * /activate (approving a device code), /setup/* (the GitHub App), /feed (the feed tab), the internal /api/feed and /api/meters routes — and
  * /api/v1 calls without a bearer need a session. Paths that are neither are `unknown`: they fall through so Next.js
@@ -38,6 +39,7 @@ const PUBLIC_EXACT = new Set([
   "/sitemap.xml",
   "/mcp",
   "/api/markdown",
+  "/api/board",
   "/favicon.ico",
   "/icon.svg",
   "/apple-icon.png",
@@ -50,6 +52,7 @@ const PUBLIC_PREFIXES = [
   "/.well-known/",
   "/skills/",
   "/api/webhooks/",
+  "/api/board/",
   "/api/cron/",
   "/api/assets/stream",
   "/api/assets/bundle/",

@@ -1,24 +1,10 @@
-import { Check, Clock, Eye, Globe, Lock, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
-import type { PreviewState, TaskState } from "@relay/core";
-import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
-import { STATE_HINT, STATE_TONE } from "@/lib/tasks";
+import { Ban, Check, CirclePause, Clock, Eye, Hourglass, Play, ShieldAlert, X, type LucideIcon } from "lucide-react";
+import { StatusBadge } from "@/components/ui/status-badge";
+import { STATE_HINT, STATE_TONE, type RelayState } from "@/lib/tasks";
 
-const ICON: Record<TaskState, LucideIcon> = { queued: Clock, held: ShieldAlert, claimed: Lock, running: Play, review: Eye, done: Check, failed: X };
+const ICON: Record<RelayState, LucideIcon> = { waiting: Hourglass, queued: Clock, running: Play, review: Eye, held: ShieldAlert, blocked: CirclePause, done: Check, failed: X, closed: Ban };
 
 /** A task's state mapped to {icon, tone, label, hint}; the rendering is components/ui/status-badge.tsx. */
-export function TaskStateBadge({ state, className }: { state: TaskState; className?: string }) {
+export function TaskStateBadge({ state, className }: { state: RelayState; className?: string }) {
   return <StatusBadge icon={ICON[state]} tone={STATE_TONE[state]} label={state} title={STATE_HINT[state]} className={className} />;
-}
-
-const PREVIEW: Record<Exclude<PreviewState, "none">, { label: string; tone: StatusTone; hint: string }> = {
-  ready: { label: "preview ready", tone: "ok", hint: "The branch is built and deployed; the link opens it." },
-  building: { label: "preview building", tone: "muted", hint: "A newer push is building; the link opens the last good build." },
-  failed: { label: "preview failed", tone: "bad", hint: "The latest build failed; the link opens the last good build, the feed row the build log." },
-};
-
-/** The preview's state with the globe icon; null when there is no preview to talk about. */
-export function PreviewBadge({ state, className }: { state: PreviewState; className?: string }) {
-  if (state === "none") return null;
-  const p = PREVIEW[state];
-  return <StatusBadge icon={Globe} tone={p.tone} label={p.label} title={p.hint} className={className} />;
 }

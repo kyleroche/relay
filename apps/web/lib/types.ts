@@ -1,41 +1,11 @@
-import type { BoardRow, TaskState, TaskView } from "@relay/core";
 import type { EventKind } from "./events.ts";
-
-export type { TaskState, TaskView };
-
-/**
- * One card on the board: the task row plus its cached state (packages/core/src/db/task-state.ts), no fold per task,
- * with the asset's thumbnail signed for this response when the deliverable is an asset.
- */
-export type BoardTask = BoardRow & { asset_thumb_url: string | null };
-
-/** What the board reads: the newest tasks in motion, the newest merged, optionally one project's. */
-export interface BoardOptions {
-  limit?: number;
-  doneLimit?: number;
-  project?: string;
-}
-
-/** What the history page reads: every task newest first, one project's or one state's, paged by keyset (`before` is the previous page's last row). */
-export interface HistoryOptions {
-  project?: string;
-  state?: TaskState;
-  limit?: number;
-  before?: { since: string; id: string } | null;
-}
-
-export interface TaskListOptions {
-  project?: string;
-  state?: TaskState;
-  limit?: number;
-}
 
 export type ActorKind = "human" | "bot" | "runner" | "agent";
 export type Subscription = "max" | "codex" | "grok" | "gateway";
 /**
- * A lane name: one of core's `WORKER_LANES` (claude, codex, grok, nodes), a cloud lane, or the lane an app registered as
- * a worker (the registry is open; `isLaneName` in packages/core/src/tasks/create.ts is the shape). `WorkerLane` from
- * core still names the built-ins where only those are meant.
+ * A lane name: one of core's `WORKER_LANES` (claude, codex, grok, nodes), `any`, or the lane another worker lists on the
+ * board (the registry is open; `isLaneName` in packages/core/src/tasks/lanes.ts is the shape). `WorkerLane` from core
+ * still names the built-ins where only those are meant.
  */
 export type Lane = string;
 
@@ -137,7 +107,7 @@ export interface SubscriptionUsage {
 /** A plan meter. percentUsed is null when the vendor exposes no meter for that window. */
 /**
  * Where a plan meter's number came from: `vendor` is a reading Claude Code handed relay's status line on a worker
- * (lib/meters.ts), `manual` the RELAY_PLAN_METERS override, `demo` mock data, `none` no reading at all.
+ * (lib/meters.ts), `manual` the RELAY_PLAN_METERS override, `demo` the demo board's workers, `none` no reading at all.
  */
 export type PlanMeterSource = "vendor" | "manual" | "demo" | "none";
 
@@ -170,25 +140,8 @@ export interface UsageSummary {
   avgCtxWindow: number;
 }
 
-export type WorkerStatus = "online" | "idle" | "offline";
-
-export interface Worker {
-  name: string;
-  host: string;
-  labels: string[];
-  lastSeen: string;
-  /** From last_seen: online under 2 minutes, idle under an hour, offline beyond (or when the worker said so). */
-  status: WorkerStatus;
-  /** Offline for more than 7 days: folded away on the workers page and left out of the board's worker count until forgotten (docs/WORKERS.md, "Retiring a worker"). */
-  retired: boolean;
-  lanes: Lane[];
-  /** relay CLI version the worker runs; "" when unknown. */
-  version: string;
-  runsToday: number;
-  /** The poll interval (ms) the worker last reported; null for one that never said (an Actions runner, an older relay). */
-  pollMs: number | null;
-  current: { project: string; issue: number; startedAt: string; taskId?: string; leaseUntil?: string } | null;
-}
+/** What relay's own feed knows of usage: everything on the usage page but the vendors' plan meters. */
+export type LedgerUsage = Omit<UsageSummary, "windows">;
 
 export type AssetKind = "image" | "video" | "audio" | "pdf" | "html" | "file";
 export type AssetStatus = "pending" | "approved" | "rejected" | "superseded" | "published";
@@ -265,14 +218,8 @@ export interface DataSource {
   getFeed(opts?: FeedOptions): Promise<FeedEvent[]>;
   getProjects(): Promise<ProjectSummary[]>;
   getProject(slug: string): Promise<ProjectDetail | null>;
-  getUsage(window: UsageWindow): Promise<UsageSummary>;
-  getWorkers(): Promise<Worker[]>;
-  /** Tasks with their derived state, newest first (one fold per task; the API and the feed header use it with small limits). */
-  getTasks(opts?: TaskListOptions): Promise<TaskView[]>;
-  /** The board's cards in one query over the state cache: everything in motion, failed within a week, the newest merged; `project` narrows it. */
-  getBoard(opts?: BoardOptions): Promise<BoardTask[]>;
-  /** The archive behind the board: every task newest first over the state cache, filtered and paged (`/history`). */
-  getHistory(opts?: HistoryOptions): Promise<BoardTask[]>;
+  /** The ledger's side of the usage page; the plan meters come from the workers on the board (lib/board-read.ts `planMeters`). */
+  getUsage(window: UsageWindow): Promise<LedgerUsage>;
   getModels(): Promise<ModelInfo[]>;
   writeEvent(event: NewEvent): Promise<FeedEvent | null>;
   getAssets(opts?: AssetListOptions): Promise<Asset[]>;

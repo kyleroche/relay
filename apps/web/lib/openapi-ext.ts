@@ -1,21 +1,21 @@
 /**
- * OpenAPI pieces for the integration surface (tasks, external events, tokens, webhooks, project uploads, usage), kept
+ * OpenAPI pieces for the integration surface (tasks, external events, tokens, project uploads, usage), kept
  * out of app/openapi.json/route.ts so that file only spreads them in. Everything here is additive to the API.
  */
-import { CLOUD_LANES, LANE_NAME_PATTERN, TASK_PRIORITIES, TASK_STATES, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES, WEBHOOK_EVENT_KINDS, WORKER_LANES } from "@relay/core";
+import { board, LANE_NAME_PATTERN, TOKEN_SCOPE_DESCRIPTIONS, TOKEN_SCOPES, WORKER_LANES } from "@relay/core";
 
-/** A lane name: the registry is open, so the schema is the shape and the built-ins are in the description (packages/core/src/tasks/create.ts). */
+/** A lane name: the registry is open, so the schema is the shape and the built-ins are in the description (packages/core/src/tasks/lanes.ts). */
 const LANE_PATTERN = `^${LANE_NAME_PATTERN}$`;
-const LANE_WORDS = `Built-in: ${WORKER_LANES.join(", ")} (run on the user's own workers, machines running relay work). Cloud: ${CLOUD_LANES.join(", ")} (the vendors' hosted tiers, dispatched by the site once wired). Any other lane name is one a registered worker serves (an app's own craft, e.g. embroidery); a task on a lane no worker has registered is refused with the lanes that have one.`;
+const LANE_WORDS = `Built-in: ${WORKER_LANES.join(", ")} (run on the user's own workers, machines running relay work), and ${board.ANY_LANE} (whichever code lane is free). Any other lane name is one another worker on the board serves (an app's own craft, e.g. embroidery).`;
+const TASK_STATES = [...board.RELAY_STATES];
 const laneSchema = (description: string) => ({ type: "string", pattern: LANE_PATTERN, description: `${description} ${LANE_WORDS}` });
 
 export const scopeDescriptions: Record<string, string> = { ...TOKEN_SCOPE_DESCRIPTIONS };
 
 export const integrationTags = [
-  { name: "tasks", description: "Tasks: GitHub issues with a lane label, addressed as owner/repo#n. State is derived from the feed (docs/INTEGRATIONS.md)." },
+  { name: "tasks", description: "Tasks: threads in a project's queue on the team's Vercel Board, addressed by the ID the board gave them. The board keeps each task's state (docs/WORKERS.md, docs/INTEGRATIONS.md)." },
   { name: "events", description: "External bots logging their own external.* events into the feed." },
   { name: "tokens", description: "Bearer tokens for this site: mint (plaintext shown once), list, revoke." },
-  { name: "webhooks", description: "Outbound webhooks: signed POSTs for the event kinds a receiver subscribes to (docs/FEED.md)." },
   { name: "access", description: "Who the caller is, pending device-flow approvals, and invite codes: the pieces of the authorization server that live under /api/v1 (docs/INTEGRATIONS.md)." },
 ];
 
@@ -26,6 +26,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
   const { response, problemResponse, commonErrors } = h;
   const slugParam = { name: "slug", in: "path", required: true, schema: { type: "string" } };
   const idParam = { name: "id", in: "path", required: true, schema: { type: "string" } };
+  const taskIdParam = { name: "id", in: "path", required: true, schema: { type: "string" }, description: "The task's ID on the board (the ID of its thread's root message), URL-encoded." };
   const notImplemented = problemResponse("This deployment has no database (mock mode).");
   return {
     "/usage": {
@@ -100,151 +101,116 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
       get: {
         operationId: "listTasks",
         tags: ["tasks"],
-        summary: "List tasks with derived state",
+        summary: "List tasks on the board",
+        description: "Tasks oldest first, the order a queue is worked in. `state` is one of relay's states, `open` (everything not done or closed; the default) or `all`.",
         security: [{ bearer: ["tasks:read"] }],
         parameters: [
-          { name: "project", in: "query", schema: { type: "string" } },
-          { name: "state", in: "query", schema: { type: "string", enum: TASK_STATES } },
+          { name: "project", in: "query", schema: { type: "string" }, description: "One project's queue." },
+          { name: "state", in: "query", schema: { type: "string", enum: [...TASK_STATES, "open", "all"], default: "open" } },
+          { name: "lane", in: "query", schema: { type: "string", pattern: LANE_PATTERN } },
           { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
         ],
-        responses: { "200": response("Tasks newest first.", "#/components/schemas/TaskList"), "400": problemResponse("Invalid parameter."), ...commonErrors },
+        responses: { "200": response("Tasks oldest first.", "#/components/schemas/TaskList"), "400": problemResponse("Invalid parameter."), "502": problemResponse("The board could not be reached."), ...commonErrors },
       },
       post: {
         operationId: "createTask",
         tags: ["tasks"],
         summary: "Open a task",
         description:
-          "Opens a GitHub issue in the project's repository with the `agent:<lane>` label (and `priority:<p>`), records the task and writes `issue.opened` and `task.created`. With `idempotency_key`, a repeat call returns the first task (200) and opens nothing. The issue body ends with `<!-- relay:task key=… -->`. Needs a GitHub token on the server (GITHUB_TOKEN or GITHUB_APP_TOKEN); 503 without one.",
+          "Opens a thread in the project's queue on the board (`work/<project>`), labelled with its lane and model, as the caller's profile. The repository is the one the project is registered with, never the caller's word. Text the injection gate's pre-check flags is held as the task is made. With `idempotency_key`, a repeat call by the same caller returns the first task (200) and opens nothing. A lane no worker serves is refused with the lanes that have one.",
         security: [{ bearer: ["tasks:write"] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/TaskCreate" } } } },
         responses: {
           "201": response("Created.", "#/components/schemas/TaskCreated"),
           "200": response("An earlier task with the same idempotency key.", "#/components/schemas/TaskCreated"),
-          "400": problemResponse("Bad lane, priority or missing fields."),
+          "400": problemResponse("A missing field, a bad lane, a lane no worker serves, or a project without a repository."),
           "404": problemResponse("No such project."),
           "501": notImplemented,
-          "503": problemResponse("No GitHub credential configured on the server."),
+          "502": problemResponse("The board could not be reached."),
           ...commonErrors,
         },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}": {
+    "/tasks/{id}": {
       get: {
         operationId: "getTask",
         tags: ["tasks"],
-        summary: "One task with its derived state",
-        description: "The task id is `owner/repo#n`; send the `#` as `%23`, e.g. `/tasks/acme/site%2342`.",
+        summary: "One task with its usage and notes",
+        description: "The task as the board has it, the usage rows posted in its thread and the notes people (and agents that are not relay's runner) left there. `id` is the task's ID on the board, URL-encoded.",
         security: [{ bearer: ["tasks:read"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
-        responses: { "200": response("The task.", "#/components/schemas/Task"), "400": problemResponse("Bad task id."), "404": problemResponse("No such task."), ...commonErrors },
+        parameters: [taskIdParam],
+        responses: { "200": response("The task.", "#/components/schemas/TaskDetail"), "400": problemResponse("Bad path."), "404": problemResponse("No such task."), "502": problemResponse("The board could not be reached."), ...commonErrors },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}/approve": {
+    "/tasks/{id}/approve": {
       post: {
         operationId: "approveTask",
         tags: ["tasks"],
-        summary: "Approve a task in review: merge its PR",
+        summary: "Approve a task in review",
         description:
-          "Squash-merges the task's pull request through GitHub, deletes the head branch and writes `task.approved`; the task is `done`. Only a task in `review` with an open PR can be approved. A signed-in person may approve anything; a bot's token must hold `tasks:write` and the bot may not approve a PR its own lane produced (403 says who can). When GitHub refuses the merge (conflicts, required checks, permissions) relay writes `task.merge_failed` with GitHub's message and answers 502; the task stays in review.",
+          "With a pull request: squash-merges it through GitHub, deletes the head branch and completes the task. The pull request is the one the runner's hold names, and it is merged only when its head is a branch relay pushed for this task. With outputs instead (the nodes lane): completes the task. A signed-in person may approve anything in review; a bot's token must hold `tasks:write`, and a bot never approves a task it opened or ran (403). When GitHub refuses the merge (conflicts, required checks, permissions) the refusal is a line in the task's thread and the answer is 502; the task stays in review.",
         security: [{ bearer: ["tasks:write"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
+        parameters: [taskIdParam],
         responses: {
-          "200": response("Merged; the updated task.", "#/components/schemas/Task"),
-          "400": problemResponse("Bad task id."),
-          "403": problemResponse("This caller may not approve this task (a bot approving its own PR, or a token without tasks:write)."),
+          "200": response("Approved; the completed task, with the merge when there was one.", "#/components/schemas/TaskApproved"),
+          "403": problemResponse("A bot approving a task it opened or ran."),
           "404": problemResponse("No such task."),
-          "409": problemResponse("Not in review, no PR yet, or the PR is already merged or closed."),
+          "409": problemResponse("Not in review, nothing to approve, or the pull request is closed or is not this task's."),
           "501": notImplemented,
-          "502": problemResponse("GitHub refused the merge; task.merge_failed was written with its message."),
+          "502": problemResponse("GitHub refused the merge or could not be read; the task's thread has its message."),
           "503": problemResponse("No GitHub credential configured on the server."),
           ...commonErrors,
         },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}/request-changes": {
+    "/tasks/{id}/request-changes": {
       post: {
         operationId: "requestTaskChanges",
         tags: ["tasks"],
-        summary: "Send a task's PR back with a note",
-        description:
-          "Posts `relay: changes requested by <actor>:` plus the note as a comment on the pull request and writes `task.changes_requested`; the task is `queued` again, the next worker run gets the note in its brief under \"Review feedback\" and pushes to the same branch and PR. Same guard rails as approve.",
+        summary: "Send a task in review back with a note",
+        description: "The note becomes a reply in the task's thread and a comment on its pull request, and the hold is lifted: the task is `queued`, and the next run reads the whole thread and pushes to the same branch.",
         security: [{ bearer: ["tasks:write"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
-        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["note"], properties: { note: { type: "string", maxLength: 10_000, description: "What should change; written for the model that will address it." } } } } } },
+        parameters: [taskIdParam],
+        requestBody: { required: true, content: { "application/json": { schema: { type: "object", required: ["note"], properties: { note: { type: "string", maxLength: 6000, description: "What should change; written for the model that will act on it." } } } } } },
         responses: {
-          "200": response("Recorded; the updated task (state queued).", "#/components/schemas/Task"),
-          "400": problemResponse("Bad task id or empty note."),
-          "403": problemResponse("This caller may not review this task."),
+          "200": response("Sent back; the updated task (state queued).", "#/components/schemas/Task"),
+          "400": problemResponse("An empty note, or one over 6,000 characters."),
           "404": problemResponse("No such task."),
-          "409": problemResponse("Not in review, or no PR yet."),
+          "409": problemResponse("Not in review."),
           "501": notImplemented,
-          "502": problemResponse("GitHub refused the comment."),
-          "503": problemResponse("No GitHub credential configured on the server."),
           ...commonErrors,
         },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}/close": {
+    "/tasks/{id}/close": {
       post: {
         operationId: "closeTask",
         tags: ["tasks"],
         summary: "Close a task without a merge",
         description:
-          "For a task opened by mistake, against a spec the repository does not match, or a duplicate. Relay closes the issue on GitHub as not planned with `reason` as a comment and closes an open PR the same way (best effort: a GitHub failure is recorded in the event payload, not fatal), releases a live worker claim, writes `task.closed`, which folds to `done`. Allowed from every state except `done`. A signed-in person may close anything; a bot's token must hold `tasks:write`. Reopening the issue on GitHub is the way to start the task again.",
+          "For a task opened by mistake, against a spec the repository does not match, or a duplicate. The task is canceled on the board with `reason`, which also stops a run in progress at its next look. On GitHub, best effort: its open pull request is closed and the branch deleted, and the issue it answers is closed as not planned (`github` in the answer says what happened). A step's task that was looking at it is called off; work that waited for it as a step goes to review without it. Allowed from every state but `done` and `closed`.",
         security: [{ bearer: ["tasks:write"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
-        requestBody: {
-          required: false,
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  reason: { type: "string", maxLength: 2000, description: "Why, for the feed row and the issue comment." },
-                },
-              },
-            },
-          },
-        },
+        parameters: [taskIdParam],
+        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { reason: { type: "string", maxLength: 900, description: "Why, for the task and the comment on GitHub." } } } } } },
         responses: {
-          "200": response("Closed; the updated task (state done).", "#/components/schemas/Task"),
-          "400": problemResponse("Bad task id or a reason over 2000 characters."),
-          "403": problemResponse("A token without tasks:write."),
+          "200": response("Closed; the task (state closed) and what happened on GitHub.", "#/components/schemas/TaskClosed"),
+          "400": problemResponse("A reason over 900 characters."),
           "404": problemResponse("No such task."),
-          "409": problemResponse("The task is already done (merged or closed)."),
+          "409": problemResponse("The task is already done or closed."),
+          "501": notImplemented,
           ...commonErrors,
         },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}/requeue": {
+    "/tasks/{id}/requeue": {
       post: {
         operationId: "requeueTask",
         tags: ["tasks"],
-        summary: "Put a task back in the queue, optionally on another lane",
+        summary: "Put a task back in the queue, optionally on another lane or model",
         description:
-          "For a task that is stuck (`running` on a cloud lane nobody wired, a run that never reported) or on the wrong lane. With `lane`, relay updates the task's lane and moves the `agent:*` label on the GitHub issue (best effort: a GitHub failure is recorded in the event payload, not fatal). A live worker claim is released. Relay writes `task.requeued`, which folds to `queued`; the next run starts over from the base branch. Allowed from every state except `done`. A signed-in person may requeue anything; a bot's token must hold `tasks:write`.",
+          "A failed task is reopened, a held or blocked one unblocked, a queued one only relabelled; the next run starts over from the base branch. With `lane` or `model` the task's labels change on the way; `\"model\": null` goes back to the lane's default. A running task belongs to the worker that holds it until its lease ends and is refused (409, naming who and until when); close stops a run. A finished task is not requeued: open a new one.",
         security: [{ bearer: ["tasks:write"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
+        parameters: [taskIdParam],
         requestBody: {
           required: false,
           content: {
@@ -253,40 +219,33 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
                 type: "object",
                 properties: {
                   lane: laneSchema("The lane to move the task to; omitted keeps its lane."),
-                  reason: { type: "string", maxLength: 2000, description: "Why, for the feed row." },
+                  model: nullable("string", { maxLength: 128, description: "The model to ask the lane for; null goes back to the lane's default; omitted keeps what it has." }),
                 },
               },
             },
           },
         },
         responses: {
-          "200": response("Requeued; the updated task (state queued).", "#/components/schemas/Task"),
-          "400": problemResponse("Bad task id, unknown lane or a reason over 2000 characters."),
-          "403": problemResponse("A token without tasks:write."),
+          "200": response("Requeued; the updated task.", "#/components/schemas/Task"),
+          "400": problemResponse("A lane that is not a lane name."),
           "404": problemResponse("No such task."),
-          "409": problemResponse("The task is done (merged or closed)."),
+          "409": problemResponse("The task is running, done or closed."),
           "501": notImplemented,
           ...commonErrors,
         },
       },
     },
-    "/tasks/{owner}/{repo}%23{issue}/release": {
+    "/tasks/{id}/release": {
       post: {
         operationId: "releaseTask",
         tags: ["tasks"],
         summary: "Release a task the injection gate held",
         description:
-          "A task in state `held` was stopped by the injection gate before a lane ran it: its issue text (or the latest reviewer note) read as instructions aimed at the agent (the `task.held` row carries the score, the reasons and whether the deterministic pre-check or the model grader decided). Release writes `task.released`; the task is `queued` again and the next worker grades it again before running (a pre-check marker holds it again unless the issue is edited or that worker runs with `RELAY_GATE=off`). For text a person has read and judged safe. A signed-in person may release anything held; a bot's token must hold `tokens:write`, and a bot never releases a task it opened itself. A tripwire in front of the sandbox, not a boundary.",
+          "A task in state `held` was stopped by the injection gate before a lane ran it: its text (or a note added to its thread) read as instructions aimed at the agent, and the hold's `reason` says what the gate saw. Release lifts the hold for the text as it stands: the task is `queued`, that text is not graded again, and anything added later is. For text a person has read and judged safe. A signed-in person may release anything held; a bot's token must hold `tokens:write`, and a bot never releases a task it opened itself. A tripwire in front of the sandbox, not a boundary.",
         security: [{ bearer: ["tokens:write"] }],
-        parameters: [
-          { name: "owner", in: "path", required: true, schema: { type: "string" } },
-          { name: "repo", in: "path", required: true, schema: { type: "string" } },
-          { name: "issue", in: "path", required: true, schema: { type: "integer" } },
-        ],
-        requestBody: { required: false, content: { "application/json": { schema: { type: "object", properties: { note: { type: "string", maxLength: 2000, description: "Why it is safe to run, for the feed row." } } } } } },
+        parameters: [taskIdParam],
         responses: {
           "200": response("Released; the updated task (state queued).", "#/components/schemas/Task"),
-          "400": problemResponse("Bad task id or a note over 2000 characters."),
           "403": problemResponse("A token without tokens:write, or the bot that opened the task."),
           "404": problemResponse("No such task."),
           "409": problemResponse("The task is not held."),
@@ -300,7 +259,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         operationId: "logEvent",
         tags: ["events"],
         summary: "Log an external event",
-        description: "Appends one `external.*` row to the feed. The actor is always `bot:<token name>` (or `human:<login>` for a signed-in viewer); any actor in the body is ignored. Matching webhooks are notified.",
+        description: "Appends one `external.*` row to the feed. The actor is always `bot:<token name>` (or `human:<login>` for a signed-in viewer); any actor in the body is ignored.",
         security: [{ bearer: ["events:write"] }],
         requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/ExternalEvent" } } } },
         responses: { "201": response("The written event.", "#/components/schemas/EventEnvelope"), "400": problemResponse("Bad kind or missing summary."), "404": problemResponse("No such project."), "501": notImplemented, ...commonErrors },
@@ -333,43 +292,6 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         security: [{ bearer: ["tokens:write"] }],
         parameters: [idParam],
         responses: { "200": response("Revoked.", "#/components/schemas/TokenRevoked"), "404": problemResponse("No live token matches."), "501": notImplemented, ...commonErrors },
-      },
-    },
-    "/webhooks": {
-      get: {
-        operationId: "listWebhooks",
-        tags: ["webhooks"],
-        summary: "List outbound webhooks",
-        security: [{ bearer: ["webhooks:write"] }],
-        parameters: [{ name: "project", in: "query", schema: { type: "string" } }],
-        responses: { "200": response("Hooks, without secrets.", "#/components/schemas/WebhookList"), "501": notImplemented, ...commonErrors },
-      },
-      post: {
-        operationId: "createWebhook",
-        tags: ["webhooks"],
-        summary: "Add an outbound webhook",
-        description: "The signing secret is generated when absent and returned once in this response. `bearer` is sent as `Authorization: Bearer` on every delivery. Event filters: exact kinds, a prefix ending in `.`, or `*`.",
-        security: [{ bearer: ["webhooks:write"] }],
-        requestBody: { required: true, content: { "application/json": { schema: { $ref: "#/components/schemas/WebhookCreate" } } } },
-        responses: { "201": response("The hook and its secret.", "#/components/schemas/WebhookCreated"), "400": problemResponse("Bad url or events."), "404": problemResponse("No such project."), "501": notImplemented, ...commonErrors },
-      },
-    },
-    "/webhooks/{id}": {
-      get: {
-        operationId: "getWebhook",
-        tags: ["webhooks"],
-        summary: "One webhook with its last deliveries",
-        security: [{ bearer: ["webhooks:write"] }],
-        parameters: [idParam],
-        responses: { "200": response("The hook and up to 20 deliveries.", "#/components/schemas/WebhookDetail"), "404": problemResponse("No such webhook."), "501": notImplemented, ...commonErrors },
-      },
-      delete: {
-        operationId: "deleteWebhook",
-        tags: ["webhooks"],
-        summary: "Remove a webhook",
-        security: [{ bearer: ["webhooks:write"] }],
-        parameters: [idParam],
-        responses: { "200": response("Removed.", "#/components/schemas/WebhookRemoved"), "404": problemResponse("No such webhook."), "501": notImplemented, ...commonErrors },
       },
     },
     "/whoami": {
@@ -430,16 +352,6 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         security: [{ bearer: ["tokens:write"] }],
         parameters: [idParam],
         responses: { "200": response("Revoked.", "#/components/schemas/InviteRevoked"), "404": problemResponse("No live invite matches."), "501": notImplemented, ...commonErrors },
-      },
-    },
-    "/webhooks/{id}/test": {
-      post: {
-        operationId: "testWebhook",
-        tags: ["webhooks"],
-        summary: "Send a signed test.ping now",
-        security: [{ bearer: ["webhooks:write"] }],
-        parameters: [idParam],
-        responses: { "200": response("Delivered.", "#/components/schemas/Delivery"), "502": response("The receiver did not accept it; details in the body.", "#/components/schemas/Delivery"), "404": problemResponse("No such webhook."), "501": notImplemented, ...commonErrors },
       },
     },
   };
@@ -556,63 +468,105 @@ export const integrationSchemas: Record<string, unknown> = {
   SummaryUploadResult: { type: "object", properties: { slug: { type: "string" }, tokens: { type: "integer" }, usage: { type: "integer" } } },
   Task: {
     type: "object",
-    required: ["id", "project", "repo", "issue", "state", "issue_url"],
+    required: ["id", "channel", "title", "state", "needs", "owner", "created_at"],
+    description: "A task as the board has it. What decides where a worker clones and what gets merged (`repo`, `base`, `issue`, `pr`) comes from the task's own text and its hold, never from a label.",
     properties: {
-      id: { type: "string", description: "owner/repo#n" },
-      project: { type: "string" },
-      repo: { type: "string" },
-      issue: { type: "integer" },
-      idempotency_key: nullable("string"),
-      created_by: { type: "string" },
-      created_at: { type: "string", format: "date-time" },
-      state: { type: "string", enum: TASK_STATES, description: "Derived from the feed: issue.labeled → queued, task.held → held (the injection gate; not claimable until task.released → queued), run.started → running, pr.opened, a finished run or asset.uploaded → review, task.changes_requested, task.requeued or a rejected asset.reviewed → queued, task.approved, pr.merged, issue.closed, task.closed or an approved asset.reviewed → done, run.failed or a failed run → failed." },
-      runner: nullable("string", { description: "runner:<name> that last claimed it." }),
+      id: { type: "string", description: "The task's ID on the board." },
+      channel: { type: "string", description: "The queue it is in: work/<project>." },
+      project: nullable("string"),
+      title: { type: "string" },
+      body: { type: "string" },
+      state: {
+        type: "string",
+        enum: TASK_STATES,
+        description:
+          "waiting: a task it needs has not completed. queued: ready for a worker. running: a worker holds it. review: its pull request (or its outputs) waits for a decision. held: the injection gate flagged its text. blocked: held for another reason, such as an eval step looking at the work. done: merged, or its outputs approved. failed: a worker gave up; requeue retries it. closed: called off.",
+      },
+      board_state: { type: "string", enum: ["waiting", "ready", "claimed", "blocked", "completed", "failed", "canceled"], description: "The board's own state behind `state`." },
       lane: nullable("string"),
-      pr: nullable("integer"),
-      pr_url: nullable("string", { format: "uri" }),
-      issue_url: { type: "string", format: "uri" },
-      branch: nullable("string", { description: "The run's head branch, relay/<lane>-<issue>." }),
-      summary: nullable("string", { description: "Summary line of the latest event." }),
-      run_summary: nullable("string", { description: "The lane's own summary from the latest finished run." }),
-      usage: {
-        type: "object",
-        nullable: true,
-        description: "Folded from the task's step.usage rows.",
-        properties: { runs: { type: "integer" }, tokens_in: { type: "integer" }, tokens_out: { type: "integer" }, cache_read: { type: "integer" }, cost_equiv: { type: "number" }, model: nullable("string"), duration_ms: nullable("integer") },
-      },
-      preview_url: nullable("string", { format: "uri", description: "The latest successful deployment of the task's branch (Vercel webhook or GitHub deployment_status)." }),
-      preview_state: { type: "string", enum: ["ready", "failed", "building", "none"], description: "ready: preview_url is current; building: a push landed after it; failed: the last build errored; none: no deployment seen." },
-      review: {
-        type: "object",
-        description: "The latest decision on the current PR.",
-        properties: { decided: { type: "string", nullable: true, enum: ["approved", "changes_requested", null] }, by: nullable("string"), at: nullable("string", { format: "date-time" }), note: nullable("string") },
-      },
-      merged_at: nullable("string", { format: "date-time" }),
-      asset: {
-        type: "object",
-        nullable: true,
-        description: "The latest asset uploaded on the task's issue when the deliverable is an asset rather than a PR (a production): asset.uploaded puts the task in review, asset.reviewed approves (done) or rejects (queued) it. Null on a PR task.",
-        properties: { id: { type: "string" }, kind: { type: "string", enum: ["image", "video", "audio", "pdf", "html", "file"] }, version: { type: "integer" } },
-      },
-      updated_at: nullable("string", { format: "date-time" }),
-      last_kind: nullable("string"),
-      events: { type: "integer" },
+      model: nullable("string", { description: "The model the lane is asked for; null is the lane's default." }),
+      repo: nullable("string", { description: "owner/name of the repository the work happens in." }),
+      base: nullable("string", { description: "The branch to start from instead of the default one." }),
+      issue: nullable("object", { description: "The GitHub issue the task answers.", properties: { repo: { type: "string" }, number: { type: "integer" } } }),
+      step: nullable("string", { description: "On a step's own task: the step it runs." }),
+      evaluates: nullable("string", { description: "On a step's own task: the task whose work it looks at." }),
+      branch: nullable("string", { description: "On a step's own task: that work's branch." }),
+      pr: nullable("object", { description: "The pull request a task in review (or one an eval is looking at) waits on.", properties: { repo: { type: "string" }, number: { type: "integer" }, url: { type: "string", format: "uri" } } }),
+      hold: nullable("object", { description: "Why it is held, for review, held and blocked.", properties: { kind: { type: "string", description: "awaiting_review, gate, awaiting_eval, or the board's own." }, reason: { type: "string" } } }),
+      result: nullable("string", { description: "How a completed task ended." }),
+      reason: nullable("string", { description: "Why a failed or closed task ended." }),
+      needs: { type: "array", items: { type: "string" }, description: "IDs of the tasks that must complete first." },
+      claim: nullable("object", { description: "Who holds it and until when.", properties: { actor: { type: "string" }, until: { type: "string", format: "date-time" } } }),
+      owner: { type: "string", description: "The principal that made it a task." },
+      created_at: { type: "string", format: "date-time" },
+      labels: { type: "object", additionalProperties: { type: "string" }, description: "The task's labels (lane, model, and any others). Labels steer; they carry no authority." },
     },
+  },
+  TaskUsage: {
+    type: "object",
+    description: "One model call a run posted in the task's thread.",
+    properties: {
+      kind: { type: "string", enum: ["run", "gate", "media", "step"] },
+      lane: { type: "string" },
+      tool: { type: "string" },
+      model: nullable("string"),
+      subscription: nullable("string"),
+      billing: { type: "string", enum: ["subscription", "gateway"] },
+      tokens_in: { type: "integer" },
+      tokens_out: { type: "integer" },
+      cache_read: { type: "integer" },
+      cache_write: { type: "integer" },
+      cost_equiv: { type: "number" },
+      duration_ms: { type: "integer" },
+      worker: { type: "string" },
+      outcome: { type: "string" },
+      step: { type: "string" },
+    },
+  },
+  TaskDetail: {
+    allOf: [
+      { $ref: "#/components/schemas/Task" },
+      {
+        type: "object",
+        properties: {
+          usage: { type: "array", items: { $ref: "#/components/schemas/TaskUsage" } },
+          notes: { type: "array", items: { type: "object", properties: { id: { type: "string" }, by: { type: "string" }, text: { type: "string" }, at: { type: "string", format: "date-time" } } } },
+        },
+      },
+    ],
+  },
+  TaskApproved: {
+    allOf: [{ $ref: "#/components/schemas/Task" }, { type: "object", properties: { pr_url: nullable("string", { format: "uri" }), merge_sha: nullable("string"), branch_deleted: { type: "boolean" } } }],
+  },
+  TaskClosed: {
+    allOf: [
+      { $ref: "#/components/schemas/Task" },
+      {
+        type: "object",
+        properties: {
+          github: { type: "object", properties: { pr_closed: { type: "boolean" }, issue_closed: { type: "boolean" }, error: { type: "string" } } },
+          canceled: { type: "array", items: { type: "string" }, description: "Step tasks that were looking at this one, called off with it." },
+          to_review: nullable("string", { description: "The work this task was a step of, when closing it sent that work to review." }),
+        },
+      },
+    ],
   },
   TaskList: { type: "object", properties: { tasks: { type: "array", items: { $ref: "#/components/schemas/Task" } }, count: { type: "integer" } } },
   TaskCreate: {
     type: "object",
     required: ["project", "title", "lane"],
     properties: {
-      project: { type: "string" },
-      title: { type: "string", maxLength: 256 },
-      body: { type: "string", description: "Markdown; the brief the lane reads." },
-      lane: laneSchema("The lane that runs the task."),
-      priority: { type: "string", enum: TASK_PRIORITIES },
+      project: { type: "string", description: "A project relay knows, registered with a repository." },
+      title: { type: "string", maxLength: 200 },
+      body: { type: "string", description: "Markdown: what to do and how to tell it is done." },
+      lane: laneSchema("The lane that runs the task. A lane no worker serves is refused."),
+      model: { type: "string", maxLength: 128, description: "The model the lane should use; the lane's default without it." },
+      needs: { type: "array", items: { type: "string" }, description: "IDs of tasks that must complete first; the task waits for them." },
+      base: { type: "string", description: "Start from this branch instead of the repository's default one." },
       idempotency_key: { type: "string", maxLength: 200 },
     },
   },
-  TaskCreated: { type: "object", required: ["task_id", "issue_url", "created", "task"], properties: { task_id: { type: "string" }, issue_url: { type: "string", format: "uri" }, created: { type: "boolean" }, task: { $ref: "#/components/schemas/Task" } } },
+  TaskCreated: { type: "object", required: ["task_id", "created", "task"], properties: { task_id: { type: "string" }, created: { type: "boolean" }, task: { $ref: "#/components/schemas/Task" } } },
   ExternalEvent: {
     type: "object",
     required: ["kind", "summary"],
@@ -643,59 +597,6 @@ export const integrationSchemas: Record<string, unknown> = {
   TokenCreate: { type: "object", required: ["name", "scopes"], properties: { name: { type: "string", maxLength: 80 }, scopes: { type: "array", items: { type: "string", enum: [...TOKEN_SCOPES] } } } },
   TokenCreated: { allOf: [{ $ref: "#/components/schemas/Token" }, { type: "object", required: ["token"], properties: { token: { type: "string", description: "The plaintext, shown once." } } }] },
   TokenRevoked: { type: "object", properties: { revoked: { $ref: "#/components/schemas/Token" } } },
-  Webhook: {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      project: nullable("string", { description: "null = every project" }),
-      url: { type: "string", format: "uri" },
-      events: { type: "array", items: { type: "string" }, description: `Kinds (${WEBHOOK_EVENT_KINDS.slice(0, 6).join(", ")}, …), prefixes ending in '.', or '*'.` },
-      active: { type: "boolean" },
-      has_bearer: { type: "boolean" },
-      created_by: { type: "string" },
-      created_at: { type: "string", format: "date-time" },
-    },
-  },
-  WebhookList: { type: "object", properties: { webhooks: { type: "array", items: { $ref: "#/components/schemas/Webhook" } }, count: { type: "integer" } } },
-  WebhookCreate: {
-    type: "object",
-    required: ["url", "events"],
-    properties: {
-      url: { type: "string", format: "uri" },
-      events: { type: "array", items: { type: "string" } },
-      project: { type: "string" },
-      bearer: { type: "string", description: "Sent as Authorization: Bearer on every delivery." },
-      secret: { type: "string", description: "HMAC key; generated when omitted." },
-    },
-  },
-  WebhookCreated: { type: "object", required: ["webhook", "secret"], properties: { webhook: { $ref: "#/components/schemas/Webhook" }, secret: { type: "string", description: "Shown once." } } },
-  Delivery: {
-    type: "object",
-    properties: {
-      delivery_id: { type: "string" },
-      webhook_id: { type: "string" },
-      status: { type: "string", enum: ["delivered", "failed"] },
-      attempts: { type: "integer" },
-      last_status: nullable("integer"),
-      error: nullable("string"),
-    },
-  },
-  DeliveryRow: {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      webhook_id: { type: "string" },
-      event_id: nullable("integer"),
-      kind: { type: "string" },
-      status: { type: "string", enum: ["pending", "delivered", "failed"] },
-      attempts: { type: "integer" },
-      last_error: nullable("string"),
-      delivered_at: nullable("string", { format: "date-time" }),
-      created_at: { type: "string", format: "date-time" },
-    },
-  },
-  WebhookDetail: { type: "object", properties: { webhook: { $ref: "#/components/schemas/Webhook" }, deliveries: { type: "array", items: { $ref: "#/components/schemas/DeliveryRow" } } } },
-  WebhookRemoved: { type: "object", properties: { removed: { type: "string" } } },
   WhoAmI: {
     type: "object",
     required: ["actor", "name", "scopes", "expires_at", "source"],

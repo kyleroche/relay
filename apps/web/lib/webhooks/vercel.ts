@@ -42,7 +42,7 @@ export function normalizeVercel(body: Json): NewEvent | null {
       ? `${target === "production" ? "Production" : "Preview"} deployed${prId ? ` for #${prId}` : ref ? ` for ${ref}` : ""}`
       : `${target === "production" ? "Production" : "Preview"} build failed${ref ? ` for ${ref}` : ""}`,
     url: ok ? (host ? `https://${host}` : null) : get<string>(p, "links.deployment") ?? null,
-    // ref and commit let deriveTaskStatus match the deployment to a task when the issue number is not in the branch
+    // ref and commit say which branch and commit was built, for a reader matching the preview to a task's pull request
     payload: { type, target, deployment_id: get(p, "deployment.id"), commit: get(meta, "githubCommitSha"), ref: ref || null, inspector: get<string>(p, "links.deployment") ?? null },
     dedupe_key: `vercel:${id}`,
   };

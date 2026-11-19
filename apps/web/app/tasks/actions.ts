@@ -1,29 +1,28 @@
 "use server";
 
-import { approveTask, closeTask, releaseTask, requestChanges, requeueTask, TaskCloseError, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
+import { board } from "@relay/core";
 import { revalidatePath } from "next/cache";
+import { siteBoard } from "@/lib/board";
 import { dataMode } from "@/lib/data";
-import { getDb } from "@/lib/db";
-import { dispatchAfter } from "@/lib/dispatch";
 import { CROSS_SITE_MESSAGE } from "@/lib/fetch-site";
 import { siteGitHub } from "@/lib/integrations";
 import { requestIsCrossSite, viewerActor } from "@/lib/session";
+import { approveFor, closeFor, releaseFor, requestChangesFor, requeueFor, type Asker } from "@/lib/task-ops";
+import { taskPagePath } from "@/lib/tasks";
 
-/** Every action on a task page answers with this. */
+/** Every action on a task answers with this. */
 export interface TaskActionResult {
   ok: boolean;
   message?: string;
   /** The task's state after the action. */
   state?: string;
-  /** GitHub refused the merge: task.merge_failed is in the feed and the task page shows it, so the button does not repeat it. */
-  mergeRefused?: boolean;
 }
 
-const NO_DB: TaskActionResult = { ok: false, message: "This needs a database; the deployment runs on demo data." };
+const DEMO: TaskActionResult = { ok: false, message: "This is the demo board; decisions need a deployment on a real one." };
 const SIGNED_OUT: TaskActionResult = { ok: false, message: "Your session has ended. Sign in again." };
 const CROSS_SITE: TaskActionResult = { ok: false, message: CROSS_SITE_MESSAGE };
 
-async function actor(): Promise<string | undefined> {
+async function viewer(): Promise<string | undefined> {
   try {
     return await viewerActor();
   } catch {
@@ -31,96 +30,57 @@ async function actor(): Promise<string | undefined> {
   }
 }
 
-/** The refusal every action starts with, or who is acting: no database, a cross-site request (lib/fetch-site.ts), no session. */
-async function gate(): Promise<{ refused: TaskActionResult; by?: never } | { refused?: never; by: string }> {
-  if (dataMode() !== "db") return { refused: NO_DB };
-  if (await requestIsCrossSite()) return { refused: CROSS_SITE };
-  const by = await actor();
-  return by ? { by } : { refused: SIGNED_OUT };
+/**
+ * One decision by the signed-in person: the refusals every action starts with (the demo board, a cross-site request
+ * (lib/fetch-site.ts), no session), then the board write as that person, then both pages that show the task.
+ */
+async function decide(taskId: string, run: (session: board.BoardSession, asker: Asker) => Promise<TaskActionResult>): Promise<TaskActionResult> {
+  if (dataMode() !== "db") return DEMO;
+  if (await requestIsCrossSite()) return CROSS_SITE;
+  const actor = await viewer();
+  if (!actor) return SIGNED_OUT;
+  try {
+    return await run(await siteBoard(), { actor });
+  } catch (e) {
+    return { ok: false, message: board.describeBoardError(e) };
+  } finally {
+    revalidatePath(taskPagePath(taskId));
+    revalidatePath("/");
+  }
 }
 
-const describe = (e: unknown): string => (e instanceof TaskReviewError || e instanceof TaskRequeueError || e instanceof TaskCloseError || e instanceof TaskGateError || e instanceof Error ? e.message : String(e));
-
-function pagePath(taskId: string): string {
-  const [repo, n] = taskId.split("#");
-  return `/tasks/${repo}/${n}`;
-}
-
-/** Approve and merge: the same core call the API and the MCP tool make, attributed to the signed-in person. */
+/** Approve: squash-merge the pull request the task's hold names (or accept its outputs) and complete the task. */
 export async function approveTaskAction(taskId: string): Promise<TaskActionResult> {
-  const g = await gate();
-  if (g.refused) return g.refused;
-  try {
-    const r = await approveTask(await getDb(), await siteGitHub(), taskId, g.by);
-    dispatchAfter(r.events);
-    revalidatePath(pagePath(taskId));
-    revalidatePath("/");
-    return { ok: true, state: r.task.state };
-  } catch (e) {
-    revalidatePath(pagePath(taskId)); // a merge refusal wrote task.merge_failed; the page shows it once
-    return { ok: false, message: describe(e), mergeRefused: e instanceof TaskReviewError && e.status === 502 };
-  }
+  return decide(taskId, async (session, asker) => {
+    const r = await approveFor(session, await siteGitHub(), asker, taskId);
+    return { ok: true, state: r.task.state, message: r.pr_url ? `Merged${r.merge_sha ? ` in ${r.merge_sha.slice(0, 7)}` : ""}${r.branch_deleted ? "; the branch is deleted" : ""}.` : "Outputs approved." };
+  });
 }
 
-/** Request changes with a note: a PR comment plus task.changes_requested; the task is queued again. */
+/** Request changes: the note goes in the thread and on the pull request, and the task is queued for the next run. */
 export async function requestChangesAction(taskId: string, note: string): Promise<TaskActionResult> {
-  const g = await gate();
-  if (g.refused) return g.refused;
-  if (!note.trim()) return { ok: false, message: "Say what should change; the note goes to the PR and to the next run." };
-  try {
-    const r = await requestChanges(await getDb(), await siteGitHub(), taskId, g.by, note);
-    dispatchAfter(r.events);
-    revalidatePath(pagePath(taskId));
-    revalidatePath("/");
-    return { ok: true, state: r.task.state };
-  } catch (e) {
-    return { ok: false, message: describe(e) };
-  }
+  if (!note.trim()) return { ok: false, message: "Say what should change; the note goes in the thread and to the next run." };
+  return decide(taskId, async (session, asker) => ({ ok: true, state: (await requestChangesFor(session, await siteGitHub(), asker, taskId, note)).state }));
 }
 
-/** Release a task the injection gate held: task.released is written and the task is queued again (the next worker grades it again). */
-export async function releaseTaskAction(taskId: string, note?: string | null): Promise<TaskActionResult> {
-  const g = await gate();
-  if (g.refused) return g.refused;
-  try {
-    const r = await releaseTask(await getDb(), taskId, g.by, { note: note ?? null });
-    dispatchAfter(r.events);
-    revalidatePath(pagePath(taskId));
-    revalidatePath("/");
-    return { ok: true, state: r.task.state };
-  } catch (e) {
-    return { ok: false, message: describe(e) };
-  }
+/** Release a task the injection gate held, for its text as it stands. */
+export async function releaseTaskAction(taskId: string): Promise<TaskActionResult> {
+  return decide(taskId, async (session, asker) => ({ ok: true, state: (await releaseFor(session, asker, taskId)).state }));
 }
 
-/** Requeue, optionally on another lane: the agent:* label moves, a live claim is released, task.requeued is written. */
-export async function requeueTaskAction(taskId: string, input: { lane?: string | null; reason?: string | null }): Promise<TaskActionResult> {
-  const g = await gate();
-  if (g.refused) return g.refused;
-  try {
-    const r = await requeueTask(await getDb(), await siteGitHub(), taskId, g.by, { lane: input.lane ?? null, reason: input.reason ?? null });
-    dispatchAfter(r.events);
-    revalidatePath(pagePath(taskId));
-    revalidatePath("/");
-    const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
-    return { ok: true, state: r.task.state, ...(github && !github.relabelled ? { message: `Queued, but the GitHub label did not move: ${github.error ?? "unknown error"}.` } : {}) };
-  } catch (e) {
-    return { ok: false, message: describe(e) };
-  }
+/** Requeue, optionally on another lane or model; `model: null` goes back to the lane's default. */
+export async function requeueTaskAction(taskId: string, input: { lane?: string; model?: string | null }): Promise<TaskActionResult> {
+  return decide(taskId, async (session, asker) => {
+    const t = await requeueFor(session, asker, taskId, { ...(input.lane ? { lane: input.lane } : {}), ...(input.model !== undefined ? { model: input.model } : {}) });
+    return { ok: true, state: t.state };
+  });
 }
 
-/** Close without a merge: the issue and an open PR are closed on GitHub (best effort), a live claim released, task.closed written. */
-export async function closeTaskAction(taskId: string, reason?: string | null): Promise<TaskActionResult> {
-  const g = await gate();
-  if (g.refused) return g.refused;
-  try {
-    const r = await closeTask(await getDb(), await siteGitHub(), taskId, g.by, { reason: reason ?? null });
-    dispatchAfter(r.events);
-    revalidatePath(pagePath(taskId));
-    revalidatePath("/");
-    const github = r.events[0]?.payload.github as { closed: boolean; error?: string } | null | undefined;
-    return { ok: true, state: r.task.state, ...(github && !github.closed ? { message: `Closed in relay, but the issue did not close on GitHub: ${github.error ?? "unknown error"}.` } : {}) };
-  } catch (e) {
-    return { ok: false, message: describe(e) };
-  }
+/** Close without a merge: canceled on the board, its open pull request and its issue closed on GitHub (best effort). */
+export async function closeTaskAction(taskId: string, reason?: string): Promise<TaskActionResult> {
+  return decide(taskId, async (session, asker) => {
+    const r = await closeFor(session, await siteGitHub(), asker, taskId, reason?.trim() || undefined);
+    const also = [r.github.pr_closed ? "its pull request is closed" : "", r.github.issue_closed ? "its issue is closed" : "", r.to_review ? `${r.to_review} goes to review without it` : "", r.github.error ? `GitHub: ${r.github.error}` : ""].filter(Boolean);
+    return { ok: true, state: r.task.state, ...(also.length ? { message: `${also.join("; ")}.` } : {}) };
+  });
 }

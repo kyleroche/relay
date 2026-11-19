@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { Alert } from "@/components/alert";
 import { AutoRefresh } from "@/components/board/auto-refresh";
 import { Board } from "@/components/board/board";
 import { ProjectFilter } from "@/components/board/project-filter";
@@ -7,9 +8,10 @@ import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
-import { registeredLanes as coreRegisteredLanes } from "@relay/core";
-import { dataMode, getAssets, getBoard, getProjects, getWorkers } from "@/lib/data";
-import { getDb } from "@/lib/db";
+import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
+import { openTasks, recentTasks } from "@/lib/board-read";
+import { syncFeedAfter } from "@/lib/board-watch";
+import { dataMode, getAssets, getProjects } from "@/lib/data";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
 
 /** The board: what a signed-in viewer sees at /. `app/page.tsx` picks between this and the public landing. */
@@ -20,22 +22,27 @@ export const BOARD_METADATA: Metadata = {
   alternates: { canonical: "/" },
 };
 
+/** The newest finished tasks the board keeps; History has the rest. */
+const DONE_SHOWN = 10;
+
 export async function BoardPage({ all, project }: { all?: string; project?: string } = {}) {
   const db = dataMode() === "db";
-  const [tasks, workers, pending, projects, registeredLanes] = await Promise.all([
-    getBoard({ limit: 300, doneLimit: 10, ...(project ? { project } : {}) }),
-    getWorkers(),
+  syncFeedAfter(siteBoard);
+  const [read, pending, projects] = await Promise.all([
+    Promise.all([openTasks(project), recentTasks({ states: ["done", "closed"], limit: DONE_SHOWN, ...(project ? { project } : {}) }), siteWorkers()]).then(
+      ([open, finished, workers]) => ({ tasks: [...open, ...finished.tasks], workers, problem: null }),
+      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e) }),
+    ),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
-    // the Requeue sheet's "Registered" lanes: what workers beyond relay work serve (the demo dataset has none)
-    db ? getDb().then(coreRegisteredLanes) : Promise.resolve([] as string[]),
   ]);
   const now = Date.now();
-  const live = workers.filter((w) => !w.retired);
-  const online = live.filter((w) => w.status !== "offline").length;
+  const tasks = read.tasks;
+  const live = read.workers.filter((w) => !w.retired);
+  const online = live.filter((w) => w.state !== "offline").length;
   const offline = live.length - online;
   const waiting = tasks.filter((t) => t.state === "review" || t.state === "held").length;
-  const moving = tasks.filter((t) => t.state === "queued" || t.state === "claimed" || t.state === "running").length;
+  const moving = tasks.filter((t) => t.state === "waiting" || t.state === "queued" || t.state === "running" || t.state === "blocked").length;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
   const known = project ? projects.some((p) => p.slug === project) : true;
 
@@ -48,7 +55,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
             <h1 className="sr-only">Board</h1>
             <HomeTabs active="board" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Every task is a GitHub issue; the column is its state, read from the feed. Decide on the card: approve merges a PR or accepts an asset, request changes or reject sends it back with your note, release lifts a hold, close finishes it without a merge. Done keeps the newest ten; History has the rest. The board refreshes itself.
+              Every task is a thread in its project&apos;s queue on the team&apos;s Vercel Board; the column is its state there. Decide on the card: approve merges the pull request or accepts the outputs, request changes sends it back with your note, release lifts the gate&apos;s hold, close finishes it without a merge. Done keeps the newest ten; History has the rest. The board refreshes itself.
             </p>
             <ProjectFilter projects={projects} current={project} className="mt-2" />
           </div>
@@ -86,17 +93,22 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
         </div>
         {!db && <DemoNotice className="mt-3" />}
       </section>
-      {db && tasks.length === 0 && !project && (
+      {read.problem && (
+        <Alert tone="bad" className="mb-4">
+          The board could not be read. {read.problem}
+        </Alert>
+      )}
+      {db && !read.problem && read.tasks.length === 0 && !project && (
         <EmptyState title="No tasks yet" command={`relay task create --title "…" --lane claude`} className="mb-4">
-          A task is a GitHub issue with an agent:* label. Open one with the command, the relay_task_create tool, or by labelling an issue; it appears in Queue here.
+          A task is a thread in a project&apos;s queue on the board. Open one with the command, the relay_task_create tool, or by labelling a GitHub issue agent:&lt;lane&gt;; it appears in Queue here.
         </EmptyState>
       )}
-      {tasks.length === 0 && project && (
+      {!read.problem && read.tasks.length === 0 && project && (
         <EmptyState title={known ? `No tasks in ${project}` : `No project ${project}`} command={known ? `relay task create --project ${project} --title "…" --lane claude` : `relay project add ${project} --repo owner/name`} className="mb-4">
-          {known ? "Nothing in motion, failed this week or merged for this project. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
+          {known ? "This project's queue is empty. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} registeredLanes={registeredLanes} />
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} />
     </>
   );
 }

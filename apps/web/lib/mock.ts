@@ -17,7 +17,6 @@ import type {
   ModelInfo,
   NewEvent,
   Subscription,
-  Worker,
 } from "./types.ts";
 
 export interface MockProject {
@@ -200,7 +199,6 @@ interface Dataset {
   events: FeedEvent[];
   decisions: Decision[];
   models: ModelInfo[];
-  workers: Worker[];
   assets: Asset[];
   nextId: number;
 }
@@ -840,75 +838,7 @@ function build(now: number): Dataset {
       m.status === "pending" ? null : new Date(now - (m.status === "stale" ? 41 : m.id.includes("gpt") ? 2 : 12) * 24 * H).toISOString(),
   }));
 
-  const lastRunner = (name: string) => withIds.filter((e) => e.actor === name).at(-1)?.ts ?? new Date(now - 3 * 24 * H).toISOString();
-  const today = new Date(now);
-  today.setHours(0, 0, 0, 0);
-  const runsToday = (name: string) => withIds.filter((e) => e.actor === name && e.kind === "run.started" && new Date(e.ts).getTime() >= today.getTime()).length;
-  const inProgress = (name: string) => {
-    const started = withIds.filter((e) => e.actor === name && e.kind === "run.started");
-    const last = started.at(-1);
-    if (!last) return null;
-    const finished = withIds.some((e) => e.actor === name && (e.kind === "run.finished" || e.kind === "run.failed") && e.issue === last.issue && e.ts > last.ts);
-    return finished ? null : { project: last.project as string, issue: last.issue as number, startedAt: last.ts };
-  };
-
-  const workers: Worker[] = [
-    {
-      name: "studio",
-      host: "studio.local",
-      labels: ["xcode", "gpu"],
-      version: "0.1.0",
-      lastSeen: new Date(now - 40_000).toISOString(),
-      status: "online",
-      retired: false,
-      lanes: ["claude", "codex", "grok"],
-      runsToday: runsToday(RUNNER),
-      pollMs: 15_000,
-      current: inProgress(RUNNER),
-    },
-    {
-      name: "loft",
-      host: "loft.local",
-      labels: [],
-      version: "0.1.0",
-      lastSeen: lastRunner(RUNNER_ALT) > new Date(now - 20 * MIN).toISOString() ? new Date(now - 3 * MIN).toISOString() : new Date(now - 14 * MIN).toISOString(),
-      status: "idle",
-      retired: false,
-      lanes: ["claude", "codex"],
-      runsToday: runsToday(RUNNER_ALT),
-      pollMs: 300_000,
-      current: inProgress(RUNNER_ALT),
-    },
-    {
-      name: "field",
-      host: "field-laptop",
-      labels: [],
-      version: "0.0.9",
-      lastSeen: new Date(now - 3 * 24 * H - 5 * H).toISOString(),
-      status: "offline",
-      retired: false,
-      lanes: ["claude"],
-      runsToday: 0,
-      pollMs: null,
-      current: null,
-    },
-    {
-      // the host worker this Mac ran before it moved to the container tier: silent for twelve days, so retired
-      name: "studio-host",
-      host: "studio.local",
-      labels: ["xcode"],
-      version: "0.0.8",
-      lastSeen: new Date(now - 12 * 24 * H).toISOString(),
-      status: "offline",
-      retired: true,
-      lanes: ["claude", "codex"],
-      runsToday: 0,
-      pollMs: null,
-      current: null,
-    },
-  ];
-
-  return { now, events: withIds, decisions, models, workers, assets, nextId: withIds.length + 1 };
+  return { now, events: withIds, decisions, models, assets, nextId: withIds.length + 1 };
 }
 
 declare global {
