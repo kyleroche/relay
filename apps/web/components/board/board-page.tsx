@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Alert } from "@/components/alert";
+import { board } from "@relay/core";
 import { AutoRefresh } from "@/components/board/auto-refresh";
 import { Board } from "@/components/board/board";
 import { ProjectFilter } from "@/components/board/project-filter";
@@ -9,7 +10,7 @@ import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
 import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
-import { openTasks, recentTasks } from "@/lib/board-read";
+import { newestFinished, openTasks } from "@/lib/board-read";
 import { syncFeedAfter } from "@/lib/board-watch";
 import { dataMode, getAssets, getProjects } from "@/lib/data";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
@@ -29,9 +30,9 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
   const db = dataMode() === "db";
   syncFeedAfter(siteBoard);
   const [read, pending, projects] = await Promise.all([
-    Promise.all([openTasks(project), recentTasks({ states: ["done", "closed"], limit: DONE_SHOWN, ...(project ? { project } : {}) }), siteWorkers()]).then(
-      ([open, finished, workers]) => ({ tasks: [...open, ...finished.tasks], workers, problem: null }),
-      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e) }),
+    Promise.all([openTasks(project), newestFinished(DONE_SHOWN, project), siteWorkers(), siteBoard()]).then(
+      ([open, finished, workers, session]) => ({ tasks: [...open, ...finished], workers, problem: null, decides: board.mayIn(session.me.can, board.workChannel("any"), "manage") }),
+      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true }),
     ),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
@@ -96,6 +97,11 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
       {read.problem && (
         <Alert tone="bad" className="mb-4">
           The board could not be read. {read.problem}
+        </Alert>
+      )}
+      {db && !read.problem && !read.decides && (
+        <Alert tone="warn" className="mb-4">
+          This deployment can open tasks but does not manage the queues (<code>work/</code>) on the board, so it cannot approve, release, requeue or close a task someone else opened. Someone who manages the board runs <code>relay setup --board --site-project &lt;this project&gt;</code> once.
         </Alert>
       )}
       {db && !read.problem && read.tasks.length === 0 && !project && (

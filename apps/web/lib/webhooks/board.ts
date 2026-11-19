@@ -10,12 +10,9 @@
  * not make GitHub retry it.
  */
 import { board, repo, type Db } from "@relay/core";
-import { actorBoard } from "../board.ts";
+import { taskBrief } from "../board-watch.ts";
 import { laneOf, laneOfLabels } from "./github.ts";
 import { productionFromLabels } from "./project.ts";
-
-/** Who the site writes as when GitHub is what asked. */
-export const INTAKE_ACTOR = "bot:github";
 
 type Json = Record<string, unknown>;
 const obj = (v: unknown): Json | undefined => (v && typeof v === "object" && !Array.isArray(v) ? (v as Json) : undefined);
@@ -52,9 +49,23 @@ export async function openIssueTask(deps: IssueIntake, eventName: string, payloa
   const project = candidates.find((p) => p.slug === named) ?? candidates[0];
   if (!project) return undefined;
   const ref = `${repoName}#${number}`;
-  // one profile for every delivery, so the issue's key finds its task whoever labelled it; who did is in the feed row.
-  // A lane no worker serves is refused (the route logs it): a label is easy to mistype, and nobody would claim the task.
-  return board.openServedTask(actorBoard(deps.session, INTAKE_ACTOR), { project: project.slug, repo: repoName, title: str(issue.title) ?? ref, body: str(issue.body) ?? "", lane, issue: ref, idempotencyKey: `issue:${ref}` });
+  const as = deps.session.board.as(board.INTAKE_PROFILE);
+  // One profile and one key per issue, so the `opened` and `labeled` deliveries of a new issue, a redelivery, and the
+  // same label from someone else all find one task. A label put on again after that task finished opens the next
+  // one, keyed to the one before; a redelivery of an older label is older than the task it would follow and opens none.
+  const labelledAt = str(issue.updated_at) ?? new Date().toISOString();
+  let key = `issue:${ref}`;
+  for (let n = 0; n < 20; n++) {
+    const earlier = await as.posted(key).catch(() => undefined);
+    if (!earlier?.task) break;
+    const task = board.toTask(earlier);
+    if (task.state !== "done" && task.state !== "closed") return task;
+    if (labelledAt <= task.created_at) return undefined;
+    key = `issue:${ref}:after:${task.id}`;
+  }
+  // A lane no worker serves is refused (the route records it): a label is easy to mistype, and nobody would claim the task.
+  const input = { project: project.slug, repo: repoName, title: str(issue.title) ?? ref, body: str(issue.body) ?? "", lane, issue: ref, idempotencyKey: key };
+  return (await board.openServedTask(as, input, { beforeReady: board.briefBeforeReady(deps.session, (task) => taskBrief(deps.db, task)) })).task;
 }
 
 /** The task a merged `pull_request` delivery completes, or undefined when none waits on that pull request. */

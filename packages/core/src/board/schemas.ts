@@ -253,18 +253,32 @@ export const workerText = (w: WorkerBlock): string => block(WORKER_SCHEMA, { ...
 export const assetText = (a: AssetBlock): string => block(ASSET_SCHEMA, { ...a });
 
 /**
- * Words that are not relay's own, made safe to post: a fence that would be a data block (`json#name@1`) becomes a
- * plain json fence. Relay believes a block by who wrote the message, and relay writes other people's words (a lane's
- * summary, an eval's findings, a review note) as itself, so those words must never carry one. It also keeps a
- * malformed fence in a model's output from making the board refuse the whole message.
+ * Words that are not relay's own, made safe to post: a fence that would be a data block becomes a plain json fence.
+ * It follows the board's own parser: a line that opens a fence with backticks or tildes, any whitespace, then
+ * `json#`. Who may write data is decided by who wrote the message (`isTrustedActor`), not by this; this keeps a
+ * task's own text from carrying a second routing block, a worker's log from carrying one a model wrote, and a
+ * malformed fence from making the board refuse the whole message.
  */
-export const prose = (text: string): string => text.replace(/(`{3,}[ \t]*)json#/g, "$1json ");
+export const prose = (text: string): string => text.replace(/^( {0,3}(?:`{3,}|~{3,})[^\S\r\n]*)json#/gmu, "$1json ");
 
 /** A message's text without its fenced blocks: what a person wrote around the data. */
 export const withoutBlocks = (text: string): string => text.replace(/```json#[a-z0-9-]+@\d+\n[\s\S]*?\n```/g, "").replace(/\n{3,}/g, "\n\n").trim();
 
-/** Whether an actor is one of the trusted principals or a profile of one (`principal+profile`). */
-export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean => trusted.some((t) => actor === t || actor.startsWith(`${t}+`));
+/**
+ * The profiles relay's own code writes as: a worker's lanes (`relay-<worker>-<lane>`), a site's own writes
+ * (`relay-site`) and its brief (`relay-brief`). A site writes for a person or a bot as a profile that never starts
+ * this way (`actorProfile`), so what a caller's words say is never relay's data, whatever principal carried them.
+ */
+export const RELAY_PROFILE = "relay-";
+/** A board kept in this process names its own client this, and a profile of it `board:client:<profile>` where a served board says `principal+profile`. */
+const LOCAL_CLIENT = "board:client";
+
+/**
+ * Whether relay believes data from this actor: a trusted principal itself (a person at the CLI), or one of relay's
+ * own profiles of it. Any other profile of a trusted principal is someone the site wrote for, and is not.
+ */
+export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean =>
+  trusted.some((t) => actor === t || actor.startsWith(`${t}+${RELAY_PROFILE}`) || (t === LOCAL_CLIENT && actor.startsWith(`${t}:${RELAY_PROFILE}`)));
 
 /**
  * The blocks of one schema in a thread's replies that a trusted author wrote, oldest first, each with its reply's

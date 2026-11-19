@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { BoardError, type Board, type ClaimedTask, type ThreadView } from "@vercel/board";
 import { describeBoardError } from "../board/client.ts";
-import { branchFor, evalHoldReason, HOLD, isBranchOf, LABEL, parseEvalHold, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
+import { branchFor, evalHoldReason, HOLD, isBranchName, isBranchOf, LABEL, parseEvalHold, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
 import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, prose, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
 import { fullBody, gateInput, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
@@ -503,7 +503,7 @@ async function runStepTask(j: Job, at: { step: string; evaluates: string; branch
     return j.finish("done", () => j.claim.complete(j.report.summary));
   }
   // every failure from here is `j.fail`, which sends the work to a person as it is (runJob)
-  if (!at.branch || !(await fetched(j, at.branch))) return j.fail(`the branch ${at.branch ?? "(none)"} it was to look at is not on ${j.repo}`);
+  if (!at.branch || !isBranchName(at.branch) || !(await fetched(j, at.branch))) return j.fail(`the branch ${at.branch ?? "(none)"} it was to look at is not on ${j.repo}`);
   j.report.branch = at.branch;
   await j.git(["checkout", "-q", "--detach", `origin/${at.branch}`]);
   const model = step.model ?? j.task.model ?? undefined;
@@ -733,7 +733,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   const keeper = keepClaim(claim, { ...(opts.renewMs ? { everyMs: opts.renewMs } : {}), log });
   /** Words in the thread: a log line, a lane's summary. Never data: `prose` sees to that. */
   const say = (text: string, kind: (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE], sync = false) => board.reply(id, { text: prose(text.slice(0, 9_000)), labels: { [LABEL.relay]: kind }, ...(sync ? {} : { noSync: true }) });
-  const usageOf: Job["usageOf"] = (r, kind) => ({ kind, lane: kind === "gate" ? "gate" : lane, tool: r.tool, model: r.model ?? null, subscription: r.subscription ?? null, billing, tokens_in: r.tokensIn, tokens_out: r.tokensOut, cache_read: r.cacheRead, cache_write: r.cacheWrite, cost_equiv: r.costEquiv, duration_ms: r.durationMs, worker: opts.workerName });
+  const usageOf: Job["usageOf"] = (r, kind) => ({ kind, lane: kind === "gate" ? "gate" : lane, tool: r.tool, model: r.model ?? null, subscription: r.subscription ?? null, billing, tokens_in: r.tokensIn, tokens_out: r.tokensOut, cache_read: r.cacheRead, cache_write: r.cacheWrite, cost_equiv: r.costEquiv, duration_ms: Math.round(r.durationMs), worker: opts.workerName });
 
   /** Report how the job ended: the words for people, then the run and its usage as data, then the task's own state. */
   const finish: Job["finish"] = async (outcome, settle, extra = {}) => {
@@ -789,6 +789,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     await host.clone(repo, dir);
     const git = (args: string[]) => must("git", args, { cwd: dir });
     const trunk = await host.defaultBranch(repo, dir);
+    // a base reaches git as an argument, and a task can be opened by hand on the board with anything in its block
+    if (task.base && !isBranchName(task.base)) return await fail(`the task's base '${task.base.slice(0, 80)}' is not a branch name`);
     const base = task.base ?? trunk;
     await git(["fetch", "-q", "origin", trunk, ...(base === trunk ? [] : [base])]);
     // the project's steps as its default branch has them, whatever branch the task starts from, so a task cannot pick its own judges

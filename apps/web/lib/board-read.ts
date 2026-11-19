@@ -35,11 +35,38 @@ export async function recentTasks(opts: board.RecentTasksOptions = {}): Promise<
   return board.recentTasks((await siteBoard()).board, opts);
 }
 
-/** How many tasks wait for a person: in review, and held by the gate. Both are few, so this is two short reads. */
+declare global {
+  // eslint-disable-next-line no-var
+  var __relayFinished: Map<string, { at: number; read: Promise<board.BoardTask[]> }> | undefined;
+}
+const FINISHED_TTL_MS = 20_000;
+
+/**
+ * The newest finished tasks for the board's Done column, read at most once every 20 seconds per instance and
+ * project: the board page re-renders that often for everyone looking at it, and across projects the read is one
+ * request per queue. A finished task takes that long to show; the columns that need a decision are never cached.
+ */
+export function newestFinished(limit: number, project?: string, now: number = Date.now()): Promise<board.BoardTask[]> {
+  const cache = (globalThis.__relayFinished ??= new Map());
+  const key = `${project ?? ""}:${limit}`;
+  const hit = cache.get(key);
+  if (hit && now - hit.at < FINISHED_TTL_MS) return hit.read;
+  const read = recentTasks({ states: ["done", "closed"], limit, ...(project ? { project } : {}) }).then(
+    (r) => r.tasks,
+    (e: unknown) => {
+      if (cache.get(key)?.read === read) cache.delete(key);
+      throw e;
+    },
+  );
+  cache.set(key, { at: now, read });
+  return read;
+}
+
+/** How many tasks wait for a person: in review, and held by the gate. Both are holds on the board, so it is one read of what is held. */
 export async function waitingOnYou(): Promise<{ review: number; held: number }> {
   const session = await siteBoard();
-  const [review, held] = await Promise.all([board.listTasks(session.board, { state: "review", limit: 200 }), board.listTasks(session.board, { state: "held", limit: 200 })]);
-  return { review: review.length, held: held.length };
+  const waiting = await board.listTasks(session.board, { state: ["review", "held"], limit: 400 });
+  return { review: waiting.filter((t) => t.state === "review").length, held: waiting.filter((t) => t.state === "held").length };
 }
 
 /** The worker whose lane profile holds a claim (`relay-<worker>-<lane>`), or undefined for a claim nobody here made. */

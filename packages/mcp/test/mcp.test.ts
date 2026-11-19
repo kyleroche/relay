@@ -294,7 +294,7 @@ describe("relay mcp tools", () => {
       expect(made).toMatchObject({ state: "queued", lane: "claude", repo: "acme/demo" });
       expect(jsonOf<{ task_id: string }>(await call("relay_task_create", { project: "demo", title: "Add dark mode", idempotency_key: "k1" })).task_id).toBe(made.task_id);
       const root = (await s.b.thread(made.task_id)).message;
-      expect(root.by.actor.endsWith("bot-oauth-grok-bot")).toBe(true);
+      expect(root.by.actor.endsWith("bot-grok-bot")).toBe(true);
       const got = jsonOf<{ title: string; body: string; usage: unknown[] }>(await call("relay_task_get", { task_id: made.task_id }));
       expect(got).toMatchObject({ title: "Add dark mode", body: "Toggle in the header.", usage: [] });
       expect(jsonOf<{ count: number }>(await call("relay_task_list", { project: "demo" })).count).toBe(1);
@@ -303,7 +303,7 @@ describe("relay mcp tools", () => {
       await grok.server.close();
     });
 
-    it("review: tasks:write sends back with a note that carries no data, then approves and merges; tasks:read is refused", async () => {
+    it("review: tasks:write sends back with a note that carries no data; the opener cannot approve, another bot can; tasks:read is refused", async () => {
       const s = await site();
       const grok = await s.as("token:oauth:grok-bot", ["tasks:write", "tasks:read"]);
       const reader = await s.as("token:oauth:reader", ["tasks:read"]);
@@ -320,15 +320,21 @@ describe("relay mcp tools", () => {
       expect(back.state).toBe("queued");
       const note = (await s.b.thread(id)).replies.find((m) => m.text.startsWith("Use the header."))!;
       expect(note.blocks).toEqual([]);
-      expect(note.by.actor.endsWith("bot-oauth-grok-bot")).toBe(true);
+      expect(note.by.actor.endsWith("bot-grok-bot")).toBe(true);
       expect(s.comments.at(-1)).toContain("Use the header.");
 
       await s.toReview(id);
-      const ok = jsonOf<{ state: string; merge_sha: string }>(await grok.client.callTool({ name: "relay_task_approve", arguments: { id } }));
+      // the bot that opened the task does not approve it; another bot with tasks:write does
+      const own = await grok.client.callTool({ name: "relay_task_approve", arguments: { id } });
+      expect(own.isError).toBe(true);
+      expect(textOf(own)).toMatch(/opened .* and cannot approve it/);
+      expect(s.merged).toEqual([]);
+      const chief = await s.as("token:oauth:chief", ["tasks:write"]);
+      const ok = jsonOf<{ state: string; merge_sha: string }>(await chief.client.callTool({ name: "relay_task_approve", arguments: { id } }));
       expect(ok).toMatchObject({ state: "done", merge_sha: "0123456789" });
       expect(s.merged).toEqual([9]);
-      expect((await grok.client.callTool({ name: "relay_task_approve", arguments: { id } })).isError).toBe(true);
-      for (const c of [grok, reader]) {
+      expect((await chief.client.callTool({ name: "relay_task_approve", arguments: { id } })).isError).toBe(true);
+      for (const c of [grok, reader, chief]) {
         await c.client.close();
         await c.server.close();
       }
@@ -360,7 +366,7 @@ describe("relay mcp tools", () => {
       expect(textOf(await writer.client.callTool({ name: "relay_task_release", arguments: { id } }))).toMatch(/tokens:write/);
       const own = await opener.client.callTool({ name: "relay_task_release", arguments: { id } });
       expect(own.isError).toBe(true);
-      expect(textOf(own)).toMatch(/opened .* and cannot release it/);
+      expect(textOf(own)).toMatch(/wrote part of the text of .* and cannot release it/);
       expect(jsonOf<{ state: string }>(await chief.client.callTool({ name: "relay_task_release", arguments: { id } })).state).toBe("queued");
       const again = await chief.client.callTool({ name: "relay_task_release", arguments: { id } });
       expect(again.isError).toBe(true);

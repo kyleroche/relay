@@ -140,6 +140,21 @@ export function parsePullUrl(url: string | undefined): { repo: string; number: n
   return m ? { repo: m[1]!, number: Number(m[2]), url: m[0] } : undefined;
 }
 
+/** A branch name safe to hand to git as an argument: no leading dash, no `..`, nothing a shell or a refspec reads specially. */
+export const isBranchName = (s: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(s) && !s.includes("..") && !s.includes("//") && !/[./]$/.test(s) && !s.endsWith(".lock");
+
+/**
+ * Whether a caller may do something in a channel, from the board's own answer about them (`me().can`: a map from
+ * channel pattern to permissions). The most specific pattern decides: the channel itself, then the longest subtree,
+ * then `*`.
+ */
+export function mayIn(can: Record<string, readonly string[]> | undefined, channel: string, permission: string): boolean {
+  const patterns = Object.keys(can ?? {});
+  const subtree = patterns.filter((p) => p.endsWith("/") && channel.startsWith(p)).sort((a, z) => z.length - a.length)[0];
+  const decides = patterns.includes(channel) ? channel : (subtree ?? (patterns.includes("*") ? "*" : undefined));
+  return decides !== undefined && can![decides]!.includes(permission);
+}
+
 /** The profile a worker writes as on a lane: `relay-<worker>-<lane>`, within the board's 32 characters (letters, digits, hyphens, a letter first). */
 export function workerProfile(worker: string, lane: string): string {
   const clean = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");

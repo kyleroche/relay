@@ -73,9 +73,9 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a thread in the project's queue on the team's Vercel Board, labelled with its lane (and model). Returns task_id (the board's message ID) and its state. Refused for a lane that is neither built in nor served by a worker. Idempotent on idempotency_key." },
   { name: "relay_task_get", scope: "tasks:read", description: "One task by ID with its state: waiting (a task it needs has not completed), queued, running, review (a pull request or outputs wait for a decision), held (the injection gate flagged the text), blocked (held for another reason, such as an eval looking at it), done, failed or closed. Plus the lane, model, pull request, the hold and its reason, who holds the claim, the last result, usage rows and the latest notes in its thread." },
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks on the board, oldest first; filter by project and state. Default state=open (everything not done or closed). state=review is what waits for a decision; state=held is what the injection gate stopped and a person should read." },
-  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task (or, for a task whose deliverable is its attached outputs, completes it). Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review." },
+  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task (or, for a task whose deliverable is its attached outputs, completes it). Only the pull request the runner's hold names is merged, and only when its branch is the task's own. A bot never approves a task it opened. GitHub's refusal comes back as an error and the task stays in review." },
   { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: the note goes in the task's thread and as a comment on the pull request, and the task is queued; the next run reads the note and pushes to the same pull request." },
-  { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held) for the text as it stands: the task is queued and the gate does not grade that text again; anything added later is graded. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task it opened itself." },
+  { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held) for the text as it stands: the task is queued and the gate does not grade that text again; anything added later is graded. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task whose text it wrote any part of (the task itself, or a note in its thread)." },
   { name: "relay_task_close", scope: "tasks:write", description: "Close a task without a merge from any state but done or closed: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub (best effort). For a task opened by mistake, against a spec the repo does not match, or a duplicate." },
   { name: "relay_task_requeue", scope: "tasks:write", description: "Put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it; relay_task_close stops a run." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
@@ -131,7 +131,7 @@ export interface RelayServerOptions {
    * named for whoever asked. Without it the task tools answer with how to get one.
    */
   board?: { open: () => Promise<board.BoardSession>; asActor: boolean };
-  /** GitHub access for relay_task_approve, relay_task_request_changes and relay_task_close (env token on the web, the gh login locally). Without it the review tools answer with an error; requeue records the missing credential and queues anyway. */
+  /** GitHub access for relay_task_approve, relay_task_request_changes and relay_task_close (the GitHub App or a token on a site, the gh login locally). Without it approve answers with an error, and request-changes and close do their part on the board only. */
   github?: GitHubClient;
   /** What relay_whoami reports about this connection's credential (HTTP: from the token row). */
   identity?: ConnectionIdentity;
@@ -585,11 +585,8 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   const LANE = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter");
   const TASK_ID = z.string().min(1).describe("the task's ID on the board, as relay_task_create and relay_task_list return it");
   const NO_BOARD = "relay: this server has no board to work on. Locally: vercel login, then relay setup --board. On a site: the deployment must be on the Vercel team that owns the board.";
-  /** The board for a read, or for a write made for this caller: on a site the handle is the deployment, so the write carries the caller as a profile. */
-  const boardFor = async (write: boolean): Promise<{ session: board.BoardSession; b: board.Board }> => {
-    const session = await opts.board!.open();
-    return { session, b: write && opts.board!.asActor ? session.board.as(board.actorProfile(externalActor(actor))) : session.board };
-  };
+  /** The desk (board/desk.ts): on a site the caller is someone the site answers for, with the rules that go with it; locally the caller is the handle. */
+  const deskNow = async (): Promise<board.Desk> => board.deskFor(await opts.board!.open(), opts.board!.asActor ? { actor: externalActor(actor), scopes: [...granted] } : undefined);
   const taskFail = (e: unknown, tool: string) => fail(`relay: ${board.describeBoardError(e)}${e instanceof board.TaskError && e.status === 503 ? ` (${tool} needs GitHub access on the server)` : ""}`);
   const taskView = (t: board.BoardTask) => ({
     task_id: t.id,
@@ -608,12 +605,12 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     created_at: t.created_at,
   });
   /** One task tool: the scope gate, the board, and a refusal as one line. */
-  const taskTool = async (scope: TokenScope, tool: string, write: boolean, run: (h: { session: board.BoardSession; b: board.Board }) => Promise<ReturnType<typeof json>>) => {
+  const taskTool = async (scope: TokenScope, tool: string, run: (desk: board.Desk) => Promise<ReturnType<typeof json>>) => {
     const g = gate(scope, tool);
     if (g) return g;
     if (!opts.board) return fail(NO_BOARD);
     try {
-      return await run(await boardFor(write));
+      return await run(await deskNow());
     } catch (e) {
       return taskFail(e, tool);
     }
@@ -636,28 +633,32 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     (args) =>
-      taskTool("tasks:write", "relay_task_create", true, async ({ b }) => {
+      taskTool("tasks:write", "relay_task_create", async (desk) => {
         const project = await repo.getProject(db, args.project);
         if (!project) throw new board.TaskError(`no project '${args.project}'; relay_get_project lists the ones this relay knows`, 404);
         if (!project.repo) throw new board.TaskError(`project '${args.project}' has no repository to work in (relay project add ${args.project} --repo owner/name)`, 400);
-        const t = await board.openServedTask(b, {
-          project: project.slug,
-          repo: project.repo,
-          title: args.title,
-          body: args.body ?? "",
-          lane: args.lane ?? "claude",
-          ...(args.model ? { model: args.model } : {}),
-          ...(args.needs?.length ? { needs: args.needs } : {}),
-          ...(args.base ? { base: args.base } : {}),
-          ...(args.idempotency_key ? { idempotencyKey: args.idempotency_key } : {}),
-        });
-        return json(taskView(t));
+        const { task: t, created } = await board.openFor(
+          desk,
+          {
+            project: project.slug,
+            repo: project.repo,
+            title: args.title,
+            body: args.body ?? "",
+            lane: args.lane ?? "claude",
+            ...(args.model ? { model: args.model } : {}),
+            ...(args.needs?.length ? { needs: args.needs } : {}),
+            ...(args.base ? { base: args.base } : {}),
+            ...(args.idempotency_key ? { idempotencyKey: args.idempotency_key } : {}),
+          },
+          opts.board!.asActor ? { brief: async (task) => (await compileBrief(db, { project: project.slug, intent: "implement the task", maxTokens: BRIEF_TOKENS, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } })).text } : {},
+        );
+        return json({ ...taskView(t), created });
       }),
   );
 
   server.registerTool("relay_task_get", { title: "Read a task", description: toolDescription("relay_task_get"), inputSchema: { task_id: TASK_ID } }, ({ task_id }) =>
-    taskTool("tasks:read", "relay_task_get", false, async ({ b }) => {
-      const d = await board.getTask(b, task_id.trim());
+    taskTool("tasks:read", "relay_task_get", async (desk) => {
+      const d = await board.getTask(desk.session.board, task_id.trim(), { trusted: desk.session.from });
       const results = d.thread.replies.filter((m) => !m.deleted && m.labels?.relay === board.RELAY_MESSAGE.result);
       return json({ ...taskView(d.task), body: d.task.body, last_result: results.length ? board.withoutBlocks(results.at(-1)!.text) : null, usage: d.usage, notes: d.notes.slice(-10) });
     }),
@@ -671,15 +672,15 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { project: z.string().optional(), state: z.enum(["open", "all", ...board.RELAY_STATES] as [string, ...string[]]).optional().describe("default open: everything not done or closed"), limit: z.number().int().min(1).max(200).optional() },
     },
     ({ project, state, limit }) =>
-      taskTool("tasks:read", "relay_task_list", false, async ({ b }) => {
-        const rows = await board.listTasks(b, { ...(project ? { project } : {}), state: (state ?? "open") as board.RelayState | "open" | "all", limit: limit ?? 50 });
+      taskTool("tasks:read", "relay_task_list", async (desk) => {
+        const rows = await board.listTasks(desk.session.board, { ...(project ? { project } : {}), state: (state ?? "open") as board.RelayState | "open" | "all", limit: limit ?? 50 });
         return json({ tasks: rows.map(taskView), count: rows.length });
       }),
   );
 
   server.registerTool("relay_task_approve", { title: "Approve and merge a task", description: toolDescription("relay_task_approve"), inputSchema: { id: TASK_ID } }, ({ id }) =>
-    taskTool("tasks:write", "relay_task_approve", true, async ({ b }) => {
-      const r = await board.approveTask(b, opts.github, id.trim(), { by: externalActor(actor) });
+    taskTool("tasks:write", "relay_task_approve", async (desk) => {
+      const r = await board.approveFor(desk, opts.github, id.trim());
       return json({ ...taskView(r.task), pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted });
     }),
   );
@@ -688,8 +689,8 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_task_request_changes",
     { title: "Request changes on a task", description: toolDescription("relay_task_request_changes"), inputSchema: { id: TASK_ID, note: z.string().min(1).max(6000).describe("what should change; written for the model that will address it") } },
     ({ id, note }) =>
-      taskTool("tasks:write", "relay_task_request_changes", true, async ({ b }) => {
-        const t = await board.requestChanges(b, opts.github, id.trim(), note);
+      taskTool("tasks:write", "relay_task_request_changes", async (desk) => {
+        const t = await board.requestChangesFor(desk, opts.github, id.trim(), note);
         return json({ ...taskView(t), next: "the next worker that serves the lane runs it again with the note in the thread and pushes to the same pull request" });
       }),
   );
@@ -702,8 +703,8 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { id: TASK_ID, lane: LANE.optional().describe("move the task to this lane; omitted keeps the lane it has"), model: z.string().min(1).max(100).optional().describe("ask for this model; omitted keeps what it has") },
     },
     ({ id, lane, model }) =>
-      taskTool("tasks:write", "relay_task_requeue", true, async ({ b }) => {
-        const t = await board.requeueTask(b, id.trim(), { ...(lane ? { lane } : {}), ...(model ? { model } : {}) });
+      taskTool("tasks:write", "relay_task_requeue", async (desk) => {
+        const t = await board.requeueFor(desk, id.trim(), { ...(lane ? { lane } : {}), ...(model ? { model } : {}) });
         return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it and starts over from the base branch" });
       }),
   );
@@ -712,17 +713,15 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_task_close",
     { title: "Close a task", description: toolDescription("relay_task_close"), inputSchema: { id: TASK_ID, reason: z.string().max(900).optional().describe("why; it is the task's closing reason and a comment on its pull request and issue") } },
     ({ id, reason }) =>
-      taskTool("tasks:write", "relay_task_close", true, async ({ b }) => {
-        const r = await board.closeTask(b, opts.github, id.trim(), { ...(reason ? { reason } : {}) });
+      taskTool("tasks:write", "relay_task_close", async (desk) => {
+        const r = await board.closeFor(desk, opts.github, id.trim(), reason);
         return json({ ...taskView(r.task), github: r.github, canceled: r.canceled, to_review: r.to_review });
       }),
   );
 
   server.registerTool("relay_task_release", { title: "Release a held task", description: toolDescription("relay_task_release"), inputSchema: { id: TASK_ID } }, ({ id }) =>
-    taskTool("tokens:write", "relay_task_release", true, async ({ session, b }) => {
-      // the text a bot wrote is not the bot's to call safe
-      if (opts.board!.asActor && board.writtenAs((await session.board.thread(id.trim())).message, externalActor(actor))) throw new board.TaskError(`${actor} opened ${id} and cannot release it; a person or another bot reads the text and decides`, 403);
-      const t = await board.releaseTask(b, id.trim());
+    taskTool("tokens:write", "relay_task_release", async (desk) => {
+      const t = await board.releaseFor(desk, id.trim());
       return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it; the gate is not run again on the text as it stands now, and is on anything added later" });
     }),
   );

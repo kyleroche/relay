@@ -1,8 +1,8 @@
 /**
  * relay's task commands on the board: open, read, list, approve, send back, requeue, close, release. A task is a
  * thread in `work/<project>` whose state the board keeps (`board/mapping.ts` has the vocabulary). Every function
- * takes the caller's own handle, so what it may do is what the board's grants give that caller: there is no relay
- * permission layer in between.
+ * takes the caller's own handle, so what it may do is what the board's grants give that caller. A site, which acts
+ * for people and bots as one deployment, puts its own rules in front (board/desk.ts).
  *
  * What these act on comes from places the board guards, never from labels (board/schemas.ts):
  *   the repository, base and issue   the `relay-task` block in the task's own text, which is its owner's
@@ -26,8 +26,8 @@ import { gateText, precheckTask } from "../tasks/gate.ts";
 import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
-import { HOLD, isBranchOf, LABEL, OPEN_STATES, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
-import { ASSET_SCHEMA, blocksOf, evalText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
+import { HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
+import { ASSET_SCHEMA, blocksOf, evalText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, trustedBlocks, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 
 /** A refusal with the HTTP status a route would answer: 400 bad input, 404 no such task, 409 wrong state, 502/503 GitHub. */
 export class TaskError extends Error {
@@ -129,13 +129,17 @@ export interface OpenTaskInput {
   noSync?: boolean;
 }
 
+export const isModelId = (s: string): boolean => /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(s);
+
 export function openTaskProblem(i: OpenTaskInput): string | undefined {
   if (!i.title?.trim()) return "title is required";
   if (i.title.trim().length > 200) return "title is at most 200 characters";
   if (!isLaneName(i.lane)) return laneNameProblem(i.lane);
   if (i.repo !== undefined && !/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(i.repo)) return `repo must be owner/name, not '${i.repo}'`;
   if (i.issue !== undefined && !parseRef(i.issue)) return `issue must be owner/name#n, not '${i.issue}'`;
-  if (i.model !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/.test(i.model)) return `model '${i.model}' is not a model id`;
+  if (i.model !== undefined && !isModelId(i.model)) return `model '${i.model}' is not a model id`;
+  // a base and a branch reach git as arguments
+  for (const key of ["base", "branch"] as const) if (i[key] !== undefined && !isBranchName(i[key]!)) return `${key} '${i[key]}' is not a branch name`;
   return undefined;
 }
 
@@ -185,6 +189,12 @@ async function make(board: Board, input: OpenTaskInput): Promise<Made> {
     ...(input.noSync ? { noSync: true } : {}),
   });
   const { task, claim } = made;
+  // relay wrote one block, or none: any other count means the words carried one the filter did not know
+  if ((task.blocks?.length ?? 0) !== (block ? 1 : 0)) {
+    await claim?.release().catch(() => undefined);
+    await board.tasks.cancel(task.id, "its text carried a data block").catch(() => undefined);
+    throw new TaskError("the task's text carries a data block (a json#name@version fence); write it as a plain code fence", 400);
+  }
   const flagged = precheckTask(`${title}\n\n${body}`);
   if (claim) return { task, flagged, hold: (reason, kind) => claim.block(reason, { kind }), release: () => claim.release() };
   // no claim: it waits for other tasks, or the same idempotency key was used before and the task is as it was left
@@ -193,12 +203,14 @@ async function make(board: Board, input: OpenTaskInput): Promise<Made> {
 
 /**
  * Open a task in the project's queue. Text the injection gate's pre-check flags is held as it is made, so no worker
- * ever sees it ready. A body past the board's message limit goes in an attachment, `task.md`, which the runner reads
+ * ever sees it ready. `beforeReady` runs while the task is still out of every worker's reach: what must be in the
+ * thread before the first claim reads it (a site's brief). A body past the board's message limit goes in an attachment, `task.md`, which the runner reads
  * in its place.
  */
-export async function openTask(board: Board, input: OpenTaskInput): Promise<BoardTask> {
+export async function openTask(board: Board, input: OpenTaskInput, opts: { beforeReady?: (task: BoardTask) => Promise<void> } = {}): Promise<BoardTask> {
   try {
     const made = await make(board, input);
+    await opts.beforeReady?.(toTask(made.task));
     return toTask(made.flagged.length ? await made.hold(`pre-check: ${made.flagged.join(", ")}`.slice(0, 900), HOLD.gate) : await made.release());
   } catch (e) {
     throw asTaskError(e);
@@ -232,19 +244,26 @@ export async function openTaskHeldBack(board: Board, input: Omit<OpenTaskInput, 
 export interface TaskDetail {
   task: BoardTask;
   thread: ThreadView;
-  /** Every usage row posted in the thread, oldest first. */
+  /** The usage rows in the thread, oldest first (`getTask` says whose). */
   usage: UsageBlock[];
   /** What people (and agents that are not relay's runner) wrote in the thread, oldest first: review notes, answers, questions, an eval's findings. */
   notes: Array<{ id: string; by: string; text: string; at: string }>;
 }
 
+/**
+ * A task's thread. Only a thread in a project's queue is one: these functions answer for the whole team's board
+ * through whoever holds the handle (a site, for a token), so a thread anywhere else is no task, whatever it is.
+ */
 async function readThread(board: Board, id: string): Promise<ThreadView> {
+  let thread: ThreadView;
   try {
-    return await board.thread(id.trim());
+    thread = await board.thread(id.trim());
   } catch (e) {
     if (e instanceof BoardError && (e.code === "message_not_found" || e.status === 404)) throw new TaskError(`No task ${id}.`, 404);
     throw asTaskError(e);
   }
+  if (!projectOfChannel(thread.message.channel) || !thread.message.task) throw new TaskError(`No task ${id}.`, 404);
+  return thread;
 }
 
 /**
@@ -278,15 +297,21 @@ export async function gateInput(board: Board, thread: ThreadView): Promise<{ tex
   return { text, digest: sha256(text), title: task.title, body, notes };
 }
 
-export async function getTask(board: Board, id: string): Promise<TaskDetail> {
+/**
+ * One task with its thread. With `trusted` (the principals a caller believes: its own and the owners it takes tasks
+ * from) the usage rows are only the ones relay wrote; without it, every row in the thread, for a person reading
+ * their own board.
+ */
+export async function getTask(board: Board, id: string, opts: { trusted?: readonly string[] } = {}): Promise<TaskDetail> {
   const thread = await readThread(board, id);
-  return { task: toTask(thread.message), thread, usage: thread.replies.flatMap((m) => blocksOf<UsageBlock>(m, USAGE_SCHEMA)), notes: threadNotes(thread) };
+  const usage = opts.trusted ? trustedBlocks<UsageBlock>(thread.replies, USAGE_SCHEMA, opts.trusted).map((b) => b.data) : thread.replies.flatMap((m) => blocksOf<UsageBlock>(m, USAGE_SCHEMA));
+  return { task: toTask(thread.message), thread, usage, notes: threadNotes(thread) };
 }
 
 export interface ListTasksOptions {
   project?: string;
-  /** One of relay's states, `open` (everything not done or closed; the default) or `all`. */
-  state?: RelayState | "open" | "all";
+  /** One of relay's states, several of them, `open` (everything not done or closed; the default) or `all`. */
+  state?: RelayState | readonly RelayState[] | "open" | "all";
   lane?: string;
   limit?: number;
 }
@@ -300,7 +325,9 @@ const BOARD_STATE: Record<RelayState, TaskView["state"]> = { waiting: "waiting",
 export async function listTasks(board: Board, opts: ListTasksOptions = {}): Promise<BoardTask[]> {
   const limit = Math.min(Math.max(1, opts.limit ?? 100), 1000);
   const want = opts.state ?? "open";
-  if (want !== "open" && want !== "all" && !BOARD_STATE[want]) throw new TaskError(`state must be one of ${[...OPEN_STATES, "done", "closed", "open", "all"].join(", ")}`, 400);
+  const states = want === "open" || want === "all" ? undefined : new Set(typeof want === "string" ? [want] : want);
+  if (states && (!states.size || [...states].some((s) => !BOARD_STATE[s]))) throw new TaskError(`state must be one of ${[...OPEN_STATES, "done", "closed", "open", "all"].join(", ")}`, 400);
+  const byAge = (tasks: BoardTask[]): BoardTask[] => tasks.sort((a, z) => a.created_at.localeCompare(z.created_at)).slice(0, limit);
   const read = async (state: TaskView["state"] | "open" | "all"): Promise<BoardTask[]> => {
     const out: BoardTask[] = [];
     let after: string | undefined;
@@ -308,7 +335,7 @@ export async function listTasks(board: Board, opts: ListTasksOptions = {}): Prom
       const page = await board.tasks.list({ channel: opts.project ? workChannel(opts.project) : WORK_SUBTREE, state, ...(opts.lane ? { label: { [LABEL.lane]: opts.lane } } : {}), ...(after ? { after } : {}), limit: 50 });
       for (const t of page.tasks) {
         const task = toTask(t.message);
-        if (want !== "open" && want !== "all" && task.state !== want) continue; // review, held and blocked share one board state
+        if (states && !states.has(task.state)) continue; // review, held and blocked share one board state
         out.push(task);
         if (out.length >= limit) return out;
       }
@@ -317,11 +344,16 @@ export async function listTasks(board: Board, opts: ListTasksOptions = {}): Prom
     }
   };
   try {
-    if (want !== "open") return await read(want === "all" ? "all" : BOARD_STATE[want]);
+    if (want === "all") return await read("all");
+    if (states) {
+      // one read per board state, however many of relay's states it stands for
+      const pages = await Promise.all([...new Set([...states].map((s) => BOARD_STATE[s]))].map(read));
+      return pages.length === 1 ? pages[0]! : byAge(pages.flat());
+    }
     const [open, failed] = await Promise.all([read("open"), read("failed")]);
     if (!failed.length) return open;
     const seen = new Set(open.map((t) => t.id));
-    return [...open, ...failed.filter((t) => !seen.has(t.id))].sort((a, z) => a.created_at.localeCompare(z.created_at)).slice(0, limit);
+    return byAge([...open, ...failed.filter((t) => !seen.has(t.id))]);
   } catch (e) {
     throw asTaskError(e);
   }
@@ -378,7 +410,8 @@ const describeGitHub = (e: unknown): string => (e instanceof GitHubError ? e.mes
  */
 export async function takeHeld(board: Board, id: string): Promise<ClaimedTask> {
   await board.label(id, { unset: [LABEL.lane] });
-  await board.tasks.unblock(id);
+  // a task an earlier attempt left with its hold already lifted is taken as it is
+  if ((await board.thread(id)).message.task?.state === "blocked") await board.tasks.unblock(id);
   return board.tasks.claim(id);
 }
 
@@ -405,15 +438,16 @@ export async function reholdTask(board: Board, id: string, lane: string | null, 
 /**
  * Send work that waits for a step's task to a person as it is, because that step is not coming (its task failed, was
  * held or was closed). Nothing happens unless the work is held for exactly that task. True when the work moved.
+ * `own` is the handle relay's own words and data go out on, where that is not the caller's (a site: board/desk.ts).
  */
-export async function skipStep(board: Board, id: string, stepTask: string, why: string): Promise<boolean> {
+export async function skipStep(board: Board, id: string, stepTask: string, why: string, own: Board = board): Promise<boolean> {
   const task = toTask((await readThread(board, id)).message);
   const waits = task.hold?.kind === HOLD.eval ? parseEvalHold(task.hold.reason) : undefined;
   if (!waits || waits.task !== stepTask) return false;
   const said = prose(why.trim().replace(/\.+$/, "").slice(0, 600));
   try {
-    await board.reply(id, { text: `The ${waits.step} step could not run on the ${waits.lane} lane: ${said}. The work goes to review without it.`, labels: { [LABEL.relay]: RELAY_MESSAGE.log } });
-    await board.reply(id, { text: evalText({ step: waits.step, task: stepTask, lane: waits.lane, verdict: said, ran: false }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    await own.reply(id, { text: `The ${waits.step} step could not run on the ${waits.lane} lane: ${said}. The work goes to review without it.`, labels: { [LABEL.relay]: RELAY_MESSAGE.log } });
+    await own.reply(id, { text: evalText({ step: waits.step, task: stepTask, lane: waits.lane, verdict: said, ran: false }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
     await reholdTask(board, id, task.lane, { kind: HOLD.review, reason: task.pr?.url ?? `${waits.step} could not run: ${said}` });
     return true;
   } catch (e) {
@@ -437,32 +471,65 @@ export interface ApproveResult {
 }
 
 /**
+ * Whether this caller can settle a held task: it made the task, or it manages the task's queue. Asked before
+ * anything outside the board changes, so an approval never merges and then finds it cannot complete the task.
+ */
+async function settleProblem(board: Board, thread: ThreadView): Promise<string | undefined> {
+  const me = await board.me();
+  if (thread.message.by.actor === me.actor || mayIn(me.can, thread.message.channel, "manage")) return undefined;
+  return `${me.handle} cannot settle ${thread.message.id}: someone else opened it and this login does not manage ${thread.message.channel}. A site needs the grant relay setup --board --site-project <its project> makes (docs/WORKERS.md).`;
+}
+
+/**
  * Approve a task in review. With a pull request: squash-merge it, delete its branch and complete the task. The pull
  * request is the one the runner's hold names, and it is merged only if its head is a branch a lane pushed for this
  * task, so nothing written on the board can point an approval at another pull request. With outputs instead (the
  * nodes lane): complete the task.
+ *
+ * The merge and the board are two systems, so an approval can be cut off between them, and a merge can reach the
+ * board from GitHub first. Both ends are safe to meet again: a task whose own pull request is already merged is
+ * settled from whatever open state it was left in, and a task that turns out to be done after the merge is a success.
  */
 export async function approveTask(board: Board, github: GitHubClient | undefined, id: string, opts: ApproveOptions = {}): Promise<ApproveResult> {
   const { task, thread } = await getTask(board, id);
-  if (task.state !== "review") throw new TaskError(`${task.id} is ${task.state}, not in review; only a task in review can be approved.`, 409);
-  if (!task.pr) {
+  const inReview = task.state === "review";
+  const notInReview = new TaskError(`${task.id} is ${task.state}, not in review; only a task in review can be approved.`, 409);
+  if (task.state === "done" || task.state === "closed") throw notInReview;
+  if (inReview && !task.pr) {
     const outputs = thread.replies.flatMap((m) => blocksOf<AssetBlock>(m, ASSET_SCHEMA)).length;
     if (!outputs) throw new TaskError(`${task.id} is in review with neither a pull request nor outputs to approve (its hold says: ${task.hold?.reason || "nothing"}).`, 409);
+    const problem = await settleProblem(board, thread);
+    if (problem) throw new TaskError(problem, 403);
     return { task: await settleTask(board, id, `approved ${outputs} output${outputs === 1 ? "" : "s"}${opts.by ? ` by ${opts.by}` : ""}`), pr_url: null, merge_sha: null, branch_deleted: false };
   }
+  // in review: the pull request the hold names. Otherwise: one a run named, and only to finish what a merge started
+  const named = inReview ? [task.pr!] : [...new Map(thread.replies.flatMap((m) => blocksOf<RunBlock>(m, RUN_SCHEMA)).flatMap((r) => (r.pr ? [[r.pr.url, r.pr] as const] : []))).values()];
+  if (!named.length) throw notInReview;
   if (!github) throw new TaskError("No GitHub credential: log in with gh (CLI) or connect GitHub (site).", 503);
-  const { repo, number, url } = task.pr;
-  let pull;
-  try {
-    pull = await github.getPullRequest(repo, number);
-  } catch (e) {
-    throw new TaskError(`GitHub could not read PR #${number} of ${repo}: ${describeGitHub(e)}`, 502);
+  let found: { pr: NonNullable<BoardTask["pr"]>; pull: Awaited<ReturnType<GitHubClient["getPullRequest"]>> } | undefined;
+  for (const pr of named) {
+    let pull;
+    try {
+      pull = await github.getPullRequest(pr.repo, pr.number);
+    } catch (e) {
+      throw new TaskError(`GitHub could not read PR #${pr.number} of ${pr.repo}: ${describeGitHub(e)}`, 502);
+    }
+    const own = isBranchOf(pull.head_ref, id);
+    if (inReview && !own) throw new TaskError(`PR #${pr.number} of ${pr.repo} comes from ${pull.head_ref || "an unknown branch"}, which is not a branch relay pushed for ${task.id}; not merging it.`, 409);
+    if (own && (inReview || pull.merged)) {
+      found = { pr, pull };
+      break;
+    }
   }
-  if (!isBranchOf(pull.head_ref, id)) throw new TaskError(`PR #${number} of ${repo} comes from ${pull.head_ref || "an unknown branch"}, which is not a branch relay pushed for ${task.id}; not merging it.`, 409);
+  if (!found) throw notInReview;
+  const { pr, pull } = found;
+  const { repo, number, url } = pr;
   let sha: string | null = null;
   let branchDeleted = false;
   if (!pull.merged) {
     if (pull.state !== "open") throw new TaskError(`PR #${number} is ${pull.state}, not open.`, 409);
+    const problem = await settleProblem(board, thread);
+    if (problem) throw new TaskError(problem, 403);
     const closes = task.issue && task.issue.repo === repo ? `\n\nCloses #${task.issue.number}` : "";
     try {
       const merge = await github.mergePullRequest(repo, number, { method: opts.method ?? "squash", title: `${pull.title} (#${number})`, message: `relay: approved${opts.by ? ` by ${opts.by}` : ""} (task ${task.id})${closes}`, sha: pull.head_sha });
@@ -479,7 +546,15 @@ export async function approveTask(board: Board, github: GitHubClient | undefined
       );
     }
   }
-  return { task: await settleTask(board, id, `merged ${repo}#${number}${sha ? ` in ${sha.slice(0, 7)}` : ""}`), pr_url: url, merge_sha: sha, branch_deleted: branchDeleted };
+  const result = `merged ${repo}#${number}${sha ? ` in ${sha.slice(0, 7)}` : ""}`;
+  try {
+    return { task: await settleTask(board, id, result), pr_url: url, merge_sha: sha, branch_deleted: branchDeleted };
+  } catch (e) {
+    // GitHub's own word of the merge may have settled it while this was merging
+    const now = toTask((await readThread(board, id)).message);
+    if (now.state === "done") return { task: now, pr_url: url, merge_sha: sha, branch_deleted: branchDeleted };
+    throw e;
+  }
 }
 
 /** Send a task in review back: the note goes in the thread (and on the pull request when GitHub is at hand), and the hold is lifted. */
@@ -501,14 +576,17 @@ export async function requestChanges(board: Board, github: GitHubClient | undefi
 /**
  * Lift the injection gate's hold for the text as it stands: a `relay-release` block with that text's digest, then the
  * unblock. The board lets only the task's owner, or someone who manages its channel, lift a hold; the block is what
- * tells the next run which text a person read.
+ * tells the next run which text a person read. A worker believes the block only from a trusted author, so where the
+ * caller's handle is not one (a site writing for a person), `own` is the handle the block goes out on and `by` says
+ * who asked.
  */
-export async function releaseTask(board: Board, id: string): Promise<BoardTask> {
+export async function releaseTask(board: Board, id: string, opts: { own?: Board; by?: string } = {}): Promise<BoardTask> {
   const thread = await readThread(board, id);
   const task = toTask(thread.message);
   if (task.state !== "held") throw new TaskError(`${task.id} is ${task.state}, not held; only a task the gate holds can be released.`, 409);
   try {
-    await board.reply(id, { text: releaseText({ digest: (await gateInput(board, thread)).digest }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    const said = opts.by ? `Released by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}.\n\n` : "";
+    await (opts.own ?? board).reply(id, { text: `${said}${releaseText({ digest: (await gateInput(board, thread)).digest })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
     return toTask(await board.tasks.unblock(id));
   } catch (e) {
     throw asTaskError(e);
@@ -529,6 +607,7 @@ export interface RequeueOptions {
  */
 export async function requeueTask(board: Board, id: string, opts: RequeueOptions = {}): Promise<BoardTask> {
   if (opts.lane !== undefined && !isLaneName(opts.lane)) throw new TaskError(laneNameProblem(opts.lane), 400);
+  if (typeof opts.model === "string" && !isModelId(opts.model)) throw new TaskError(`model '${opts.model}' is not a model id`, 400);
   const { task } = await getTask(board, id);
   if (task.state === "done" || task.state === "closed") throw new TaskError(`${task.id} is ${task.state}; a finished task is not requeued. Open a new one.`, 409);
   if (task.state === "running") throw new TaskError(`${task.id} is running on ${task.claim?.actor ?? "a worker"}${task.claim ? ` until ${task.claim.until}` : ""}; it returns to the queue by itself if that worker stops renewing. relay task close stops the run.`, 409);
@@ -562,7 +641,7 @@ export interface CloseResult {
  * next look. Work that was waiting for this task (it was a step's task, such as an eval) goes to review without it. On GitHub, its open pull requests (the ones whose head is a branch a lane pushed for this task) are closed
  * and their branches deleted, and the issue its own text names is closed. Step tasks that were looking at it are called off.
  */
-export async function closeTask(board: Board, github: GitHubClient | undefined, id: string, opts: { reason?: string } = {}): Promise<CloseResult> {
+export async function closeTask(board: Board, github: GitHubClient | undefined, id: string, opts: { reason?: string; own?: Board } = {}): Promise<CloseResult> {
   const reason = (opts.reason ?? "").trim();
   if (reason.length > 900) throw new TaskError("the reason is at most 900 characters.", 400);
   const { task, thread } = await getTask(board, id);
@@ -577,7 +656,7 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
       await board.tasks.cancel(other.id, `the task it was to look at, ${id}, was closed`);
       dependents.push(other.id);
     }
-    if (task.evaluates) toReview = (await skipStep(board, task.evaluates, id, `its task was closed${reason ? ` (${reason})` : ""}`).catch(() => false)) ? task.evaluates : null;
+    if (task.evaluates) toReview = (await skipStep(board, task.evaluates, id, `its task was closed${reason ? ` (${reason})` : ""}`, opts.own ?? board).catch(() => false)) ? task.evaluates : null;
   } catch (e) {
     throw asTaskError(e);
   }

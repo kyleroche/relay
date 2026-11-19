@@ -27,14 +27,14 @@ type Props = { params: Promise<{ id: string }> };
 
 export const dynamic = "force-dynamic";
 
-type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[] } | { problem: string } | null;
+type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[]; site: string } | { problem: string } | null;
 
 /** The task's thread from the board, once per request (the metadata and the page both ask); null when there is none. */
 const load = cache(async (id: string): Promise<Loaded> => {
   try {
     const session = await siteBoard();
-    const [detail, workers] = await Promise.all([board.getTask(session.board, id), siteWorkers().catch(() => [])]);
-    return { detail, workers };
+    const [detail, workers] = await Promise.all([board.getTask(session.board, id, { trusted: session.from }), siteWorkers().catch(() => [])]);
+    return { detail, workers, site: session.me.principal };
   } catch (e) {
     if (e instanceof board.TaskError && e.status === 404) return null;
     return { problem: boardProblem(e) };
@@ -123,7 +123,7 @@ export default async function TaskPage({ params }: Props) {
           <div className="flex shrink-0 flex-col items-start gap-1 sm:items-end">
             <TaskStateBadge state={t.state} />
             <p className="text-xs text-muted-foreground">
-              opened <RelTime iso={t.created_at} now={now} /> by <ActorChip actor={board.feedActor(thread.message.by, thread.message.author?.handle)} className="align-middle" />
+              opened <RelTime iso={t.created_at} now={now} /> by <ActorChip actor={board.feedActor(thread.message.by, thread.message.author?.handle, l.site)} className="align-middle" />
             </p>
           </div>
         </div>
@@ -327,7 +327,7 @@ export default async function TaskPage({ params }: Props) {
               {words.map(({ m, text, kind }) => (
                 <li key={m.id} className="rounded-md border bg-card p-3 text-sm">
                   <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
-                    <ActorChip actor={board.feedActor(m.by, m.author?.handle)} />
+                    <ActorChip actor={board.feedActor(m.by, m.author?.handle, l.site)} />
                     {kind && (
                       <Pill mono size="sm">
                         {RELAY_KIND[kind] ?? kind}

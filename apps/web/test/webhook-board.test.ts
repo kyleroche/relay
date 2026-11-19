@@ -23,10 +23,10 @@ beforeAll(async () => {
 });
 afterAll(() => db.close());
 
-const issues = (action: string, over: { repo?: string; number?: number; labels?: string[]; label?: string; sender?: string; body?: string | null } = {}) => ({
+const issues = (action: string, over: { repo?: string; number?: number; labels?: string[]; label?: string; sender?: string; body?: string | null; at?: string } = {}) => ({
   action,
   ...(over.label ? { label: { name: over.label } } : {}),
-  issue: { number: over.number ?? 7, title: "Add a dark mode toggle", body: over.body === undefined ? "Follow the system setting." : over.body, html_url: `https://github.com/${over.repo ?? REPO}/issues/${over.number ?? 7}`, labels: (over.labels ?? ["agent:claude"]).map((name) => ({ name })) },
+  issue: { number: over.number ?? 7, title: "Add a dark mode toggle", body: over.body === undefined ? "Follow the system setting." : over.body, html_url: `https://github.com/${over.repo ?? REPO}/issues/${over.number ?? 7}`, labels: (over.labels ?? ["agent:claude"]).map((name) => ({ name })), ...(over.at ? { updated_at: over.at } : {}) },
   repository: { full_name: over.repo ?? REPO, name: (over.repo ?? REPO).split("/")[1] },
   sender: { login: over.sender ?? "kyle", type: "User" },
 });
@@ -35,7 +35,7 @@ describe("an issue with a lane label", () => {
   it("opens one task in the project registered for the repository, and a second delivery opens none", async () => {
     const t = await openIssueTask(deps, "issues", issues("labeled", { label: "agent:claude" }));
     expect(t).toMatchObject({ project: "demo-site", channel: "work/demo-site", repo: REPO, title: "Add a dark mode toggle", body: "Follow the system setting.", lane: "claude", issue: { repo: REPO, number: 7 }, state: "queued" });
-    expect(board.feedActor((await board.getTask(session.board, t!.id)).thread.message.by)).toBe("bot:github");
+    expect(board.feedActor((await board.getTask(session.board, t!.id)).thread.message.by, null, session.me.principal)).toBe("bot:github");
 
     // the `opened` delivery of the same issue, and a redelivery of the label
     expect((await openIssueTask(deps, "issues", issues("opened")))?.id).toBe(t!.id);
@@ -43,6 +43,19 @@ describe("an issue with a lane label", () => {
     // and the same label put on again by someone else who may
     expect((await openIssueTask({ ...deps, mayOpen: async () => true }, "issues", issues("labeled", { label: "agent:claude", sender: "dana" })))?.id).toBe(t!.id);
     expect(await board.listTasks(session.board, { state: "all" })).toHaveLength(1);
+  });
+
+  it("opens the next task when the label is put on again after the first finished, and none for a redelivery of the old label", async () => {
+    const first = await openIssueTask(deps, "issues", issues("labeled", { number: 12, label: "agent:claude", at: "2026-11-01T10:00:00.000Z" }));
+    await board.closeTask(session.board, undefined, first!.id, { reason: "not now" });
+    // GitHub sends the first label's delivery again: it is older than the task it would follow
+    expect(await openIssueTask(deps, "issues", issues("labeled", { number: 12, label: "agent:claude", at: "2026-11-01T10:00:00.000Z" }))).toBeUndefined();
+    const later = new Date(Date.now() + 60_000).toISOString();
+    const second = await openIssueTask(deps, "issues", issues("labeled", { number: 12, label: "agent:claude", at: later }));
+    expect(second).toMatchObject({ state: "queued", issue: { number: 12 } });
+    expect(second!.id).not.toBe(first!.id);
+    // that delivery again finds the task it made
+    expect((await openIssueTask(deps, "issues", issues("labeled", { number: 12, label: "agent:claude", at: later })))?.id).toBe(second!.id);
   });
 
   it("refuses a lane that is neither built in nor served by a worker", async () => {
@@ -57,7 +70,7 @@ describe("an issue with a lane label", () => {
     expect(await openIssueTask(deps, "issues", issues("closed", { number: 8 }))).toBeUndefined();
     expect(await openIssueTask(deps, "issues", issues("labeled", { number: 8, label: "agent:claude", repo: "acme/unlinked" }))).toBeUndefined();
     expect(await openIssueTask(deps, "pull_request", issues("labeled", { number: 8, label: "agent:claude" }))).toBeUndefined();
-    expect(await board.listTasks(session.board, { state: "all" })).toHaveLength(1);
+    expect((await board.listTasks(session.board, { state: "all" })).some((t) => t.issue?.number === 8)).toBe(false);
   });
 
   it("goes to the project a production label names on a repository several share, and holds text the gate flags", async () => {

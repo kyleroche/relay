@@ -14,8 +14,8 @@ import { dirname, join } from "node:path";
 import { board, type Board } from "@vercel/board";
 import { connectBoard } from "../src/board/client.ts";
 import { branchFor, HOLD } from "../src/board/mapping.ts";
-import { actorProfile, grantSite, ledgerRows, writtenAs } from "../src/board/site.ts";
-import { ensureSchemas, isTrustedActor } from "../src/board/schemas.ts";
+import { actorProfile, grantSite, ledgerRows, SITE_PROFILE, writtenAs } from "../src/board/site.ts";
+import { ensureSchemas, isTrustedActor, RELEASE_SCHEMA, releaseText, trustedBlocks, type ReleaseBlock } from "../src/board/schemas.ts";
 import { approveTask, getTask, listTasks, openTask, releaseTask } from "../src/board/tasks.ts";
 import { listWorkers } from "../src/board/workers.ts";
 import type { LaneRequest } from "../src/lanes/types.ts";
@@ -129,8 +129,23 @@ describe("a board served over HTTP", () => {
     expect(done.task.state).toBe("done");
     // and the feed names each of them
     const session = await connectBoard(team);
-    const rows = (await team.poll({ channel: "work/site", last: 50 })).events.flatMap((e) => ledgerRows(e, session.from));
+    const rows = (await team.poll({ channel: "work/site", last: 50 })).events.flatMap((e) => ledgerRows(e, session.from, principal));
     expect(rows.map((r) => [r.kind, r.actor])).toEqual([["task.created", "bot:grok-bot"], ["run.started", "runner:mini-claude"], ["task.approved", "human:kyleroche"]]);
+  });
+
+  it("believes data from relay's own profiles of a trusted principal, and from no profile the site wrote for someone as", async () => {
+    const principal = (await team.me()).principal;
+    const t = await openTask(team, { project: "trust", repo: REPO, title: "Whose block", lane: "claude" });
+    const digest = "0".repeat(64);
+    await team.as(actorProfile("bot:grok-bot")).reply(t.id, { text: releaseText({ digest }), noSync: true });
+    await team.as(actorProfile("human:kyleroche")).reply(t.id, { text: releaseText({ digest }), noSync: true });
+    const replies = () => team.thread(t.id).then((th) => th.replies);
+    expect(trustedBlocks<ReleaseBlock>(await replies(), RELEASE_SCHEMA, [principal])).toEqual([]);
+    await team.as(SITE_PROFILE).reply(t.id, { text: releaseText({ digest }), noSync: true });
+    await team.as("relay-mini-claude").reply(t.id, { text: releaseText({ digest }), noSync: true });
+    await team.reply(t.id, { text: releaseText({ digest }), noSync: true });
+    expect(trustedBlocks<ReleaseBlock>(await replies(), RELEASE_SCHEMA, [principal])).toHaveLength(3);
+    expect(trustedBlocks<ReleaseBlock>(await replies(), RELEASE_SCHEMA, ["vercel:user:someone-else"])).toEqual([]);
   });
 
   it("grants a site's project the queues once, and says who its deployment writes as", async () => {

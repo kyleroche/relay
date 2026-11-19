@@ -7,3 +7,4 @@ export * from "./workers.ts";
 export { CODE_LANES, isCodeLane, laneUnservedProblem } from "../tasks/lanes.ts";
 export * from "./site.ts";
 export * from "./local.ts";
+export * from "./desk.ts";

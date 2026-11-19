@@ -51,7 +51,7 @@ const usage: board.UsageBlock = { kind: "run", lane: "claude", tool: "claude", m
 describe("the watchers", () => {
   it("are two tails of every project's queue", () => {
     const w = siteWatchers(() => Promise.resolve(session));
-    expect(Object.fromEntries(Object.entries(w).map(([id, x]) => [id, x.tail]))).toEqual({ ledger: "work/", brief: "work/" });
+    expect(Object.fromEntries(Object.entries(w).map(([id, x]) => [id, x.tail]))).toEqual({ ledger: "work/", [board.BRIEF_PROFILE]: "work/" });
   });
 
   it("write a task's turns, its run and its model calls to the feed, and post the brief in its thread", async () => {
@@ -87,11 +87,11 @@ describe("the watchers", () => {
     expect((await repo.listEvents(db, { project: "demo", kind: "step.usage", limit: 50 })).length).toBe(1);
   });
 
-  it("post no brief for a step's own task, for another event, or twice", async () => {
+  it("post no brief for a step's own task or for another event, and one however often they are woken", async () => {
     // a board nothing watches, so the only brief is the one this test asks for
     const quiet = await board.memoryBoard();
     const eventsOf = async (id: string) => (await quiet.poll({ channel: board.WORK_SUBTREE, last: 100 })).events.filter((e) => e.message?.id === id || e.message?.re === id);
-    const as = quiet.as("brief");
+    const as = quiet.as(board.BRIEF_PROFILE);
     const work = await board.openTask(quiet, { project: "demo", repo: REPO, title: "Add a farewell", lane: "claude" });
     const step = await board.openTask(quiet, { project: "demo", repo: REPO, title: "Eval: Add a farewell", lane: "claude", step: "eval", evaluates: work.id });
     await quiet.reply(work.id, { text: "A note." });
@@ -101,7 +101,8 @@ describe("the watchers", () => {
     expect(await briefNewTask(db, as, events.find((e) => e.type === "message.posted" && e.message?.re === work.id)!)).toBe(false);
     const created = events.find((e) => e.type === "task.created")!;
     expect(await briefNewTask(db, as, created)).toBe(true);
-    expect(await briefNewTask(db, as, created)).toBe(false);
+    // the same author posting it again changes nothing
+    expect(await briefNewTask(db, as, created)).toBe(true);
     expect((await quiet.thread(work.id)).replies.filter((m) => m.labels?.relay === board.RELAY_MESSAGE.brief)).toHaveLength(1);
   });
 });

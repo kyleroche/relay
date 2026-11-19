@@ -16,25 +16,35 @@ import { after } from "next/server";
 import { getDb } from "./db.ts";
 import { dataMode } from "./mode.ts";
 
+/** What relay's memory holds for a task: its project, lane and text. Undefined when that is nothing. */
+export async function taskBrief(db: Db, task: board.BoardTask): Promise<string | undefined> {
+  if (!task.project) return undefined;
+  const brief = await compileBrief(db, { project: task.project, intent: "implement the task", maxTokens: 2500, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } });
+  return brief.text.trim() ? brief.text : undefined;
+}
+
 /**
- * The brief for a task that was just made: relay's memory for its project, lane and text, posted once in its thread
- * as whoever `as` is. Nothing for any other event, a thread outside a project's queue, or a step's own task (an eval
- * reads the work it looks at, not the project's memory). True when a brief was posted.
+ * The brief for a task that was just made, posted in its thread as whoever `as` is. Nothing for any other event, a
+ * thread outside a project's queue, or a step's own task (an eval reads the work it looks at, not the project's
+ * memory). A task the site opened already has its brief from the same author, and posting it again changes nothing.
+ * True when a brief was posted.
  */
 export async function briefNewTask(db: Db, as: board.Board, event: BoardEventView): Promise<boolean> {
   const m = event.message;
   if (event.type !== "task.created" || !m || m.re !== null || !m.task) return false;
   const task = board.toTask(m);
   if (!task.project || task.step) return false;
-  const brief = await compileBrief(db, { project: task.project, intent: "implement the task", maxTokens: 2500, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } });
-  if (!brief.text.trim()) return false;
-  return board.postBrief(as, task.id, brief.text);
+  const text = await taskBrief(db, task);
+  if (!text) return false;
+  await board.postBrief(as, task.id, text);
+  return true;
 }
 
+/** The brief watcher's ID is the profile its briefs are posted as, the same one the site posts a brief as itself. */
 export function siteWatchers(session: () => Promise<board.BoardSession>): Record<string, Watcher> {
   return {
     ledger: { tail: board.WORK_SUBTREE, run: async () => void (await board.syncLedger(await getDb(), await session())) },
-    brief: { tail: board.WORK_SUBTREE, run: async ({ event, board: as }) => void (await briefNewTask(await getDb(), as, event)) },
+    [board.BRIEF_PROFILE]: { tail: board.WORK_SUBTREE, run: async ({ event, board: as }) => void (await briefNewTask(await getDb(), as, event)) },
   };
 }
 

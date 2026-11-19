@@ -28,12 +28,14 @@ export const EVENT_KINDS = {
   // Tasks: threads on the board (packages/core/src/board/tasks.ts); every row's payload.task is the task's ID
   "task.created": { group: "task", source: "api", label: "Task opened", description: "A task was opened in its project's queue on the board (relay task create, relay_task_create, POST /api/v1/tasks, or an agent:<lane> label on a GitHub issue); payload has its title, lane and model." },
   "task.approved": { group: "pr", source: "web", label: "Approved", description: "The task was completed: its pull request was merged (by an approval or on GitHub) or its outputs were approved; payload.result says which. The task is done." },
-  "task.changes_requested": { group: "pr", source: "web", label: "Changes requested", description: "An earlier relay's row for a pull request sent back with a note; the note is now a reply in the task's thread." },
+  "task.changes_requested": { group: "pr", source: "board", label: "Sent back", description: "A person or a bot sent a task in review back with a note; the summary has its first line and the note is in the task's thread." },
   "task.merge_failed": { group: "pr", source: "web", label: "Merge refused", description: "An earlier relay's row for a merge GitHub refused; the refusal is now a line in the task's thread." },
   "task.requeued": { group: "task", source: "web", label: "Requeued", description: "A failed task was reopened (relay task requeue, the Requeue sheet); it is queued again and the next run starts over." },
   "task.closed": { group: "task", source: "web", label: "Closed", description: "The task was called off without a merge; payload.reason says why. Its open pull request and the issue it answered were closed on GitHub." },
   "task.held": { group: "task", source: "runner", label: "Held at the gate", description: "The injection gate held the task before a lane ran it; payload.reason says what it saw. It stays held until a person or a tokens:write bot releases it." },
-  "task.released": { group: "task", source: "web", label: "Released", description: "An earlier relay's row for a released hold; a release is now a block in the task's thread." },
+  "task.released": { group: "task", source: "board", label: "Released", description: "A person or a tokens:write bot released the injection gate's hold for the text as it stood; the actor is who asked." },
+  "ledger.skipped": { group: "task", source: "board", label: "Not recorded", description: "The database refused the rows of one board event; the summary has the error and payload.cursor the event. The rest of the feed is unaffected." },
+  "board.delivery_failed": { group: "task", source: "github", label: "Board not reached", description: "A GitHub delivery could not do its part on the board: an issue's task was not opened, or a merged pull request did not complete its task. The summary says why." },
   // GitHub webhook: pull requests, reviews, CI
   "pr.opened": { group: "pr", source: "github", label: "PR opened", description: "The runner pushed a branch and opened the result." },
   "pr.review": { group: "pr", source: "github", label: "Review", description: "A review was submitted (approved, changes requested or commented)." },

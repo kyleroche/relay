@@ -22,7 +22,8 @@ export const dynamic = "force-dynamic";
  * Replays are idempotent via the delivery id (and the comment id for usage rows).
  *
  * Two deliveries also act on the team's board, after the response (lib/webhooks/board.ts): an `agent:<lane>` label on
- * an issue opens a task, and a merged pull request completes the task that waited on it.
+ * an issue opens a task, and a merged pull request completes the task that waited on it. When the board cannot be
+ * reached for that, a `board.delivery_failed` row in the feed says what did not happen.
  */
 export async function POST(req: NextRequest) {
   const secrets = await githubWebhookSecrets();
@@ -73,7 +74,18 @@ async function onBoard(eventName: string, payload: Record<string, unknown>): Pro
     const settled = await settleMergedPull(session, eventName, payload);
     if (settled) console.info(`[relay] task ${settled.id} completed: ${settled.result ?? "merged on GitHub"}`);
   } catch (e) {
-    console.error(`[relay] board effects of a ${eventName} delivery: ${board.describeBoardError(e)}`);
+    // GitHub was already answered and does not send a failed delivery again by itself, so the feed is where this shows
+    const why = board.describeBoardError(e);
+    console.error(`[relay] board effects of a ${eventName} delivery: ${why}`);
+    const number = Number((payload.issue as { number?: unknown } | undefined)?.number ?? (payload.pull_request as { number?: unknown } | undefined)?.number);
+    await writeEvent({
+      kind: "board.delivery_failed",
+      actor: "bot:github",
+      repo: String((payload.repository as { full_name?: unknown } | undefined)?.full_name ?? "") || null,
+      ...(eventName === "issues" && Number.isInteger(number) ? { issue: number } : {}),
+      ...(eventName === "pull_request" && Number.isInteger(number) ? { pr: number } : {}),
+      summary: `${eventName === "issues" ? "No task was opened for a labelled issue" : "A merged pull request did not complete its task"}: ${why}`.slice(0, 300),
+    }).catch(() => undefined);
   }
 }
 

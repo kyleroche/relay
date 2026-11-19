@@ -79,7 +79,7 @@ export function registerTask(program: Command): void {
       if (!repo) throw new Error(`no repository for project '${slug}': pass --repo owner/name, or register it with relay project add ${slug} --repo owner/name`);
       await act(async () => {
         const b = openBoard();
-        const t = await board.openServedTask(b, {
+        const { task: t } = await board.openServedTask(b, {
           project: slug,
           repo,
           title: o.title,
@@ -191,7 +191,7 @@ export function registerTask(program: Command): void {
     .description("Tasks oldest first, the order the queue works them in")
     .action((o: { project?: string; state?: string; lane?: string; n: string; json?: boolean }) =>
       act(async () => {
-        const state = o.state as board.ListTasksOptions["state"] | undefined;
+        const state = o.state as board.RelayState | "open" | "all" | undefined;
         if (state && state !== "open" && state !== "all" && !(board.RELAY_STATES as readonly string[]).includes(state)) throw new board.TaskError(`--state must be one of ${board.RELAY_STATES.join(", ")}, open or all`, 400);
         const rows = await board.listTasks(openBoard(), { ...(o.project ? { project: o.project } : {}), ...(state ? { state } : {}), ...(o.lane ? { lane: o.lane } : {}), limit: Number(o.n) || 50 });
         if (o.json) console.log(JSON.stringify(rows, null, 2));

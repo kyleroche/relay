@@ -10,7 +10,7 @@
 import { type Board, type MessageView } from "@vercel/board";
 import type { MeterReading } from "../meters.ts";
 import { laneUnservedProblem } from "../tasks/lanes.ts";
-import { asTaskError, openTask, TaskError, type BoardTask, type OpenTaskInput } from "./tasks.ts";
+import { asTaskError, openTask, TaskError, toTask, type BoardTask, type OpenTaskInput } from "./tasks.ts";
 import { WORKERS_CHANNEL } from "./mapping.ts";
 import { blocksOf, WORKER_SCHEMA, workerText, type WorkerBlock } from "./schemas.ts";
 
@@ -120,17 +120,21 @@ export async function listWorkers(board: Board, now: number = Date.now()): Promi
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** The lanes a worker that is online or idle serves, sorted: the lanes that would pick a task up now. */
 /**
  * Open a task on a lane somebody serves: refused, naming the lanes that have a worker, when nobody does. Every
- * surface that takes a lane from a person or a bot opens tasks through this (the CLI, the site's API, the MCP tool).
+ * surface that takes a lane from a person or a bot opens tasks through this (the CLI, the site, the MCP server).
+ * The caller's idempotency key is looked up first, so a retry answers the task the first call made (`created`
+ * false) whatever has happened to the workers since.
  */
-export async function openServedTask(board: Board, input: OpenTaskInput): Promise<BoardTask> {
+export async function openServedTask(board: Board, input: OpenTaskInput, opts: Parameters<typeof openTask>[2] = {}): Promise<{ task: BoardTask; created: boolean }> {
+  const earlier = input.idempotencyKey ? await board.posted(input.idempotencyKey).catch(() => undefined) : undefined;
+  if (earlier?.task) return { task: toTask(earlier), created: false };
   const problem = laneUnservedProblem(input.lane, servedLanes(await listWorkers(board)));
   if (problem) throw new TaskError(problem, 400);
-  return openTask(board, input);
+  return { task: await openTask(board, input, opts), created: true };
 }
 
+/** The lanes a worker that is online or idle serves, sorted: the lanes that would pick a task up now. */
 export const servedLanes = (workers: WorkerView[]): string[] => [...new Set(workers.filter((w) => w.state !== "offline").flatMap((w) => w.lanes))].sort();
 
 /**
