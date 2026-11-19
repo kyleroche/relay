@@ -30,7 +30,7 @@ export interface IssueIntake {
 
 /**
  * The task an `issues` delivery opens, or undefined when it opens none (another action, no lane label, a sender who
- * may not, a repository no project is registered for). The idempotency key is the issue, so the `opened` and
+ * may not, a repository no project is registered for). A lane that is neither built in nor served by a worker throws. The idempotency key is the issue, so the `opened` and
  * `labeled` deliveries of one new issue, and a redelivery, make one task. On a repository several projects share, a
  * `production:<slug>` label names the project.
  */
@@ -52,8 +52,9 @@ export async function openIssueTask(deps: IssueIntake, eventName: string, payloa
   const project = candidates.find((p) => p.slug === named) ?? candidates[0];
   if (!project) return undefined;
   const ref = `${repoName}#${number}`;
-  // one profile for every delivery, so the issue's key finds its task whoever labelled it; who did is in the feed row
-  return board.openTask(actorBoard(deps.session, INTAKE_ACTOR), { project: project.slug, repo: repoName, title: str(issue.title) ?? ref, body: str(issue.body) ?? "", lane, issue: ref, idempotencyKey: `issue:${ref}` });
+  // one profile for every delivery, so the issue's key finds its task whoever labelled it; who did is in the feed row.
+  // A lane no worker serves is refused (the route logs it): a label is easy to mistype, and nobody would claim the task.
+  return board.openServedTask(actorBoard(deps.session, INTAKE_ACTOR), { project: project.slug, repo: repoName, title: str(issue.title) ?? ref, body: str(issue.body) ?? "", lane, issue: ref, idempotencyKey: `issue:${ref}` });
 }
 
 /** The task a merged `pull_request` delivery completes, or undefined when none waits on that pull request. */

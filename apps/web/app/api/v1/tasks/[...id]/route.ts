@@ -42,8 +42,7 @@ export const GET = api<Ctx>(
  * (`…/requeue`, `{ "lane"?, "model"? }`; `"model": null` goes back to the lane's default), closeTask (`…/close`,
  * `{ "reason"? }`) and releaseTask (`…/release`). Each is the board's own task function (packages/core/src/board/
  * tasks.ts), made as the caller's profile, and answers with the updated task. A signed-in person is unrestricted; a
- * token needs `tasks:write`, never approves a task it opened or ran, and to release needs `tokens:write` and must not
- * have opened the task (lib/task-ops.ts).
+ * token needs `tasks:write`, and to release needs `tokens:write` and must not have opened the task (lib/task-ops.ts).
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {

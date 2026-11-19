@@ -43,6 +43,9 @@ describe("relayBranch", () => {
   });
 
   it("is null for anything else", () => {
+    // a worker's branch names its board task by a hash: the lane is read, and eight digits are never an issue number
+    expect(relayBranch("relay/claude-53b65c9c")).toEqual({ lane: "claude", issue: null });
+    expect(relayBranch("relay/laser-cut-12345678")).toEqual({ lane: "laser-cut", issue: null });
     expect(relayBranch("main")).toBeNull();
     expect(relayBranch("relay/Claude-1")).toBeNull();
     expect(relayBranch("relay/claude")).toBeNull();

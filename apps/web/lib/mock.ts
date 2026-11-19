@@ -37,7 +37,7 @@ export const MOCK_PROJECTS: MockProject[] = [
     stack: "TypeScript · pnpm · Next.js · Postgres",
     check_cmd: "pnpm -r typecheck && pnpm -r test",
     summary:
-      "The harness itself: core library, CLI, memory MCP server and this web app. Issues labelled agent:* are picked up by self-hosted runners.",
+      "The harness itself: core library, CLI, memory MCP server and this web app. Tasks on the team's board are claimed by workers on your own machines.",
     digest: { digested: 212, total: 238 },
     lanes: ["claude", "codex", "grok"],
   },

@@ -45,6 +45,11 @@ describe("an issue with a lane label", () => {
     expect(await board.listTasks(session.board, { state: "all" })).toHaveLength(1);
   });
 
+  it("refuses a lane that is neither built in nor served by a worker", async () => {
+    await expect(openIssueTask(deps, "issues", issues("labeled", { number: 31, label: "agent:claude-cloud" }))).rejects.toThrow(/no worker serves lane 'claude-cloud'/);
+    expect((await board.listTasks(session.board, { state: "all" })).some((t) => t.issue?.number === 31)).toBe(false);
+  });
+
   it("opens nothing for a sender who may not, a label that is no lane, another action or an unregistered repository", async () => {
     expect(await openIssueTask(deps, "issues", issues("labeled", { number: 8, label: "agent:claude", sender: "stranger" }))).toBeUndefined();
     expect(await openIssueTask(deps, "issues", issues("labeled", { number: 8, label: "priority:high" }))).toBeUndefined();

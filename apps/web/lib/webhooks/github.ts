@@ -30,6 +30,7 @@ export function actorOf(payload: Json): string {
  */
 const LANE_LABEL = new RegExp(`^agent:(${LANE_NAME_PATTERN})$`);
 const LAZY_LANE = LANE_NAME_PATTERN.replace(/\}$/, "}?");
+const BOARD_BRANCH = new RegExp(`^relay\\/(${LANE_NAME_PATTERN})-[0-9a-f]{8}$`);
 const RELAY_BRANCH = new RegExp(`^relay\\/(?:(${LAZY_LANE})-(\\d+)|(\\d+)-(${LANE_NAME_PATTERN}))(?:$|[-/])`);
 
 /** The lane an `agent:<lane>` label names, or null for any other label. */
@@ -49,10 +50,14 @@ export function laneOfLabels(labels: unknown): Lane | null {
 }
 
 /**
- * A runner branch: `relay/<lane>-<issue>` as run-lane.sh names it (the older `relay/<issue>-<lane>` spelling is
- * still read). Null for any other branch.
+ * A branch relay pushed: a worker's `relay/<lane>-<8 hex>` (the lane; its task is on the board, so no issue), or an
+ * Actions runner's `relay/<lane>-<issue>` as run-lane.sh names it (the older `relay/<issue>-<lane>` spelling is still
+ * read). Null for any other branch.
  */
-export function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number } | null {
+export function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number | null } | null {
+  // a worker's branch names its board task by eight hex characters of a hash, never an issue
+  const board = BOARD_BRANCH.exec(branch ?? "");
+  if (board) return { lane: board[1] as Lane, issue: null };
   const m = RELAY_BRANCH.exec(branch ?? "");
   if (!m) return null;
   const lane = (m[1] ?? m[4]) as Lane;

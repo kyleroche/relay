@@ -39,6 +39,7 @@ describe("the profile the site writes as", () => {
     const by = (profile: string | null, principal = "vercel:project:prj_1:production") => ({ actor: profile ? `${principal}+${profile}` : principal, principal, profile });
     expect(feedActor(by("human-kyleroche"))).toBe("human:kyleroche");
     expect(feedActor(by("bot-grok-bot"))).toBe("bot:grok-bot");
+    expect(feedActor(by(actorProfile("bot:oauth:grok-bot")))).toBe("bot:oauth:grok-bot");
     expect(feedActor(by("relay-mini-claude"))).toBe("runner:mini-claude");
     expect(feedActor(by(null, "vercel:user:u_1"), "kyleroche")).toBe("human:kyleroche");
     expect(feedActor(by(null), "relay")).toBe("agent:relay");

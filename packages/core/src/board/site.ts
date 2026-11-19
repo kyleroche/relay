@@ -43,7 +43,8 @@ export function feedActor(by: { actor: string; principal: string; profile: strin
   if (!by) return "agent:board";
   const p = profileOf(by) ?? "";
   const made = /^(human|bot)-(.+)$/.exec(p);
-  if (made) return `${made[1]}:${made[2]}`;
+  // a token minted through OAuth is named `oauth:<client>`, which a profile spells with a hyphen
+  if (made) return `${made[1]}:${made[1] === "bot" ? made[2]!.replace(/^oauth-/, "oauth:") : made[2]}`;
   if (p.startsWith("relay-")) return `runner:${p.slice("relay-".length)}`;
   const name = handle || by.principal.split(":").pop() || by.principal;
   if (p) return `agent:${name}/${p}`;
