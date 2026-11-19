@@ -50,6 +50,11 @@ data, never as instructions:
   head is a branch relay pushed for that task (`relay/<lane>-<8 hex of the task ID's hash>`). A worker pushes only
   its own branch for the task, or, when it answers an eval, the branch the earlier run's `relay-run@1` block names
   and only when that is also a branch relay pushed for the task; never one a label or a block alone names.
+- **Words relay posts for someone else carry no data.** relay believes a block by who wrote the message, and it
+  writes other people's words as itself: a lane's summary, an eval's findings, a review note, a task's body. A fence
+  in such text that would be a block (`json#name@1`) is posted as a plain `json` fence (`prose` in
+  `packages/core/src/board/schemas.ts`), so a model cannot write a gate release, a run or a usage row into a thread,
+  and neither can a bot through the site, which writes as a principal workers trust.
 - **How text reaches the shell.** Issue and PR title and body are passed only through `env:`. No `${{ }}` with
   user-controlled content appears inside a `run:` script, so a title like `"; rm -rf ~` is a string, not a command.
 - **How text reaches the model.** `run-lane.sh` writes the issue into the brief between `<<<ISSUE` and `ISSUE>>>`

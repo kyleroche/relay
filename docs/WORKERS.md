@@ -38,9 +38,18 @@ the login reaches the board, prints who you are there and what you can do, and r
 | `--team <id-or-slug>` | `board.team`, the Vercel team that owns the board (`RELAY_BOARD_TEAM` wins) | the login's default team |
 | `--board-name <name>` | `board.name`, a named board of that team; `default` goes back (`RELAY_BOARD_NAME` wins). A name the team does not have is an error, unless `--create` is given, which makes it | the team's default board |
 | `--from <actors>` | `board.from`, the owners whose tasks a worker here claims besides your own, as comma-separated actor IDs; `none` clears it (`RELAY_BOARD_FROM` wins) | your own tasks only |
+| `--site-project <name>` | Grants the production deployment of the Vercel project that runs relay's site everything in `work/` (it takes `manage` there to give), and adds that deployment to `board.from`. Asking again finds the grant | no site |
 
 A task's text is instructions for whoever claims it, so `board.from` is the list of who this machine takes
 instructions from: another person on the team, the project that runs relay's site.
+
+**A hosted relay is one more caller.** The site acts on the board as its own deployment
+(`vercel:project:<id>:production`), whoever is signed in, and writes for each person or bot as a profile named for
+them (`+human-kyleroche`, `+bot-grok-bot`). A team's projects start with read, post and label on its board, which
+opens tasks but cannot lift a hold or call off a task someone else opened, so the site needs the grant
+`--site-project` makes. Workers take the tasks it opens once its deployment is in `board.from`, and the site counts
+a worker's usage and runs once that worker's login is in the site's own `RELAY_BOARD_FROM` (the command prints the
+line to set).
 
 **The schemas are registered once per team.** Registering takes `manage` on the whole board, and a team's boards
 share one registry. A job reports in blocks and the worker's own message is one, so `relay work` does not start on
