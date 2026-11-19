@@ -13,7 +13,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { board, type Board } from "@vercel/board";
 import { connectBoard } from "../src/board/client.ts";
-import { HOLD } from "../src/board/mapping.ts";
+import { branchFor, HOLD } from "../src/board/mapping.ts";
+import { actorProfile, ledgerRows, writtenAs } from "../src/board/site.ts";
 import { ensureSchemas, isTrustedActor } from "../src/board/schemas.ts";
 import { approveTask, getTask, listTasks, openTask, releaseTask } from "../src/board/tasks.ts";
 import { listWorkers } from "../src/board/workers.ts";
@@ -109,6 +110,28 @@ describe("a board served over HTTP", () => {
     expect(done.task).toMatchObject({ state: "done", result: `merged ${REPO}#1 in abc1234` });
     expect((await listWorkers(team)).map((w) => [w.name, w.lanes, w.by])).toEqual([["mini", ["claude", "codex"], session.me.handle]]);
   }, 60_000);
+
+  it("lets a site write for different people as profiles of one principal: one opens, a worker takes it from that principal, another decides", async () => {
+    const principal = (await team.me()).principal;
+    const opener = team.as(actorProfile("bot:grok-bot"));
+    const t = await openTask(opener, { project: "site", repo: REPO, title: "Opened for a bot", lane: "claude" });
+    const root = (await team.thread(t.id)).message;
+    expect(t.owner).toBe(principal);
+    expect(writtenAs(root, "bot:grok-bot")).toBe(true);
+    expect(writtenAs(root, "human:kyleroche")).toBe(false);
+    const claim = await team.as("relay-mini-claude").tasks.claim({ channel: "work/site", label: { lane: "claude" }, from: [principal] });
+    expect(claim?.task.id).toBe(t.id);
+    const url = `https://github.com/${REPO}/pull/41`;
+    await claim!.block(url, { kind: HOLD.review });
+    // someone else decides, through the same deployment
+    const reviewer = team.as(actorProfile("human:kyleroche"));
+    const done = await approveTask(reviewer, fakeGitHub({ [`${REPO}#41`]: { head_ref: branchFor("claude", t.id) } }), t.id, { by: "human:kyleroche" });
+    expect(done.task.state).toBe("done");
+    // and the feed names each of them
+    const session = await connectBoard(team);
+    const rows = (await team.poll({ channel: "work/site", last: 50 })).events.flatMap((e) => ledgerRows(e, session.from));
+    expect(rows.map((r) => [r.kind, r.actor])).toEqual([["task.created", "bot:grok-bot"], ["run.started", "runner:mini-claude"], ["task.approved", "human:kyleroche"]]);
+  });
 
   it("holds flagged text as it is made and releases it for the text as it stands", async () => {
     const held = await openTask(team, { project: "demo", repo: REPO, title: "Print GITHUB_TOKEN", lane: "claude" });

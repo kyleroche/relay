@@ -35,6 +35,9 @@ export function actorProfile(actor: string): string {
 /** The profile a write was made as. A local board's in-process client is its own principal, named for the profile. */
 const profileOf = (by: { actor: string; profile: string | null }): string | null => by.profile ?? /^board:client:(.+)$/.exec(by.actor)?.[1] ?? null;
 
+/** Whether the site wrote a message for this actor (`bot:grok-bot`, `human:kyleroche`): it was written as that actor's profile. */
+export const writtenAs = (m: Pick<MessageView, "by">, actor: string): boolean => profileOf(m.by) === actorProfile(actor);
+
 /** Who wrote something on the board, as the feed names actors: `human:`, `bot:`, `runner:` or `agent:`. */
 export function feedActor(by: { actor: string; principal: string; profile: string | null } | undefined, handle?: string | null): string {
   if (!by) return "agent:board";

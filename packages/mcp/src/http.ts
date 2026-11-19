@@ -29,7 +29,7 @@ export interface Grant {
   source?: string;
 }
 
-export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "site" | "assets" | "github" | "afterEvent" | "authorizationServer" | "accessHint" | "oauth"> {
+export interface McpHandlerOptions extends Pick<RelayServerOptions, "embed" | "site" | "assets" | "board" | "github" | "afterEvent" | "authorizationServer" | "accessHint" | "oauth"> {
   /** A shared bearer token that grants every scope (RELAY_MEMORY_TOKEN). Unset or empty means it never matches. */
   token?: string | undefined;
   /** Resolve a presented bearer token to its scopes; undefined when unknown. */
@@ -90,6 +90,7 @@ export function createMcpHandler(db: Db, opts: McpHandlerOptions): McpHandler {
       ...(opts.embed ? { embed: opts.embed } : {}),
       ...(opts.site ? { site: opts.site } : {}),
       ...(opts.assets ? { assets: opts.assets } : {}),
+      ...(opts.board ? { board: opts.board } : {}),
       ...(opts.github ? { github: opts.github } : {}),
       ...(opts.afterEvent ? { afterEvent: opts.afterEvent } : {}),
       ...(opts.authorizationServer ? { authorizationServer: opts.authorizationServer } : {}),

@@ -10,8 +10,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
-  approveTask,
   approxTokens,
+  board,
   compileBrief,
   createInvite,
   decideDeviceRequest,
@@ -19,34 +19,21 @@ import {
   finalizeFromKey,
   GRANT_INVITE,
   invalidateBriefCache,
-  isTaskState,
   listRecentAccess,
   matchingDecisions,
   mergedPreferences,
   OAuthError,
-  openTask,
   parseDuration,
-  releaseTask,
   renderDecision,
   renderPreference,
   repo,
-  requestChanges,
-  requeueTask,
   revokeInvite,
   safeFilename,
   sniffMime,
-  TASK_LANES,
-  TASK_PRIORITIES,
-  TASK_STATES,
-  TaskCreateError,
-  TaskGateError,
-  TaskRequeueError,
-  TaskCloseError,
-  closeTask,
-  TaskReviewError,
   TOKEN_SCOPES,
   ulid,
   uploadKeyFor,
+  WORKER_LANES,
   type AccessRequestView,
   type AssetRow,
   type AssetStore,
@@ -82,15 +69,15 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_asset_get", scope: "assets:read", description: "One asset with its version chain and short-lived signed view URLs." },
   { name: "relay_asset_request_upload", scope: "assets:write", description: "Reserve an asset id and get a one-time upload URL; PUT the bytes there, then call relay_asset_finalize." },
   { name: "relay_asset_finalize", scope: "assets:write", description: "Turn an uploaded object into an asset row (probe, thumbnail, record) after relay_asset_request_upload." },
-  { name: "relay_asset_review", scope: "assets:review", description: "Approve or reject an asset: approved closes the task's issue when the asset has one (the task is done); rejected needs a note, which reopens the issue, queues the task again and becomes the decision the next run reads. A bot may review only with assets:review and never an asset its own runs produced." },
-  { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a GitHub issue in the project's repo with the agent:<lane> label (and priority:<p>); returns task_id and issue_url. Idempotent on idempotency_key." },
-  { name: "relay_task_get", scope: "tasks:read", description: "One task by id (owner/repo#n) with its derived state: queued, held, claimed, running, review, done or failed, plus the worker, PR, preview URL (preview_url, preview_state), the lane's run summary, usage and the review decision. held means the injection gate flagged the issue text; the task.held row in its feed carries the score and reasons." },
-  { name: "relay_task_list", scope: "tasks:read", description: "Tasks with derived state, newest first; filter by project and state. state=review is what waits for a decision; state=held is what the injection gate stopped and a person should look at." },
-  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its PR through GitHub, deletes the branch and writes task.approved (the task is done). A bot may approve only with tasks:write and never a PR its own lane produced; GitHub's refusal comes back as an error with task.merge_failed in the feed." },
-  { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: relay comments on the PR (relay: changes requested by <actor>: …), writes task.changes_requested and queues the task; the next run gets the note in its brief and pushes to the same PR." },
-  { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held): relay writes task.released and the task is queued again; the next worker grades it again before running. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task it opened itself." },
-  { name: "relay_task_close", scope: "tasks:write", description: "Close a task without a merge from any state but done: relay closes the issue on GitHub as not planned with the reason as a comment, closes an open PR the same way (best effort), releases a live worker claim and writes task.closed (the task is done). For a task opened by mistake, against a spec the repo does not match, or a duplicate. A bot needs tasks:write." },
-  { name: "relay_task_requeue", scope: "tasks:write", description: "Put a task back in the queue from any state but done, optionally on another lane: relay moves the agent:* label on the issue (best effort), releases a live worker claim, writes task.requeued; the next run starts over. For a task stuck running (a cloud lane nobody wired, a run that never reported) or on the wrong lane." },
+  { name: "relay_asset_review", scope: "assets:review", description: "Approve or reject an asset in the library; a rejection needs a note, which becomes the decision the next attempt reads. A bot may review only with assets:review and never an asset its own runs produced." },
+  { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a thread in the project's queue on the team's Vercel Board, labelled with its lane (and model). Returns task_id (the board's message ID) and its state. Refused when no worker serves the lane. Idempotent on idempotency_key." },
+  { name: "relay_task_get", scope: "tasks:read", description: "One task by ID with its state: waiting (a task it needs has not completed), queued, running, review (a pull request or outputs wait for a decision), held (the injection gate flagged the text), blocked (held for another reason, such as an eval looking at it), done, failed or closed. Plus the lane, model, pull request, the hold and its reason, who holds the claim, the last result, usage rows and the latest notes in its thread." },
+  { name: "relay_task_list", scope: "tasks:read", description: "Tasks on the board, oldest first; filter by project and state. Default state=open (everything not done or closed). state=review is what waits for a decision; state=held is what the injection gate stopped and a person should read." },
+  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task (or, for a task whose deliverable is its attached outputs, completes it). Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review." },
+  { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: the note goes in the task's thread and as a comment on the pull request, and the task is queued; the next run reads the note and pushes to the same pull request." },
+  { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held) for the text as it stands: the task is queued and the gate does not grade that text again; anything added later is graded. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task it opened itself." },
+  { name: "relay_task_close", scope: "tasks:write", description: "Close a task without a merge from any state but done or closed: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub (best effort). For a task opened by mistake, against a spec the repo does not match, or a duplicate." },
+  { name: "relay_task_requeue", scope: "tasks:write", description: "Put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it; relay_task_close stops a run." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
   { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
@@ -140,7 +127,13 @@ export interface RelayServerOptions {
   invalidateCache?: boolean;
   site?: SiteHooks;
   assets?: AssetHooks;
-  /** GitHub access for relay_task_create, relay_task_approve, relay_task_request_changes and relay_task_requeue (env token on the web, the gh login locally). Without it the review tools answer with an error; requeue records the missing credential and queues anyway. */
+  /**
+   * The board the task tools work on (`relay setup --board` locally, the deployment's own team on a site). `asActor`
+   * is true where the handle is not the caller: a site's handle is its deployment, so each write is made as a profile
+   * named for whoever asked. Without it the task tools answer with how to get one.
+   */
+  board?: { open: () => Promise<board.BoardSession>; asActor: boolean };
+  /** GitHub access for relay_task_approve, relay_task_request_changes and relay_task_close (env token on the web, the gh login locally). Without it the review tools answer with an error; requeue records the missing credential and queues anyway. */
   github?: GitHubClient;
   /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
   afterEvent?: (row: repo.EventRow) => void | Promise<void>;
@@ -199,12 +192,12 @@ const ASSET_KIND = ["image", "video", "audio", "pdf", "html", "file"] as const;
 export const METHODOLOGY = `relay: the five rules
 
 1. Tasks move, credentials never do. Every model call runs on a machine where the owner logged in with the vendor's own tool. No token is copied, proxied, or stored in CI.
-2. GitHub is the task bus. An issue is a task, a label picks the lane, a pull request is the result. Nothing of record lives anywhere else.
+2. The team's Vercel Board is the task bus. A task is a thread in its project's queue, a label picks the lane, a pull request on GitHub is the result.
 3. Every step starts fresh with a small brief. No transcript is ever sent to a model. A brief is the repo's rules file, the issue, relevant decisions, and the vendor guidance that matches the intent.
 4. Official vendor sources only. Model guidance comes from the vendor's documentation and the skills the vendor publishes.
 5. Everything is an event. One append-only table records what every human, bot, and runner did, with tokens and cost. The ledger is a view over it.
 
-A task's life: open an issue with a lane label (GitHub, or relay_task_create); a worker that serves that lane claims it from relay under a lease (your machine, running \`relay work\`); the vendor CLI runs headless under the machine's own login (your machine); a branch and a PR appear with the usage line as a comment (GitHub); the preview builds and a second model reviews (Vercel, your machine); you merge and memory updates (Postgres). Every step above is a row in the feed.`;
+A task's life: open a task with a lane (relay_task_create, or relay task create); a worker that serves that lane claims it from the board under a lease (your machine, running \`relay work\`); the vendor CLI runs headless under the machine's own login (your machine); a branch and a PR appear with the usage line as a comment (GitHub); the preview builds and a second model reviews (Vercel, your machine); you merge and memory updates (Postgres). Every step above is a row in the feed.`;
 
 /** Scopes a connection holds given the options. */
 export function grantedScopes(opts: Pick<RelayServerOptions, "canWrite" | "scopes" | "publicRead">): Set<TokenScope> {
@@ -294,7 +287,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         project: z.string().optional(),
         kind: z.string().optional(),
         actor: z.string().optional(),
-        lane: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter").optional().describe(`one of ${TASK_LANES.join(", ")}, or the lane of a registered worker`),
+        lane: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter").optional().describe(`one of ${WORKER_LANES.join(", ")}, or the lane another worker serves`),
         limit: z.number().int().min(1).max(200).optional(),
         before: z.string().datetime({ offset: true }).optional(),
         after: z.string().datetime({ offset: true }).optional(),
@@ -592,15 +585,51 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         if (before.created_by === externalActor(actor)) return fail(`relay: ${actor} produced this asset and cannot review it; a person or another bot decides`);
         const row = await repo.reviewAsset(db, id, { decision, by: externalActor(actor), note: text });
         await assetsHooks?.afterReview?.(row);
-        const repoName = row.project ? (await repo.getProject(db, row.project))?.repo ?? null : null;
-        return json({ ...publicAsset(row), task_id: repoName && row.issue != null ? `${repoName}#${row.issue}` : null });
+        return json(publicAsset(row));
       } catch (e) {
         return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
       }
     },
   );
 
-  // ---------- tasks and external events (docs/INTEGRATIONS.md) ----------
+  // ---------- tasks (docs/INTEGRATIONS.md): threads on the team's board, through the same functions the CLI calls ----------
+
+  const LANE = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter");
+  const TASK_ID = z.string().min(1).describe("the task's ID on the board, as relay_task_create and relay_task_list return it");
+  const NO_BOARD = "relay: this server has no board to work on. Locally: vercel login, then relay setup --board. On a site: the deployment must be on the Vercel team that owns the board.";
+  /** The board for a read, or for a write made for this caller: on a site the handle is the deployment, so the write carries the caller as a profile. */
+  const boardFor = async (write: boolean): Promise<{ session: board.BoardSession; b: board.Board }> => {
+    const session = await opts.board!.open();
+    return { session, b: write && opts.board!.asActor ? session.board.as(board.actorProfile(externalActor(actor))) : session.board };
+  };
+  const taskFail = (e: unknown, tool: string) => fail(`relay: ${board.describeBoardError(e)}${e instanceof board.TaskError && e.status === 503 ? ` (${tool} needs GitHub access on the server)` : ""}`);
+  const taskView = (t: board.BoardTask) => ({
+    task_id: t.id,
+    state: t.state,
+    project: t.project ?? null,
+    title: t.title,
+    lane: t.lane,
+    model: t.model,
+    repo: t.repo,
+    pr_url: t.pr?.url ?? null,
+    hold: t.hold,
+    needs: t.needs,
+    claim: t.claim,
+    result: t.result,
+    reason: t.reason,
+    created_at: t.created_at,
+  });
+  /** One task tool: the scope gate, the board, and a refusal as one line. */
+  const taskTool = async (scope: TokenScope, tool: string, write: boolean, run: (h: { session: board.BoardSession; b: board.Board }) => Promise<ReturnType<typeof json>>) => {
+    const g = gate(scope, tool);
+    if (g) return g;
+    if (!opts.board) return fail(NO_BOARD);
+    try {
+      return await run(await boardFor(write));
+    } catch (e) {
+      return taskFail(e, tool);
+    }
+  };
 
   server.registerTool(
     "relay_task_create",
@@ -608,38 +637,42 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       title: "Open a task",
       description: toolDescription("relay_task_create"),
       inputSchema: {
-        project: z.string().min(1).describe("project slug (relay link registered it)"),
-        title: z.string().min(1).max(256),
-        body: z.string().max(60_000).optional().describe("issue body, markdown; the brief the lane reads"),
-        lane: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter").optional().describe(`claude, codex or grok run on the user's own workers (machines running relay work) and are the normal choice; default claude. claude-cloud and codex-cloud hand the task to the vendor's hosted tier and only work when the operator has wired it; do not pick them unless asked to. Any other lane (an app serving its own craft, e.g. embroidery) works once a worker has registered it; the error names the lanes that have one. Built-in and cloud: ${TASK_LANES.join(", ")}.`),
-        priority: z.enum(TASK_PRIORITIES).optional(),
+        project: z.string().min(1).describe("project slug (relay link or relay project add registered it)"),
+        title: z.string().min(1).max(200),
+        body: z.string().max(60_000).optional().describe("the task's text, markdown: what to do and how to tell it is done"),
+        lane: LANE.optional().describe(`who runs it: ${WORKER_LANES.join(", ")} run on the user's own workers; ${board.ANY_LANE} is whichever code lane is free; default claude. Another lane works once a worker serves it; the error names the lanes that have one.`),
+        model: z.string().min(1).max(100).optional().describe("the model the lane should use; the lane's default without it"),
+        needs: z.array(z.string().min(1)).max(20).optional().describe("task IDs that must complete first; the task waits for them"),
+        base: z.string().min(1).max(200).optional().describe("start from this branch instead of the repository's default one"),
         idempotency_key: z.string().min(1).max(200).optional().describe("repeat calls with the same key return the same task and open nothing"),
       },
     },
-    async (args) => {
-      const g = gate("tasks:write", "relay_task_create");
-      if (g) return g;
-      try {
-        const lane = args.lane ?? "claude";
-        const r = await openTask(db, opts.github, { ...args, lane, actor: externalActor(actor) });
-        for (const e of r.events) await emit(e);
-        return json({ task_id: r.task_id, issue_url: r.issue_url, created: r.created, state: r.task.state, lane });
-      } catch (e) {
-        return fail(`relay: ${e instanceof Error ? e.message : String(e)}${e instanceof TaskCreateError && e.status === 503 ? " (relay_task_create needs GitHub access on the server)" : ""}`);
-      }
-    },
+    (args) =>
+      taskTool("tasks:write", "relay_task_create", true, async ({ b }) => {
+        const project = await repo.getProject(db, args.project);
+        if (!project) throw new board.TaskError(`no project '${args.project}'; relay_get_project lists the ones this relay knows`, 404);
+        if (!project.repo) throw new board.TaskError(`project '${args.project}' has no repository to work in (relay project add ${args.project} --repo owner/name)`, 400);
+        const t = await board.openServedTask(b, {
+          project: project.slug,
+          repo: project.repo,
+          title: args.title,
+          body: args.body ?? "",
+          lane: args.lane ?? "claude",
+          ...(args.model ? { model: args.model } : {}),
+          ...(args.needs?.length ? { needs: args.needs } : {}),
+          ...(args.base ? { base: args.base } : {}),
+          ...(args.idempotency_key ? { idempotencyKey: args.idempotency_key } : {}),
+        });
+        return json(taskView(t));
+      }),
   );
 
-  server.registerTool(
-    "relay_task_get",
-    { title: "Read a task", description: toolDescription("relay_task_get"), inputSchema: { task_id: z.string().min(3).describe("owner/repo#n") } },
-    async ({ task_id }) => {
-      const g = gate("tasks:read", "relay_task_get");
-      if (g) return g;
-      const t = await repo.getTask(db, task_id.trim());
-      if (!t) return fail(`relay: no task ${task_id}`);
-      return json(await repo.taskView(db, t));
-    },
+  server.registerTool("relay_task_get", { title: "Read a task", description: toolDescription("relay_task_get"), inputSchema: { task_id: TASK_ID } }, ({ task_id }) =>
+    taskTool("tasks:read", "relay_task_get", false, async ({ b }) => {
+      const d = await board.getTask(b, task_id.trim());
+      const results = d.thread.replies.filter((m) => !m.deleted && m.labels?.relay === board.RELAY_MESSAGE.result);
+      return json({ ...taskView(d.task), body: d.task.body, last_result: results.length ? board.withoutBlocks(results.at(-1)!.text) : null, usage: d.usage, notes: d.notes.slice(-10) });
+    }),
   );
 
   server.registerTool(
@@ -647,55 +680,30 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     {
       title: "List tasks",
       description: toolDescription("relay_task_list"),
-      inputSchema: { project: z.string().optional(), state: z.enum(TASK_STATES as unknown as [string, ...string[]]).optional(), limit: z.number().int().min(1).max(200).optional() },
+      inputSchema: { project: z.string().optional(), state: z.enum(["open", "all", ...board.RELAY_STATES] as [string, ...string[]]).optional().describe("default open: everything not done or closed"), limit: z.number().int().min(1).max(200).optional() },
     },
-    async ({ project, state, limit }) => {
-      const g = gate("tasks:read", "relay_task_list");
-      if (g) return g;
-      const rows = await repo.listTaskViews(db, { ...(project ? { project } : {}), ...(state && isTaskState(state) ? { state } : {}), limit: limit ?? 50 });
-      return json({ tasks: rows, count: rows.length });
-    },
+    ({ project, state, limit }) =>
+      taskTool("tasks:read", "relay_task_list", false, async ({ b }) => {
+        const rows = await board.listTasks(b, { ...(project ? { project } : {}), state: (state ?? "open") as board.RelayState | "open" | "all", limit: limit ?? 50 });
+        return json({ tasks: rows.map(taskView), count: rows.length });
+      }),
   );
 
-  const reviewFail = (e: unknown, tool: string) =>
-    fail(`relay: ${e instanceof Error ? e.message : String(e)}${e instanceof TaskReviewError && e.status === 503 ? ` (${tool} needs GitHub access on the server)` : ""}`);
-
-  server.registerTool(
-    "relay_task_approve",
-    { title: "Approve and merge a task", description: toolDescription("relay_task_approve"), inputSchema: { id: z.string().min(3).describe("owner/repo#n") } },
-    async ({ id }) => {
-      const g = gate("tasks:write", "relay_task_approve");
-      if (g) return g;
-      try {
-        const r = await approveTask(db, opts.github, id.trim(), externalActor(actor), { scopes: [...granted] });
-        for (const e of r.events) await emit(e);
-        afterWrite(r.task.project);
-        return json({ task_id: r.task.id, state: r.task.state, pr_url: r.task.pr_url, merged_at: r.task.merged_at, review: r.task.review });
-      } catch (e) {
-        return reviewFail(e, "relay_task_approve");
-      }
-    },
+  server.registerTool("relay_task_approve", { title: "Approve and merge a task", description: toolDescription("relay_task_approve"), inputSchema: { id: TASK_ID } }, ({ id }) =>
+    taskTool("tasks:write", "relay_task_approve", true, async ({ b }) => {
+      const r = await board.approveTask(b, opts.github, id.trim(), { by: externalActor(actor) });
+      return json({ ...taskView(r.task), pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted });
+    }),
   );
 
   server.registerTool(
     "relay_task_request_changes",
-    {
-      title: "Request changes on a task",
-      description: toolDescription("relay_task_request_changes"),
-      inputSchema: { id: z.string().min(3).describe("owner/repo#n"), note: z.string().min(1).max(10_000).describe("what should change; written for the model that will address it") },
-    },
-    async ({ id, note }) => {
-      const g = gate("tasks:write", "relay_task_request_changes");
-      if (g) return g;
-      try {
-        const r = await requestChanges(db, opts.github, id.trim(), externalActor(actor), note, { scopes: [...granted] });
-        for (const e of r.events) await emit(e);
-        afterWrite(r.task.project);
-        return json({ task_id: r.task.id, state: r.task.state, pr_url: r.task.pr_url, review: r.task.review, next: "the next worker run gets the note under Review feedback in its brief and pushes to the same PR" });
-      } catch (e) {
-        return reviewFail(e, "relay_task_request_changes");
-      }
-    },
+    { title: "Request changes on a task", description: toolDescription("relay_task_request_changes"), inputSchema: { id: TASK_ID, note: z.string().min(1).max(6000).describe("what should change; written for the model that will address it") } },
+    ({ id, note }) =>
+      taskTool("tasks:write", "relay_task_request_changes", true, async ({ b }) => {
+        const t = await board.requestChanges(b, opts.github, id.trim(), note);
+        return json({ ...taskView(t), next: "the next worker that serves the lane runs it again with the note in the thread and pushes to the same pull request" });
+      }),
   );
 
   server.registerTool(
@@ -703,75 +711,32 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     {
       title: "Requeue a task",
       description: toolDescription("relay_task_requeue"),
-      inputSchema: {
-        id: z.string().min(3).describe("owner/repo#n"),
-        lane: z.string().regex(/^[a-z][a-z0-9-]{0,31}$/, "a lane name: lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter").optional().describe(`move the task to this lane; claude, codex or grok run on the user's own workers and are the normal choice, and a registered worker's own lane works too (built-in and cloud: ${TASK_LANES.join(", ")}). Omitted keeps the lane it has.`),
-        reason: z.string().max(2000).optional().describe("why, for the feed"),
-      },
+      inputSchema: { id: TASK_ID, lane: LANE.optional().describe("move the task to this lane; omitted keeps the lane it has"), model: z.string().min(1).max(100).optional().describe("ask for this model; omitted keeps what it has") },
     },
-    async ({ id, lane, reason }) => {
-      const g = gate("tasks:write", "relay_task_requeue");
-      if (g) return g;
-      try {
-        const r = await requeueTask(db, opts.github, id.trim(), externalActor(actor), { lane: lane ?? null, reason: reason ?? null, scopes: [...granted] });
-        for (const e of r.events) await emit(e);
-        afterWrite(r.task.project);
-        const github = r.events[0]?.payload.github as { relabelled: boolean; error?: string } | null | undefined;
-        return json({
-          task_id: r.task.id,
-          state: r.task.state,
-          lane: r.task.lane,
-          runner: r.task.runner,
-          github: github ?? null,
-          next: r.task.lane && r.task.lane.endsWith("-cloud") ? "a cloud lane: nothing dispatches it until the operator wires that lane; requeue on claude, codex or grok for a worker to pick it up" : "the next idle worker that serves the lane claims it and starts over from the base branch",
-        });
-      } catch (e) {
-        return fail(`relay: ${e instanceof TaskRequeueError || e instanceof Error ? e.message : String(e)}`);
-      }
-    },
+    ({ id, lane, model }) =>
+      taskTool("tasks:write", "relay_task_requeue", true, async ({ b }) => {
+        const t = await board.requeueTask(b, id.trim(), { ...(lane ? { lane } : {}), ...(model ? { model } : {}) });
+        return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it and starts over from the base branch" });
+      }),
   );
 
   server.registerTool(
     "relay_task_close",
-    {
-      title: "Close a task",
-      description: toolDescription("relay_task_close"),
-      inputSchema: { id: z.string().min(3).describe("owner/repo#n"), reason: z.string().max(2000).optional().describe("why, for the feed and the issue comment") },
-    },
-    async ({ id, reason }) => {
-      const g = gate("tasks:write", "relay_task_close");
-      if (g) return g;
-      try {
-        const r = await closeTask(db, opts.github, id.trim(), externalActor(actor), { reason: reason ?? null, scopes: [...granted] });
-        for (const e of r.events) await emit(e);
-        afterWrite(r.task.project);
-        const github = r.events[0]?.payload.github as { closed: boolean; error?: string } | null | undefined;
-        return json({ task_id: r.task.id, state: r.task.state, github: github ?? null, next: github && !github.closed ? `done in relay, but the issue did not close on GitHub: ${github.error ?? "unknown error"}; close it by hand` : "done; the issue is closed as not planned. Reopening it on GitHub is the way to start it again" });
-      } catch (e) {
-        return fail(`relay: ${e instanceof TaskCloseError || e instanceof Error ? e.message : String(e)}`);
-      }
-    },
+    { title: "Close a task", description: toolDescription("relay_task_close"), inputSchema: { id: TASK_ID, reason: z.string().max(900).optional().describe("why; it is the task's closing reason and a comment on its pull request and issue") } },
+    ({ id, reason }) =>
+      taskTool("tasks:write", "relay_task_close", true, async ({ b }) => {
+        const r = await board.closeTask(b, opts.github, id.trim(), { ...(reason ? { reason } : {}) });
+        return json({ ...taskView(r.task), github: r.github, canceled: r.canceled, to_review: r.to_review });
+      }),
   );
 
-  server.registerTool(
-    "relay_task_release",
-    {
-      title: "Release a held task",
-      description: toolDescription("relay_task_release"),
-      inputSchema: { id: z.string().min(3).describe("owner/repo#n"), note: z.string().max(2000).optional().describe("why it is safe to run, for the feed") },
-    },
-    async ({ id, note }) => {
-      const g = gate("tokens:write", "relay_task_release");
-      if (g) return g;
-      try {
-        const r = await releaseTask(db, id.trim(), externalActor(actor), { note: note ?? null, scopes: [...granted] });
-        for (const e of r.events) await emit(e);
-        afterWrite(r.task.project);
-        return json({ task_id: r.task.id, state: r.task.state, lane: r.task.lane, next: "the next idle worker that serves the lane claims it; its gate grades the text again (a pre-check marker holds it again unless the issue is edited or the worker runs with RELAY_GATE=off)" });
-      } catch (e) {
-        return fail(`relay: ${e instanceof TaskGateError || e instanceof Error ? e.message : String(e)}`);
-      }
-    },
+  server.registerTool("relay_task_release", { title: "Release a held task", description: toolDescription("relay_task_release"), inputSchema: { id: TASK_ID } }, ({ id }) =>
+    taskTool("tokens:write", "relay_task_release", true, async ({ session, b }) => {
+      // the text a bot wrote is not the bot's to call safe
+      if (opts.board!.asActor && board.writtenAs((await session.board.thread(id.trim())).message, externalActor(actor))) throw new board.TaskError(`${actor} opened ${id} and cannot release it; a person or another bot reads the text and decides`, 403);
+      const t = await board.releaseTask(b, id.trim());
+      return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it; the gate is not run again on the text as it stands now, and is on anything added later" });
+    }),
   );
 
   server.registerTool("relay_whoami", { title: "Who am I", description: toolDescription("relay_whoami"), inputSchema: {} }, async () => {

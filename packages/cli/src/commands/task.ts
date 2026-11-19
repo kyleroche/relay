@@ -79,9 +79,7 @@ export function registerTask(program: Command): void {
       if (!repo) throw new Error(`no repository for project '${slug}': pass --repo owner/name, or register it with relay project add ${slug} --repo owner/name`);
       await act(async () => {
         const b = openBoard();
-        const problem = board.laneUnservedProblem(o.lane, board.servedLanes(await board.listWorkers(b)));
-        if (problem) throw new board.TaskError(problem, 400);
-        const t = await board.openTask(b, {
+        const t = await board.openServedTask(b, {
           project: slug,
           repo,
           title: o.title,

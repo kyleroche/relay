@@ -9,7 +9,8 @@
  */
 import { type Board, type MessageView } from "@vercel/board";
 import type { MeterReading } from "../meters.ts";
-import { asTaskError } from "./tasks.ts";
+import { laneUnservedProblem } from "../tasks/lanes.ts";
+import { asTaskError, openTask, TaskError, type BoardTask, type OpenTaskInput } from "./tasks.ts";
 import { WORKERS_CHANNEL } from "./mapping.ts";
 import { blocksOf, WORKER_SCHEMA, workerText, type WorkerBlock } from "./schemas.ts";
 
@@ -120,6 +121,16 @@ export async function listWorkers(board: Board, now: number = Date.now()): Promi
 }
 
 /** The lanes a worker that is online or idle serves, sorted: the lanes that would pick a task up now. */
+/**
+ * Open a task on a lane somebody serves: refused, naming the lanes that have a worker, when nobody does. Every
+ * surface that takes a lane from a person or a bot opens tasks through this (the CLI, the site's API, the MCP tool).
+ */
+export async function openServedTask(board: Board, input: OpenTaskInput): Promise<BoardTask> {
+  const problem = laneUnservedProblem(input.lane, servedLanes(await listWorkers(board)));
+  if (problem) throw new TaskError(problem, 400);
+  return openTask(board, input);
+}
+
 export const servedLanes = (workers: WorkerView[]): string[] => [...new Set(workers.filter((w) => w.state !== "offline").flatMap((w) => w.lanes))].sort();
 
 /**

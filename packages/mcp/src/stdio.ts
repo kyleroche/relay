@@ -12,7 +12,7 @@
  * Logs go to stderr only; stdout is the protocol. The first stderr line names the mode.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { briefEmbedder, detectGitHub, dispatchEvent, ensureHome, loadConfig, migrate, openAssetStore, openHarness, refreshSiteTokenIfStale, type HarnessConfig } from "@relay/core";
+import { board, briefEmbedder, detectGitHub, dispatchEvent, ensureHome, loadConfig, migrate, openAssetStore, openHarness, refreshSiteTokenIfStale, type HarnessConfig } from "@relay/core";
 import { createSiteBridge, serveSiteBridge, siteAuth, tokenLabel } from "./bridge.ts";
 import { createRelayServer } from "./server.ts";
 
@@ -57,6 +57,8 @@ async function serveLocal(cfg: HarnessConfig): Promise<void> {
     assets: { store: openAssetStore() },
     ...(embed ? { embed } : {}),
     ...(github ? { github } : {}),
+    // the task tools work on the board this machine's own Vercel login reaches, as that login
+    board: { open: () => board.connectBoard(board.openBoard(h.cfg.board), h.cfg.board), asActor: false },
     // Invites minted here live in this database; the setup line names the site only when this machine has one configured.
     ...(h.cfg.site ? { oauth: { issuer: h.cfg.site } } : {}),
     afterEvent: (row) => dispatchEvent(h.db, row).then(() => undefined),
