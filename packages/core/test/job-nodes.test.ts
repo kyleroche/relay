@@ -54,7 +54,7 @@ async function rig(body = `A rainy street at night.\n\n${MANIFEST}`) {
   const host: GitHost = { ...fakeHost(origin), push: never("push"), findPr: never("look for a PR"), createPr: never("open a PR"), comment: never("comment on a PR") };
   const task = await openTask(board, { project: "prod", repo: "acme/prod", title: "Cutscene 3", body, lane: "nodes" });
   const { principal } = await board.me();
-  const job = (nodes: NodesRunner): JobOptions => ({ board: worker, lane: "nodes", workerName: "studio", trusted: [principal], home: origin.home, gitHost: host, nodes, gate: clear, timeoutMs: 60_000 });
+  const job = (nodes: NodesRunner): JobOptions => ({ board: worker, lane: "nodes", workerName: "studio", trusted: [principal, "board:client:relay-studio-nodes"], home: origin.home, gitHost: host, nodes, gate: clear, timeoutMs: 60_000 });
   return { board, worker, task, job };
 }
 

@@ -118,6 +118,9 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   const reg: WorkerRegistration = await registerWorker(board, info, meters());
   log(`on the board as ${me.handle} (${me.principal}), worker ${opts.name} serving ${lanes.join(", ") || "no lanes"}${info.labels.length ? ` with labels ${info.labels.join(", ")}` : ""}; taking tasks from ${from.join(", ")}`);
 
+  // the worker's own lane profiles write labels too (the pull request, the eval state); on a board where a profile
+  // is a principal of its own they would otherwise read as strangers
+  const trusted = [...new Set([...from, ...(await Promise.all(lanes.map((l) => handle(l).me()))).map((m) => m.actor)])];
   const results: JobResult[] = [];
   const running = new Map<Promise<void>, string>();
   let stopped = false;
@@ -190,7 +193,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
       }
       const { claim, lane } = next;
       log(`claimed ${claim.task.id} for the ${lane} lane until ${claim.until}`);
-      const p: Promise<void> = run(claim, { ...(opts.job ?? {}), board: handle(lane), lane, workerName: opts.name, trusted: from, log })
+      const p: Promise<void> = run(claim, { ...(opts.job ?? {}), board: handle(lane), lane, workerName: opts.name, trusted, log })
         .then((r) => {
           results.push(r);
           opts.onJob?.(r);

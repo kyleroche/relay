@@ -66,6 +66,16 @@ export const LABEL = {
 
 export { ANY_LANE } from "../tasks/lanes.ts";
 
+/**
+ * The labels that decide what a worker does with a task: where it clones, what it checks out, which lane and model
+ * run it, which pull request settles it. On the board anyone who may label in a channel may set them, which is wider
+ * than who may give a worker instructions, so a job checks who set them (`foreignLabelChange` in work/job.ts).
+ */
+export const ROUTING_LABELS: readonly string[] = ["lane", "model", "repo", "base", "issue", "pr", "branch", "step", "evaluates", "eval"];
+
+/** Whether an actor is one of the trusted principals or a profile of one (`principal+profile`). */
+export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean => trusted.some((t) => actor === t || actor.startsWith(`${t}+`));
+
 /** What a reply of relay's own is, in its `relay` label. Anything without the label is a person's (or another agent's) words. */
 export const RELAY_MESSAGE = { log: "log", result: "result", usage: "usage", brief: "brief", note: "note", asset: "asset" } as const;
 export type RelayMessageKind = (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE];
@@ -82,6 +92,8 @@ export const HOLD = {
   input: "needs_input",
   /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. */
   eval: "awaiting_eval",
+  /** Someone the worker does not take work from changed a label that routes the task. */
+  labels: "labels_changed",
 } as const;
 
 /** The board's own states for a task. */
@@ -123,6 +135,8 @@ export const taskRef = (id: string): string => createHash("sha1").update(id).dig
 
 /** The branch a lane pushes for a task. A re-run of the task replaces its own branch. */
 export const branchFor = (lane: string, id: string): string => `relay/${lane}-${taskRef(id)}`;
+/** Whether a name has the shape of a branch relay made. A label is anyone's to set, so a branch named in one is checked before it is fetched. */
+export const isRelayBranch = (name: string): boolean => /^relay\/[a-z][a-z0-9-]{0,31}-[0-9a-f]{8}$/.test(name);
 
 /** A board message holds 10,000 characters; a task's text is cut to this and the rest goes in an attachment. */
 export const TEXT_MAX = 10_000;

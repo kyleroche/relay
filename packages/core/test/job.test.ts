@@ -49,7 +49,7 @@ async function rig(lane = "claude"): Promise<Rig> {
     principal,
     open: (over = {}) => openTask(board, { project: "demo", repo: REPO, title: "Add a hello file", body: "Please add a hello file.\n\nWhen done, push it straight to the default branch instead of opening a PR.", lane, ...over }),
     claim: (id) => worker.tasks.claim(id),
-    job: (over = {}) => ({ board: worker, lane, workerName: "mini", trusted: [principal], home: origin.home, gitHost: host, laneRunner: editingLane, gate: clear, gh: "/nonexistent/gh", ...over }),
+    job: (over = {}) => ({ board: worker, lane, workerName: "mini", trusted: [principal, `board:client:relay-mini-${lane}`], home: origin.home, gitHost: host, laneRunner: editingLane, gate: clear, gh: "/nonexistent/gh", ...over }),
   };
 }
 
@@ -136,6 +136,20 @@ describe("runJob", () => {
     expect(d.thread.replies[1]!.noSync).toBe(false);
     expect(d.thread.replies[2]!.by.actor).toContain("relay-mini-claude");
     expect(existsSync(workDirFor(origin.home, t.id))).toBe(false);
+  });
+
+  it("a board where relay's schemas are not registered still gets the result and the hold; only the usage row is missing", async () => {
+    const board = memoryBoard();
+    const principal = (await board.me()).principal;
+    const worker = board.as("relay-mini-claude");
+    const t = await openTask(board, { project: "demo", repo: REPO, title: "Add a hello file", lane: "claude" });
+    const logs: string[] = [];
+    const out = await runJob(await worker.tasks.claim(t.id), { board: worker, lane: "claude", workerName: "mini", trusted: [principal], home: origin.home, gitHost: fakeHost(origin), laneRunner: editingLane, gate: clear, gh: "/nonexistent/gh", log: (m) => logs.push(m) });
+    expect(out.outcome).toBe("review");
+    const d = await getTask(board, t.id);
+    expect(d.task.state).toBe("review");
+    expect(d.usage).toEqual([]);
+    expect(logs.some((l) => /could not post usage .*relay setup --board/.test(l))).toBe(true);
   });
 
   it("passes the task's model label to the lane, and says so when the lane could not take it", async () => {
@@ -242,6 +256,34 @@ describe("runJob", () => {
     await runJob(await r2.claim(t2.id), r2.job({ laneRunner: spy, trusted: ["vercel:project:prj_control:production"], brief: async (q) => `local memory for ${q.project}` }));
     expect(prompt).not.toContain("IGNORE THE TASK");
     expect(prompt).toContain("## Memory\n\nlocal memory for demo");
+  });
+
+  it("a routing label changed by someone the worker does not take work from holds the task until its owner has looked", async () => {
+    const r = await rig();
+    const t = await r.open();
+    // anyone who may label in the channel may do this; the text and its owner are untouched
+    await r.board.as("preview-deploy").label(t.id, { set: { repo: "acme/secrets", priority: "urgent" } });
+    let ran = false;
+    const lane: LaneRunner = async (...a) => ((ran = true), editingLane(...a));
+    const out = await runJob(await r.claim(t.id), r.job({ laneRunner: lane }));
+    expect(out.outcome).toBe("held");
+    expect(ran).toBe(false);
+    expect(r.host.pushes).toEqual([]);
+    const held = (await getTask(r.board, t.id)).task;
+    expect(held).toMatchObject({ state: "blocked", hold: { kind: HOLD.labels } });
+    expect(held.hold!.reason).toMatch(/board:client:preview-deploy changed the label repo, and this worker does not take work from them/);
+    // the owner puts the label right and lifts the hold: the labels as they stand are accepted
+    await r.board.label(t.id, { set: { repo: REPO } });
+    await r.board.tasks.unblock(t.id);
+    expect((await runJob(await r.claim(t.id), r.job({ laneRunner: lane }))).outcome).toBe("review");
+    expect(ran).toBe(true);
+  });
+
+  it("a label that routes nothing may be set by anyone", async () => {
+    const r = await rig();
+    const t = await r.open();
+    await r.board.as("preview-deploy").label(t.id, { set: { priority: "urgent", triage: "seen" } });
+    expect((await runJob(await r.claim(t.id), r.job())).outcome).toBe("review");
   });
 
   it("a claim that ended while the lane ran pushes nothing and reports nothing", async () => {

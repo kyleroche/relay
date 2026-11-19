@@ -25,7 +25,7 @@ import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { BoardError, type Board, type BoardEventView, type ClaimedTask, type ThreadView } from "@vercel/board";
 import { describeBoardError, threadEvents } from "../board/client.ts";
-import { branchFor, formatRef, HOLD, LABEL, RELAY_MESSAGE, taskRef } from "../board/mapping.ts";
+import { branchFor, formatRef, HOLD, isRelayBranch, isTrustedActor, LABEL, RELAY_MESSAGE, ROUTING_LABELS, taskRef } from "../board/mapping.ts";
 import { assetText, ASSET_SCHEMA, blocksOf, usageText, type AssetBlock, type UsageBlock } from "../board/schemas.ts";
 import { openTask, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
@@ -148,7 +148,11 @@ export interface JobOptions {
   /** The lane this worker runs the task on: its own for a lane task, the one it picked for `any`. */
   lane: string;
   workerName: string;
-  /** The owners whose words in a thread count as the control plane's (the brief): the worker's own principal and the ones it claims from. */
+  /**
+   * Who this worker takes instructions from, as principals or exact actors: its own login, the owners it claims from,
+   * its own profiles. A profile of a listed principal is trusted too. A brief counts only from them, and so does a
+   * change to a label that routes the task.
+   */
   trusted: string[];
   /** relay's home; clones live under `<home>/work`. */
   home?: string;
@@ -185,7 +189,7 @@ export interface JobResult {
   branch: string;
   /**
    * review: the pull request (or the outputs) is up and the task is held for a person.  failed: the task is failed
-   * with the reason.  held: the gate flagged the text.  settled: its pull request was already merged, so it is
+   * with the reason.  held: the gate flagged the text, or a stranger changed a routing label.  settled: its pull request was already merged, so it is
    * completed.  lost: the claim ended under the job (its lease ran out or the task was called off), so nothing was reported.
    * eval: the pull request is up and an after-pr step's task was opened; the task is held until its findings are answered.
    * done: a step's own task finished and is completed, its findings posted where they belong.
@@ -437,13 +441,36 @@ export function gateReleased(events: BoardEventView[]): boolean {
 }
 
 /**
+ * A change to a routing label by someone this worker does not take work from, since the owner last looked: who, and
+ * which labels. Anyone who may label in a channel may set them, so without this a stranger to the task could point
+ * a worker at another repository or pull request. A hold for it that the owner lifted accepts the labels as they are.
+ */
+export function foreignLabelChange(events: BoardEventView[], trusted: readonly string[]): { actor: string; keys: string[] } | undefined {
+  let found: { actor: string; keys: string[] } | undefined;
+  let held: string | undefined;
+  for (const e of events) {
+    if (e.type === "task.blocked") held = (e.payload as { kind?: string }).kind;
+    else if (e.type === "task.unblocked") {
+      if (held === HOLD.labels) found = undefined;
+      held = undefined;
+    } else if (e.type === "labels.changed") {
+      const p = e.payload as { set?: Record<string, string>; unset?: string[] };
+      const keys = [...Object.keys(p.set ?? {}), ...(p.unset ?? [])].filter((k) => ROUTING_LABELS.includes(k));
+      const actor = e.actor?.id ?? "someone unknown";
+      if (keys.length && !isTrustedActor(actor, trusted)) found = { actor, keys: [...new Set([...(found?.keys ?? []), ...keys])] };
+    }
+  }
+  return found;
+}
+
+/**
  * The brief for this run: the newest `brief.md` a trusted author attached to the thread (the control plane compiles
  * one when a task is made): one whose principal, or whose exact actor, is in `trusted`. Anyone else's attachment by that
  * name is ignored, since the brief is read as relay's own words.
  */
 export async function threadBrief(board: Board, thread: ThreadView, trusted: readonly string[]): Promise<string | undefined> {
   for (const m of [...thread.replies].reverse()) {
-    if (m.deleted || m.labels?.[LABEL.relay] !== RELAY_MESSAGE.brief || !(trusted.includes(m.by.principal) || trusted.includes(m.by.actor))) continue;
+    if (m.deleted || m.labels?.[LABEL.relay] !== RELAY_MESSAGE.brief || !(isTrustedActor(m.by.actor, trusted) || trusted.includes(m.by.principal))) continue;
     const file = m.attachments.find((a) => a.name === "brief.md");
     if (!file) continue;
     const res = await board.download(file.id);
@@ -601,7 +628,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
       try {
         if (extra.text) await say(extra.text, RELAY_MESSAGE.result, true);
         const rows = [...(gateUsage ? [gateUsage] : []), ...(usage !== empty || outcome !== "held" ? [{ ...usage, outcome }] : []), ...otherUsage];
-        if (rows.length) await say(rows.map(usageText).join("\n\n"), RELAY_MESSAGE.usage);
+        // the usage row must never cost the report: a board where relay's schemas are not registered refuses the block
+        if (rows.length) await say(rows.map(usageText).join("\n\n"), RELAY_MESSAGE.usage).catch((e: unknown) => log(`${id}: could not post usage (${describeBoardError(e)}); relay setup --board registers the schemas`));
         await settle();
       } catch (e) {
         if (!isClaimLost(e)) throw e;
@@ -624,6 +652,13 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   try {
     const thread = await board.thread(id);
     const task = toTask(thread.message);
+    const events = await threadEvents(board, id);
+    const foreign = foreignLabelChange(events, opts.trusted);
+    if (foreign) {
+      summary = `${foreign.actor} changed the label${foreign.keys.length === 1 ? "" : "s"} ${foreign.keys.join(", ")}, and this worker does not take work from them. Check the labels, then: relay task requeue ${id}`;
+      log(`${id}: ${summary}`);
+      return await finish("held", () => claim.block(summary.slice(0, 900), { kind: HOLD.labels }), { error: summary.slice(0, 300) });
+    }
     const repo = task.repo;
     if (!repo) return await fail(`the task has no ${LABEL.repo} label, so there is nothing to clone; open it with --repo owner/name or link its project`);
     const project = task.project ?? repo.split("/")[1]!;
@@ -654,13 +689,14 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const fetched = async (name: string): Promise<boolean> => (await run("git", ["fetch", "-q", "origin", name], { cwd: dir })).code === 0;
     // a step's own task looks at another task's branch; an answer to its findings continues that branch as it was left
     const stepTask = task.step && task.evaluates ? { step: task.step, evaluates: task.evaluates, branch: task.branch } : undefined;
-    const answering = !stepTask && task.labels[LABEL.eval] === "answer" && !!task.branch && (await fetched(task.branch));
+    // An answer is pushed, so its branch is never taken from a label (anyone who may label could name `main`): it is this
+    // lane's own branch for this task, which is where the work is, since the task was pinned to the lane that did it.
+    const answering = !stepTask && task.labels[LABEL.eval] === "answer" && (await fetched(branch));
     if (stepTask) {
-      if (!stepTask.branch || !(await fetched(stepTask.branch))) return await fail(`the branch ${stepTask.branch ?? "(none)"} this step was to look at is not on ${repo}`);
+      if (!stepTask.branch || !isRelayBranch(stepTask.branch) || !(await fetched(stepTask.branch))) return await fail(`the branch ${stepTask.branch ?? "(none)"} this step was to look at is not a relay branch on ${repo}`);
       branch = stepTask.branch;
       await git(["checkout", "-q", "--detach", `origin/${branch}`]);
     } else if (answering) {
-      branch = task.branch!;
       await git(["checkout", "-q", "-B", branch, `origin/${branch}`]);
     } else await git(["checkout", "-q", "-B", branch, `origin/${base}`]); // always from the tip of the base, even on a re-run
     // the project's steps as its default branch has them, so a task cannot rewrite the steps that judge it
@@ -671,7 +707,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
 
     // The injection gate (tasks/gate.ts): the task's text and what people added in the thread, as the lane would see
     // them, graded before anything runs. A hold a person already lifted is not graded again.
-    if (gateReleased(await threadEvents(board, id))) {
+    if (gateReleased(events)) {
       log(`${id}: the gate's hold was lifted by a person; not grading again`);
     } else {
       log(`${id}: grading the task text`);

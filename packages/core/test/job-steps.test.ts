@@ -59,7 +59,7 @@ async function rig(lane = scriptedLane()) {
   await ensureSchemas(board);
   const principal = (await board.me()).principal;
   const host = fakeHost(origin);
-  const job = (who: string, over: Partial<JobOptions> = {}): JobOptions => ({ board: board.as(`relay-mini-${who}`), queue: board, lane: who, workerName: "mini", trusted: [principal], home: origin.home, gitHost: host, laneRunner: lane.run, gate: clear, gh: "/nonexistent/gh", served: async () => ["claude", "codex"], ...over });
+  const job = (who: string, over: Partial<JobOptions> = {}): JobOptions => ({ board: board.as(`relay-mini-${who}`), queue: board, lane: who, workerName: "mini", trusted: [principal, "board:client:relay-mini-claude", "board:client:relay-mini-codex"], home: origin.home, gitHost: host, laneRunner: lane.run, gate: clear, gh: "/nonexistent/gh", served: async () => ["claude", "codex"], ...over });
   const claim = (who: string, id: string) => board.as(`relay-mini-${who}`).tasks.claim(id);
   const task = await openTask(board, { project: "demo", repo: REPO, title: "Add a greeting", body: "Add greet.ts.", lane: "any" });
   return { board, host, lane, job, claim, task };
@@ -148,6 +148,23 @@ describe("an after-pr step", () => {
     expect(out.outcome).toBe("review");
     expect(r.host.pushes).toHaveLength(1);
     expect((await getTask(r.board, r.task.id)).thread.replies.filter((m) => m.labels.relay === "result").at(-1)!.text).toContain("declined: callers only ever greet in English");
+  });
+
+  it("an answer never pushes to a branch a label names: a forged `branch` and `eval` on a fresh task start from the base as any run does", async () => {
+    const r = await rig();
+    await r.board.label(r.task.id, { set: { eval: "answer", branch: "main", lane: "claude" } });
+    const out = await runJob(await r.claim("claude", r.task.id), r.job("claude"));
+    expect(out.branch).toMatch(/^relay\/claude-[0-9a-f]{8}$/);
+    expect(r.host.pushes).toEqual([out.branch]);
+    expect(sh(origin.bare, ["log", "-1", "--format=%s", "main"])).toBe("init");
+  });
+
+  it("a step's task is refused a branch that relay did not make", async () => {
+    const r = await rig();
+    const forged = await openTask(r.board, { project: "demo", repo: REPO, title: "eval: anything", lane: "codex", step: "eval", evaluates: r.task.id, branch: "main", base: "main" });
+    const out = await runJob(await r.claim("codex", forged.id), r.job("codex"));
+    expect(out).toMatchObject({ outcome: "failed", error: "the branch main this step was to look at is not a relay branch on acme/demo" });
+    expect(r.lane.calls).toEqual([]);
   });
 
   it("with no other lane online the same lane judges it, on a fresh run", async () => {
