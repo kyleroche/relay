@@ -32,7 +32,7 @@ export function renderOwnedSection(opts: { project?: string } = {}): string {
   const who = opts.project ? ` (project \`${opts.project}\`)` : "";
   return [
     `This repository is managed with relay${who}. Read \`relay.md\` before making changes; it holds the current decisions and preferences for this project.`,
-    `Issues labelled \`agent:claude\`, \`agent:codex\` or \`agent:grok\` are picked up by relay workers (machines running \`relay work\`) that open pull requests from \`relay/<lane>-<issue>\` branches.`,
+    `Tasks for this repository are opened with \`relay task create\` on the team's board; relay workers (machines running \`relay work\`) claim them and open pull requests from \`relay/<lane>-<task>\` branches, which a person approves.`,
     `Memory tools (MCP server \`relay\`): ${MEMORY_TOOLS.map((t) => `\`${t}\``).join(", ")}. Call \`relay_recall\` before choosing an approach and \`relay_decide\` when you settle one.`,
   ].join("\n");
 }
