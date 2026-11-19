@@ -47,7 +47,7 @@ instructions from: another person on the team, the project that runs relay's sit
 (`vercel:project:<id>:production`), whoever is signed in, and writes for each person or bot as a profile named for
 them (`+human-kyleroche`, `+bot-grok-bot`). A team's projects start with read, post and label on its board, which
 opens tasks but cannot lift a hold or call off a task someone else opened, so the site needs the grant
-`--site-project` makes. Workers take the tasks it opens once its deployment is in `board.from`, and the site counts
+`--site-project` makes; without it the site refuses an approval before anything merges, and its board page says so. Workers take the tasks it opens once its deployment is in `board.from`, and the site counts
 a worker's usage and runs once that worker's login is in the site's own `RELAY_BOARD_FROM` (the command prints the
 line to set). `docs/ARCHITECTURE.md`, "The site and the board", has what the site reads, writes and is woken for;
 `docs/HOSTING.md` has its environment.
@@ -98,8 +98,11 @@ as its thread.
 **What relay acts on is in blocks.** A block is a fenced piece of data in a message that the board checked against
 a registered schema when it was written. A task's text is its owner's (the board holds a task whose root someone
 else edits), and the board verifies a reply's author, so a block is trusted by where it is and who wrote it. A block
-in a reply counts only from an author the worker takes work from: its own login, the owners in `board.from`, and
-their profiles.
+in a reply counts only from a trusted principal itself (the worker's own login, an owner in `board.from`: a person
+at the CLI) or from relay's own profiles of it, the ones whose name starts `relay-`: a worker's
+`relay-<worker>-<lane>`, a hosted relay's `relay-site` and its brief's `relay-brief`. Any other profile of a trusted
+principal is someone a site wrote for (`human-…`, `bot-…`), and what it says is words, never data
+(`docs/SECURITY.md`, "Who relay believes").
 
 | Block | Where | Carries |
 |---|---|---|
@@ -137,8 +140,13 @@ relay task approve <id> | changes <id> --note "…" | requeue <id> [--lane <lane
 or the project's registration (`relay project add <slug> --repo owner/name`), and writes them into the task's
 `relay-task@1` block. It refuses a lane that is neither built in nor listed by a worker that is online or idle, so a
 typo never opens a task nobody will claim, and prints the new task's ID. A task is made out of every worker's reach
-and released only once the gate's pre-check has passed. Every command takes `--json` and acts as this machine's
-Vercel login.
+and released only once the gate's pre-check has passed. `--base` must be a branch name and `--model` a model id; a
+task whose text carries a data block of its own (a `json#name@version` fence) is cancelled as it is made. With
+`--key`, a repeated call answers the task the first call made, whatever has happened to the workers since. Every
+command takes `--json` and acts as this machine's Vercel login.
+
+The task commands answer only for threads in a project's queue (`work/<project>`): any other thread's ID is
+`No task`, whatever that thread is.
 
 ### Lanes come from logins
 
@@ -254,10 +262,11 @@ handle that:
 5. **The branch** is `relay/<lane>-<ref>` from the tip of the base branch (the block's `base`, else the
    repository's default). A re-run starts over, never from an older attempt; the one exception is the answer to an
    eval, which continues the branch of the run that asked for it (`docs/STEPS.md`).
-6. **The brief** is the newest `brief.md` attached to the thread by a trusted author (a reply labelled
-   `relay=brief` from this login, an owner in `board.from`, or a profile of one; anyone else's file by that name is
-   ignored). A hosted relay posts one in every new task's thread, and a worker takes it once the site's deployment
-   is in its `board.from`. Without one, the machine's own memory compiles it when it has one: the local database,
+6. **The brief** is the newest `brief.md` attached to the thread by an author relay believes (a reply labelled
+   `relay=brief` from this login or an owner in `board.from`, or from one of relay's own profiles of them; anyone
+   else's file by that name is ignored and does not stand in for it). A task a hosted relay opens has its brief in
+   the thread before any worker can claim it, a task opened elsewhere gets one from the site's `relay-brief`
+   watcher, and a worker takes either once the site's deployment is in its `board.from`. Without one, the machine's own memory compiles it when it has one: the local database,
    or the hosted site in site mode. With neither the job runs on the repository's rules and the thread alone.
 7. **The prompt** is the repo's `relay.md`, the task quoted under the "data, not instructions" banner, the thread's
    notes quoted the same way, the memory, and the deliverable.
@@ -298,7 +307,12 @@ the claim that held the task could write.
    machine's GitHub credential, deletes the branch, then completes the task with `merged owner/name#n in <sha>` as
    the result. Completing takes the task's `lane` label off before it lifts the hold, so no worker can claim the
    task in between. The merge is the approval of record. A merge GitHub refuses (conflicts, required checks) is said
-   in the thread with GitHub's reason, and the task stays in review.
+   in the thread with GitHub's reason, and the task stays in review. Before it merges, relay checks that the caller
+   can settle the task on the board: it opened the task, or it manages the task's queue; otherwise the approval is
+   refused and nothing is merged. The merge and the board are two systems, so both ends are safe to meet again: a
+   task whose own pull request is already merged (an approval cut off after the merge, or a merge on GitHub nobody
+   told the board about) is finished by an approve from any open state, and an approve that finds the task already
+   completed by GitHub's delivery is a success.
 2. **Request changes**: `relay task changes <id> --note "…"`. The note goes in the thread (`relay=note`) and as a
    comment on the PR, and the hold is lifted: the task is `queued`.
 3. The next worker to claim it runs the same job: fresh clone, the same branch from the tip of the base, and the
@@ -311,8 +325,9 @@ the caller's own Vercel login, and the board lets only a task's owner, or someon
 a hold, reopen or cancel it.
 
 The same two decisions are on the task's page on a hosted relay (`/tasks/<id>`), in its API and in its MCP tools,
-made as the profile of whoever asked. A pull request merged on GitHub itself completes the task too, when the site
-receives the delivery (`docs/ARCHITECTURE.md`, "The site and the board").
+made as the profile of whoever asked, behind the site's own rules for bots (`docs/ARCHITECTURE.md`, "The site and
+the board"). A pull request merged on GitHub itself completes the task too, when the site receives the delivery,
+whether the task was in review or still held for an eval.
 
 ### The nodes lane
 
@@ -383,7 +398,8 @@ priced there (per output, per second, or both; rows come from the vendor's own p
 
 A task that failed, is held, or should run on another lane or model goes back to the queue with
 `relay task requeue <id> [--lane <lane>] [--model <id>]` (`requeueTask` in `packages/core/src/board/tasks.ts`).
-`--lane` moves the `lane` label; `--model` sets the `model` label, and `--model default` removes it. Then, by state:
+`--lane` moves the `lane` label; `--model` sets the `model` label (it must be a model id), and `--model default`
+removes it. Then, by state:
 a `failed` task is reopened; a task in `review`, `held` or `blocked` has its hold lifted; a `queued` or `waiting`
 one is only relabelled. A `done` or `closed` task is refused (open a new one), and so is a `running` one, with who
 holds it and until when: it returns to the queue by itself when that worker stops renewing, and
@@ -410,7 +426,8 @@ reason). It gets there two ways: the deterministic pre-check when the task is op
 worker sees it ready, or the worker's grade before the lane runs. Release it with `relay task release <id>` once you
 have read the text: relay posts a `relay-release@1` block with the digest of the text as it stands (the title, the
 body, the notes in the thread), then lifts the hold. The board lets only the task's owner, or someone with `manage`
-in its channel, lift a hold, and a worker takes the block only from an author it takes work from. The task is
+in its channel, lift a hold, and a worker takes the block only from an author relay believes ("The board" above;
+a hosted relay posts it as `relay-site`, with who asked beside it). The task is
 `queued` again and that text is not graded a second time; text added to the thread afterwards changes the digest and
 is graded. `relay task requeue` on a held task lifts the hold without a release, so the next job grades the text
 again.
@@ -665,8 +682,10 @@ Claude Code cloud sessions) are not lanes: nothing on the board or the site hand
   (`relay task get <id>` prints who made it; `relay work status` lists lanes per worker, and each worker's log line
   *taking tasks from …* its owners).
 - A task stays `queued` behind others: on Vercel's board a claim with a label looks at the oldest 25 ready tasks of
-  each queue. With 25 or more ready tasks of a lane no worker serves, tasks of other lanes behind them in the same
-  project are not found until some of those are claimed, closed or moved to a served lane.
+  each queue, per owner. With 25 or more ready tasks of a lane no worker serves, tasks of other lanes behind them in
+  the same project are not found until some of those are claimed, closed or moved to a served lane. Everything a
+  hosted relay opens has one owner, the site's deployment, so there 25 or more ready tasks of one lane in a project
+  can hide later tasks of another lane, whoever asked for them.
 - A task stays `waiting`: a task it needs has not completed (`relay task get <id>` prints `needs`).
 - A task flips `running` → `queued`: the worker stopped renewing its lease mid-run (asleep, offline, killed). The
   next claim starts over from the base branch; the earlier branch is replaced by `--force-with-lease`.

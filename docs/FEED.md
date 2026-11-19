@@ -17,15 +17,19 @@ row here.
 |---|---|---|---|---|
 | `issue.opened` | GitHub webhook `issues` (opened) | `human:<login>` or `bot:<login>` | repo, issue, url | issue title |
 | `issue.labeled` | GitHub webhook `issues` (labeled, `agent:<lane>` labels only). From an allowed sender the same delivery opens a task on the board that answers the issue, one per issue | `human:<login>` | repo, issue, lane | `Labelled agent:<lane>` |
-| `task.created` | the ledger: a task was made in a project's queue (`relay task create`, `relay_task_create`, `POST /api/v1/tasks`, an `agent:<lane>` label on a GitHub issue, or anything else that makes one there) | who made it: `human:<login>` or `bot:<token name>` for the site's profiles, `bot:github` for an issue's label, `human:<handle>` for a person's own login | project, lane, payload.task (the task's ID), title, lane, model | the task's title |
+| `task.created` | the ledger: a task was made in a project's queue (`relay task create`, `relay_task_create`, `POST /api/v1/tasks`, an `agent:<lane>` label on a GitHub issue, or anything else that makes one there) | who made it: `human:<login>` or `bot:<name>` when the site wrote it for them, `bot:github` for an issue's label, `human:<handle>` for a person's own login, `agent:<handle>/<profile>` for any other profile | project, lane, payload.task (the task's ID), title, lane, model, step (on a step's own task) | the task's title |
 | `run.started` | the ledger: a worker's lane profile (`relay-<worker>-<lane>`) claimed the task | `runner:<worker>-<lane>` | project, lane, payload.task, title, until (the lease) | `<lane> took <title>` |
-| `run.finished` | the ledger: a `relay-run@1` block from a trusted author whose outcome is not `failed` (`review`, `eval`, `done`, `held`) | `runner:<worker>` | project, lane, repo, pr and url (the pull request, when the run opened one), payload.task, conclusion (the outcome), branch, eval_task | `<lane>: <outcome> <owner/name#pr>` |
+| `run.finished` | the ledger: a `relay-run@1` block from an author the site believes whose outcome is not `failed` (`review`, `eval`, `done`, `held`) | `runner:<worker>` | project, lane, repo, pr and url (the pull request, when the run opened one), payload.task, conclusion (the outcome), branch, eval_task | `<lane>: <outcome> <owner/name#pr>` |
 | `run.failed` | the ledger: a `relay-run@1` block whose outcome is `failed` | `runner:<worker>` | project, lane, payload.task, conclusion | `<lane>: failed` |
-| `step.usage` | the ledger: one row per `relay-usage@1` block from a trusted author (a lane's run, the gate's grade, a step's call, one media output of the nodes lane). Also GitHub webhook `issue_comment` on a PR, parsed from an Actions runner's usage comment (below) | `runner:<worker>` from the board, `agent:<lane>` from a comment | project, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, payload.task, kind (`run`, `gate`, `step`, `media`), billing, step, outcome | the lane, or `step <name>`, and the model |
+| `step.usage` | the ledger: one row per `relay-usage@1` block from an author the site believes (a lane's run, the gate's grade, a step's call, one media output of the nodes lane). Also GitHub webhook `issue_comment` on a PR, parsed from an Actions runner's usage comment (below) | `runner:<worker>` from the board, `agent:<lane>` from a comment | project, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, payload.task, kind (`run`, `gate`, `step`, `media`), billing, step, outcome | the lane, or `step <name>`, and the model |
 | `task.held` | the ledger: the task was held with kind `gate` (the pre-check when it was opened, or a worker's grade before the lane ran) | whoever held it | project, lane, payload.task, title, reason | `<title>: <reason>` |
-| `task.approved` | the ledger: the task was completed: its pull request was merged (by an approval or on GitHub) or its outputs were approved | who completed it | project, lane, payload.task, title, result | `<title>: <result>` |
+| `task.approved` | the ledger: the task was completed: its pull request was merged (by an approval or on GitHub) or its outputs were approved. A step's own task (an eval) completing writes no row; its run row says how it went | who completed it | project, lane, payload.task, title, result | `<title>: <result>` |
+| `task.released` | the ledger: a `relay-release@1` block from an author the site believes (`relay task release`, `relay_task_release`, `…/release`, Release on the site) | who asked: the name in the `Released by <actor>.` line the site wrote beside the block, else the author | project, payload.task | `Released from the gate for the text as it stands` |
+| `task.changes_requested` | the ledger: a note left with a send-back (a `relay=note` reply that is not from one of relay's own `relay-…` profiles; an eval's findings, which a worker writes, are not one) | who wrote the note | project, payload.task | `Sent back: <first line of the note>` |
 | `task.closed` | the ledger: the task was canceled (`relay task close`, `relay_task_close`, `…/close`, Close on the site) | who closed it | project, lane, payload.task, title, reason | `<title>: <reason>` |
 | `task.requeued` | the ledger: a failed task was reopened by a requeue | who requeued it | project, lane, payload.task, title | the task's title |
+| `ledger.skipped` | the ledger: the database refused the rows of one board event. Those rows are dropped, this row takes their place and the events after it go on | `bot:relay` | project, payload.task, cursor (the board event) | `A <event type> on the board could not be recorded: <error>` |
+| `board.delivery_failed` | the GitHub webhook route: a delivery could not do its part on the board (a labelled issue's task was not opened, for instance because nobody serves the lane, or a merged pull request did not complete its task) | `bot:github` | repo, issue or pr | what did not happen, and why |
 | `pr.opened` | GitHub webhook `pull_request` (opened, reopened, ready for review) | the sender, or `agent:<lane>` for a vendor cloud agent's pull request (below) | repo, pr, issue (from `Closes #n` in the body), lane (from an `agent:<lane>` label on the pull request, a cloud agent's `claude/` or `codex/` branch, or an Actions runner's `relay/<lane>-<issue>` branch; a worker's `relay/<lane>-<ref>` branch is not read for it), url, payload.branch, payload.cloud for a cloud agent's | PR title |
 | `pr.review` | GitHub webhook `pull_request_review`, or an Actions runner's usage comment in review mode | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged). The same delivery completes the task in review that waits on that pull request | `human:<login>` | repo, pr, url | `Merged #<n> into <base>` |
@@ -51,21 +55,26 @@ row here.
 | `project.github_connected` | GitHub App `installation` (created) or `installation_repositories` (added) | `human:<installer>` | repo, project (when known), url, payload.installation_id, registered | installed on which repo; "registered project" when `relay.md` was present |
 | `project.github_disconnected` | GitHub App `installation` (deleted, suspend) or `installation_repositories` (removed) | `human:<login>` | repo, project, payload.installation_id | removed from which repo |
 
-Every ledger row carries the task's ID in `payload.task`, which is what links a row to `/tasks/<id>`. A usage or run
-block counts only from an author the site believes: its own deployment and the worker logins in `RELAY_BOARD_FROM`
-(`docs/HOSTING.md`). A task's own turns are the board's facts and count from anyone. A row from the board takes its
-`subscription`, tokens and `cost_equiv` from the block as the worker wrote it (`billing: gateway` is subscription
-`gateway`).
+Every ledger row carries the task's ID in `payload.task`, which is what links a row to `/tasks/<id>`. Usage, a run
+and a gate release count only from an author the site believes: its own deployment and the worker logins in
+`RELAY_BOARD_FROM` (`docs/HOSTING.md`), each as the principal itself or one of relay's own `relay-…` profiles of it
+(`docs/SECURITY.md`, "Who relay believes"). A task's own turns are the board's facts and count from anyone. A row
+names a person `human:<login>` or a bot `bot:<name>` only when the site itself wrote the message; anyone else's
+profile called `human-kyle` is `agent:<handle>/human-kyle`. A row from the board takes its `subscription`, tokens
+and `cost_equiv` from the block as the worker wrote it (`billing: gateway` is subscription `gateway`), clamped to
+what the columns hold: whole numbers from 0 up, a cost to six decimals.
 
 Each ledger row is written once: its `dedupe_key` names the board message or event it stands for, and the ledger
-reads from a cursor kept in the settings table, so a wake-up and a page load can overlap. Every webhook write sets
+reads from a cursor kept in the settings table, so a wake-up and a page load can overlap. The first sync has no
+cursor and takes the board's own summary of its last 100 events, which leaves out a hold that was since lifted;
+every sync after reads from the cursor, which is every event. Rows are not rewritten later: usage from a login that
+was not yet in `RELAY_BOARD_FROM` is not counted and is not backfilled when the login is added. Every webhook write sets
 `dedupe_key` to the GitHub delivery id (or the Vercel webhook id), and a usage comment's row adds the comment id, so
 redeliveries never double-count.
 
 Kinds nothing writes now stay in the catalog (`apps/web/lib/events.ts`) so rows already in a feed keep their label:
-`worker.registered`, `worker.online`, `worker.offline`, `run.dispatched`, `task.changes_requested`,
-`task.merge_failed` and `task.released`. A note sent back, a refused merge and a gate release are replies in the
-task's thread now, and a worker's state is its message on the board.
+`worker.registered`, `worker.online`, `worker.offline`, `run.dispatched` and `task.merge_failed`. A refused merge
+is a line in the task's thread now, and a worker's state is its message on the board.
 
 ## Pull requests from a vendor's cloud agent
 

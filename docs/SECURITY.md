@@ -45,17 +45,29 @@ data, never as instructions:
 - **What relay acts on, on the board.** Anyone who may label in a channel can set any label, so labels only steer
   (`lane`, `model`). Where a worker clones and what issue a task answers come from the `relay-task@1` block in the
   task's own text, which is its owner's: the board holds a task whose root someone else edits. How a run ended, an
-  eval's verdict and a gate release are blocks in replies, whose author the board verifies, and a worker counts them
-  only from its own login, the owners in `board.from` and their profiles. The pull request an approval merges is the
-  one the hold's reason names, which only the claim that held the task could write, and it is merged only if its
-  head is a branch relay pushed for that task (`relay/<lane>-<8 hex of the task ID's hash>`). A worker pushes only
-  its own branch for the task, or, when it answers an eval, the branch the earlier run's `relay-run@1` block names
-  and only when that is also a branch relay pushed for the task; never one a label or a block alone names.
-- **Words relay posts for someone else carry no data.** relay believes a block by who wrote the message, and it
-  writes other people's words as itself: a lane's summary, an eval's findings, a review note, a task's body. A fence
-  in such text that would be a block (`json#name@1`) is posted as a plain `json` fence (`prose` in
-  `packages/core/src/board/schemas.ts`), so a model cannot write a gate release, a run or a usage row into a thread,
-  and neither can a bot through the site, which writes as a principal workers trust.
+  eval's verdict and a gate release are blocks in replies, whose author the board verifies. The pull request an
+  approval merges is the one the hold's reason names, which only the claim that held the task could write, and it is
+  merged only if its head is a branch relay pushed for that task (`relay/<lane>-<8 hex of the task ID's hash>`). A
+  worker pushes only its own branch for the task, or, when it answers an eval, the branch the earlier run's
+  `relay-run@1` block names and only when that is also a branch relay pushed for the task; never one a label or a
+  block alone names. A `base` and a `branch` must be branch names and a `model` a model id before they reach git or a
+  CLI: checked when a task is opened and requeued, and the worker checks all three again, since a task can be made by
+  hand on the board and its `model` label set by anyone who may label there.
+- **Who relay believes.** Data counts only from a trusted principal itself (the worker's own login, an owner in
+  `board.from`: a person at the CLI) or from relay's own profiles of it, the ones whose name starts `relay-`: a
+  worker's `relay-<worker>-<lane>`, the site's `relay-site`, its brief's `relay-brief` (`isTrustedActor` in
+  `packages/core/src/board/schemas.ts`). A hosted relay is one principal on the board whoever asked, and it writes
+  for a person or a bot as a profile named `human-…` or `bot-…`, never `relay-…`. So nothing in a caller's words is
+  data, whatever principal carried it: a block a bot puts in a task's text, a note or an event through the site is
+  just text to every worker and to the ledger. What the site itself says as data (a gate release, an eval that
+  could not run) goes out as `relay-site`, after the site has checked who asked, with `Released by <actor>.` beside
+  a release's block.
+- **The text filter is the second layer.** Words that are not relay's own (a lane's summary, an eval's findings, a
+  review note, a task's body) are posted with any fence that would be a block turned into a plain `json` fence
+  (`prose`). It follows the board's own parser: a line that opens a fence with backticks or tildes, any whitespace,
+  then `json#`. It is not the boundary; who wrote the message is. It keeps a task's own text from carrying a second
+  routing block and a malformed fence from making the board refuse a message, and a task whose text still carries a
+  block the filter did not know is cancelled as it is made.
 - **How text reaches the shell.** Issue and PR title and body are passed only through `env:`. No `${{ }}` with
   user-controlled content appears inside a `run:` script, so a title like `"; rm -rf ~` is a string, not a command.
 - **How text reaches the model.** `run-lane.sh` writes the issue into the brief between `<<<ISSUE` and `ISSUE>>>`
@@ -133,17 +145,20 @@ have without the gate. Set `RELAY_GATE=off` on such a worker to say so on purpos
 
 Releasing, on the board: `relay task release <id>` posts a `relay-release@1` block with the digest of the text as it
 stands (the title, the body, the notes in the thread), then lifts the hold. The board lets only the task's owner, or
-someone with `manage` in its channel, lift a hold, and a worker takes the block only from an author it takes work
-from. The task is `queued` again and that text is not graded a second time; text added to the thread afterwards
-changes the digest and is graded. `relay task requeue` on a held task lifts the hold with no release, so the next
-job grades the same text again.
+someone with `manage` in its channel, lift a hold, and a worker takes the block only from an author it believes
+("Who relay believes" above). The task is `queued` again and that text is not graded a second time; text added to
+the thread afterwards changes the digest and is graded. `relay task requeue` on a held task lifts the hold with no
+release, so the next job grades the same text again.
 
-Releasing through the site is the same call, made as the profile of whoever asked: the task page's Held card
-("Release", two clicks), `relay_task_release({id})` or `POST /api/v1/tasks/{id}/release`. A signed-in person may
-release anything held; a bot needs `tokens:write` (not `tasks:write`: releasing is vouching for text, the same trust
-as approving another agent's access) and never releases a task it opened itself, judged by who the board says wrote
-the task (`apps/web/lib/task-ops.ts`, and the MCP tool). The site's deployment is an author workers trust once it is
-in their `board.from`, so a release made through the site counts for them.
+Releasing through the site (the task page's Held card, `relay_task_release({id})`, `POST /api/v1/tasks/{id}/release`)
+goes through the desk (`packages/core/src/board/desk.ts`), the one layer the site's API, its pages and the MCP server
+share. The site checks who asked, then posts the block as `relay-site` with `Released by <actor>.` beside it, so
+workers that take the site's tasks believe it and the feed names who asked. A signed-in person may release anything
+held. A bot, which is a token rather than a signed-in person, needs `tokens:write` (not `tasks:write`: releasing is
+vouching for text, the same trust as approving another agent's access) and never releases a task whose text it wrote
+any part of: the task itself or a note in its thread, since the gate grades both. The same layer keeps a bot from
+approving a task it opened. Both are judged from who the board says wrote a message, and `bot:oauth:<name>` and
+`bot:<name>` are the same bot.
 
 ## Workers (`relay work`)
 

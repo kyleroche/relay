@@ -157,20 +157,22 @@ When the app is installed on a repository, relay writes `project.github_connecte
 
 | Scope | Lets the bot |
 |---|---|
-| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`); approve or send back a task in review (`relay_task_approve`, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/approve`, `…/request-changes`); requeue a failed, held or blocked task, optionally on another lane or model (`relay_task_requeue`, `…/requeue`); close one (`relay_task_close`, `…/close`) |
+| `tasks:write` | open tasks (`relay_task_create`, `POST /api/v1/tasks`); approve or send back a task in review (`relay_task_approve`, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/approve`, `…/request-changes`), never approving a task the bot opened itself; requeue a failed, held or blocked task, optionally on another lane or model (`relay_task_requeue`, `…/requeue`); close one (`relay_task_close`, `…/close`) |
 | `tasks:read` | read tasks (`relay_task_get`, `relay_task_list`, `GET /api/v1/tasks…`): state, lane, model, pull request, hold and reason, claim, last result, usage, notes |
 | `events:write` | log its own `external.*` events (`relay_event_log`, `POST /api/v1/events`) |
-| `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write`; release a task the injection gate held (`relay_task_release`, `POST /api/v1/tasks/{id}/release`), never one the bot opened itself |
+| `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write`; release a task the injection gate held (`relay_task_release`, `POST /api/v1/tasks/{id}/release`), never one whose text the bot wrote any part of (the task, or a note in its thread) |
 | `feed:read` | optional: read the whole feed and the projects |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
 
-Every write the bot makes is attributed to it: `bot:<token name>` in the feed (`bot:oauth:grok-bot` for a token the
-authorization server issued), and on the board a profile named for it under the site's deployment
-(`bot-oauth-grok-bot`; the feed rows copied from the board name it by that profile, `bot:oauth-grok-bot`). The bot
-cannot choose another actor: the server derives it from the token, and the only event
-kinds it may write itself start with `external.`. Revoking the token (the Access page, `relay token revoke
-oauth:grok-bot`, `POST /oauth/revoke`) stops it at once. `relay_whoami` (public) or `GET /api/v1/whoami` tells a bot
-what it is: name, scopes, expiry, source.
+Every write the bot makes is attributed to it. On the board its words and decisions go out as a profile named for
+it under the site's deployment (`bot-grok-bot` for the token `oauth:grok-bot`: `bot:oauth:<name>` and `bot:<name>`
+are the same bot), and the feed rows copied from the board name it `bot:grok-bot`; rows the site writes directly
+(`relay_event_log`) name it by its token, `bot:oauth:grok-bot`. The bot cannot choose another actor: the server
+derives it from the token, and the only event kinds it may write itself start with `external.`. Nothing in the
+bot's words is data to relay: a block in a task's text or a note is plain text to every worker and to the feed
+(`docs/SECURITY.md`, "Who relay believes"), and a task whose text carries one is refused. Revoking the token (the
+Access page, `relay token revoke oauth:grok-bot`, `POST /oauth/revoke`) stops it at once. `relay_whoami` (public) or
+`GET /api/v1/whoami` tells a bot what it is: name, scopes, expiry, source.
 
 ## 3. The tools
 
@@ -181,23 +183,26 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 |---|---|---|---|
 | `relay_whoami()` | `GET /api/v1/whoami` | public | the connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
 | `relay_task_create(project, title, body?, lane?, model?, needs?, base?, idempotency_key?)` | `POST /api/v1/tasks` (`lane` required) | `tasks:write` | opens a task: a thread in the project's queue on the board, labelled with its lane (and model), in the repository the project is registered with. A lane that is neither built in nor listed by an online worker is refused, naming the lanes that have one. Returns `task_id` and the task's state |
-| `relay_task_get(task_id)` | `GET /api/v1/tasks/{id}` | `tasks:read` | the task with its state, lane, model, pull request (`pr_url`), hold and its reason, who holds the claim, result or reason, the usage rows in its thread and the latest notes there |
+| `relay_task_get(task_id)` | `GET /api/v1/tasks/{id}` | `tasks:read` | the task with its state, lane, model, pull request (`pr_url`), hold and its reason, who holds the claim, result or reason, the usage rows relay's own authors wrote in its thread, and the latest notes there |
 | `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&lane=&limit=` | `tasks:read` | tasks oldest first, the order a queue is worked in. Default `state: "open"`: everything not done or closed, failed included. `state: "review"` is what waits for a decision |
-| `relay_task_approve(id)` | `POST /api/v1/tasks/{id}/approve` | `tasks:write` | approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task; a task whose deliverable is its attached outputs is completed with no merge. Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review |
+| `relay_task_approve(id)` | `POST /api/v1/tasks/{id}/approve` | `tasks:write` | approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task; a task whose deliverable is its attached outputs is completed with no merge. Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review. A bot never approves a task it opened (403). The deployment must be able to settle the task on the board, which is checked before anything merges (403 without the `--site-project` grant). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success |
 | `relay_task_request_changes(id, note)` | `POST /api/v1/tasks/{id}/request-changes` | `tasks:write` | send it back: the note goes in the task's thread and as a comment on the pull request, and the task is `queued`; the next run reads the thread and pushes to the same branch and pull request |
 | `relay_task_requeue(id, lane?, model?)` | `POST /api/v1/tasks/{id}/requeue` (`"model": null` goes back to the lane's default) | `tasks:write` | put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it |
 | `relay_task_close(id, reason?)` | `POST /api/v1/tasks/{id}/close` | `tasks:write` | close a task without a merge from any state but `done` or `closed`: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub, best effort |
-| `relay_task_release(id)` | `POST /api/v1/tasks/{id}/release` | `tokens:write` | release a task the injection gate `held` (`docs/SECURITY.md`, "The gate") for the text as it stands: the task is `queued` and that text is not graded again; anything added later is. For text a person has read and judged safe; a bot never releases a task it opened itself. 409 when the task is not held |
+| `relay_task_release(id)` | `POST /api/v1/tasks/{id}/release` | `tokens:write` | release a task the injection gate `held` (`docs/SECURITY.md`, "The gate") for the text as it stands: the task is `queued` and that text is not graded again; anything added later is. For text a person has read and judged safe; a bot never releases a task whose text it wrote any part of, the task itself or a note in its thread (403). 409 when the task is not held |
 | `relay_event_log(kind, project?, summary, url?, cost_equiv?, source?)` | `POST /api/v1/events` | `events:write` | one `external.*` row in the feed, actor `bot:<token name>` |
 | `relay_access_list()` | `GET /api/v1/access` | `tokens:write` | device requests waiting for a decision (`user_code`, `client_name`, `scopes`, `requested_at`, `expires_at`) and approvals the device has not polled yet |
 | `relay_access_approve(user_code, decision?)` | `POST /api/v1/access/{user_code}/approve` | `tokens:write` | approve (default) or deny one; the device's next poll gets its token; attributed to `bot:<token name>`. Only scopes the bot holds, never `tokens:write`; otherwise "ask a person to approve this one at `<site>/activate`" |
 | `relay_invite_create(name, scopes[], expires_in?, uses?)` | `POST /api/v1/invites` | `tokens:write` | mint an invite: returns the row, the code (once) and the `relay setup --site <site> --invite <code>` line; the same ceiling |
 | `relay_invite_revoke(id_or_name)` | `DELETE /api/v1/invites/{id}` | `tokens:write` | stop an unredeemed invite |
 
-A task's ID is the ID the board gave its thread; in a URL it is one encoded path segment. `lane` is `claude`,
+A task's ID is the ID the board gave its thread; in a URL it is one encoded path segment. Only a thread in a
+project's queue is a task: any other thread's ID answers "No task" (404). `lane` is `claude`,
 `codex`, `grok` or `nodes` (the lanes `relay work` serves), `any` (whichever code lane is free), or a lane another
 worker lists; the MCP tool defaults to `claude`. `needs` is a list of task IDs that must complete first.
-`idempotency_key` makes a retried create safe: the same key from the same caller returns the task the first call
+`base` must be a branch name and `model` a model id. A task the site opens has its brief (`brief.md`) in the thread
+before any worker can claim it. `idempotency_key` makes a retried create safe, and is looked up before the lane is
+checked: the same key from the same caller returns the task the first call
 made and opens nothing (the REST route answers 200 with `"created": false` instead of 201).
 
 The site needs a GitHub credential only to merge, comment and close: the GitHub App, or `GITHUB_TOKEN` when no app is
@@ -240,10 +245,13 @@ in the task's thread and on the pull request; the task is queued and the worker 
 branch again, replaces the same `relay/<lane>-<ref>` branch with `--force-with-lease`, and the existing pull request
 is reused. A pull request merged on GitHub itself completes the task too.
 
-Who may decide: a signed-in person always; a bot when its token holds `tasks:write`. What an approval can merge is
-fixed by the board, not by the caller: the pull request the worker's hold names, and only when its head is the branch
-relay pushed for that task. The pattern for a chat bot is: relay the pull request, ask the person, and call approve
-only after they said yes.
+Who may decide: a signed-in person always; a bot when its token holds `tasks:write`, with one rule: a bot never
+approves a task it opened, since it would be deciding on its own work. It may send its own task back, requeue it or
+close it. The rule is applied in one place for the API, the pages and the MCP server
+(`packages/core/src/board/desk.ts`) and is judged from who the board says wrote the task. What an approval can merge
+is fixed by the board, not by the caller: the pull request the worker's hold names, and only when its head is the
+branch relay pushed for that task. The pattern for a chat bot that opened the task is: relay the pull request and
+ask the person to approve it on the task's page, or have a second bot the person trusts approve on their word.
 
 ### A task on the wrong lane, failed or held: requeue
 
@@ -285,11 +293,14 @@ What Grok Bot does, in the order it experiences it; no human types a token anywh
    `relay_task_get(task_id)` when the user asks, or on its own schedule: `running` → a worker is on it; `failed` →
    something to look at, with the reason; `review` → "the PR is open: <pr_url>"; `held` → the gate stopped the text,
    a person reads it; `done` → merged. `relay_task_list({state: "review"})` is everything that waits for a decision.
-7. **Approve when the person says so.** The user looks at the pull request and answers "ship it": the bot calls
-   `relay_task_approve({id: "<task_id>"})` and relay squash-merges the PR, deletes the branch and completes the task;
-   the board shows the bot's profile as who did it. "Not yet, the toggle has no focus ring" becomes
-   `relay_task_request_changes({id, note: "The toggle has no focus ring; match the one on /settings."})`: the note
-   lands in the thread and on the PR, the task is queued, and the next run addresses it on the same PR.
+7. **Take the decision to the person.** Grok Bot opened this task, so it cannot approve it: a bot never approves
+   its own work, and `relay_task_approve` answers 403 for it. It sends the user the pull request and the task's page
+   (`<site>/tasks/<task_id>`), where "ship it" is one click, signed in. Or the user says "ship it" to Concierge, a
+   second bot with `tasks:write` that did not open the task, and Concierge calls
+   `relay_task_approve({id: "<task_id>"})`: relay squash-merges the PR, deletes the branch and completes the task,
+   and the board shows Concierge's profile as who did it. "Not yet, the toggle has no focus ring" Grok Bot can do
+   itself: `relay_task_request_changes({id, note: "The toggle has no focus ring; match the one on /settings."})`.
+   The note lands in the thread and on the PR, the task is queued, and the next run addresses it on the same PR.
 8. **Answer "where are we".** `relay_task_list({state: "review"})` and `relay_task_get(task_id)`; `pr_url` is the
    thing to open, `last_result` what the lane said it did, `hold` why a task is not moving.
 9. **Leave a trace.** `relay_event_log({kind: "external.briefing", project: "site", summary: "Sent the morning brief: 2 in review, 1 failed", url: …})`.
@@ -306,7 +317,7 @@ three scopes above if it opens productions itself.
 2. **Seed its memory.** `relay_decide({project: "blackgate", text: "Night exteriors are wet asphalt, sodium light, no lens flares"})`, `relay_prefer({scope: "project", scope_id: "blackgate", key: "style", value: "35mm, shallow focus, muted palette"})`. `relay_guidance({model: "bytedance/seedance-2.5", query: "camera motion"})` is the vendor's own advice when the bot writes a prompt.
 3. **Open the character pass.** `relay_task_create({project: "blackgate", lane: "nodes", title: "Reza: character reference", body: "<intent>\n\n```relay-nodes\nworkflow: blackgate/workflows/character-ref.py\ninputs:\n  Start Flow:\n    prompt: \"…\"\noutputs: [End Flow]\nstage: character\n```"})`. The body is data; the manifest is what the worker runs. It stays `queued` until a worker that serves `nodes` is online.
 4. **Hear back by asking.** `relay_task_get(task_id)`: `review` → the outputs are attached to the task's thread and its page `<site>/tasks/<id>` lists them (they cannot be downloaded from the site yet, only from the board); `failed` → the reason says whether it was the manifest, the engine or a missing key; `held` → the gate stopped the text, a person reads it.
-5. **Decide on the person's word.** "Approve" → `relay_task_approve({id})`: the task is completed, with no merge. "Too dark, lose the flare" → `relay_task_request_changes({id, note: "Too dark; lose the lens flare, keep the sodium light"})`: the task is queued and the next run reads the note in the thread and attaches the next version.
+5. **Decide on the person's word.** "Approve" is the person's on the task's page, or a second bot's that did not open the task (`relay_task_approve({id})`): the task is completed, with no merge. The bot that opened the task is refused. "Too dark, lose the flare" → `relay_task_request_changes({id, note: "Too dark; lose the lens flare, keep the sodium light"})`: the task is queued and the next run reads the note in the thread and attaches the next version.
 6. **Open the shots once the character is approved.** One `relay_task_create` per shot with `stage: shot`; `needs: [<the character task's ID>]` makes a shot wait until that task is done.
 7. **Answer "where are we".** `relay_task_list({project: "blackgate", state: "review"})` is what waits; the board at `/?project=blackgate` for the person.
 

@@ -116,7 +116,7 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 - Web: the site root is the public overview for anonymous visitors and, once signed in, the board (every task by state, read from the team's Vercel Board, with approve, request changes, release, requeue and close on the cards; the feed is its second tab at `/feed`, history its third); `/tasks/<id>` is one task; `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
 - Terminal: `npx @kyleroche/relay feed --limit 20`, `npx @kyleroche/relay usage --window 7d`, `npx @kyleroche/relay task ls --state review` (tasks on the board, by its states: waiting, queued, running, review, held, blocked, done, failed, closed), `npx @kyleroche/relay work status` (`pnpm relay …` from a checkout).
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
-- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and with a `tasks:read` token `relay_task_list` and `relay_task_get` (there are no webhooks; a bot asks).
+- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and with a `tasks:read` token `relay_task_list` and `relay_task_get` (there are no webhooks; a bot asks). With `tasks:write` a bot opens tasks and decides on them, under two rules: it never approves a task it opened itself, and it never releases a gate hold (`tokens:write`) on a task whose text it wrote any part of. A person, or another bot, decides those.
 
 ## Where to read more
 

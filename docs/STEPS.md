@@ -84,7 +84,8 @@ one on the worker that runs the job.
 
 With `eval` listed, a task goes through one more round before a person is asked. Nothing in it rests on a label:
 each move is a hold only the claim holder could write, or a block whose author the board verifies and the worker
-trusts (its own login, the owners in `board.from`, their profiles; `docs/WORKERS.md`, "The board"). In order:
+believes (its own login and the owners in `board.from` themselves, and relay's own `relay-…` profiles of them;
+`docs/WORKERS.md`, "The board"). In order:
 
 1. **The work.** The lane runs, the `before-pr` steps go over the change, the worker commits, pushes and opens the
    pull request with the lane's summary as a comment.

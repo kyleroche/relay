@@ -104,60 +104,88 @@ and it is scheduled for removal.
 ## The site and the board
 
 The hosted site is one more caller on the board, not a second copy of it (`packages/core/src/board/site.ts`,
-`apps/web/lib/board.ts`). There is no task index in the database: a page, an API route and an MCP tool each ask the
-board.
+`desk.ts`, `apps/web/lib/board.ts`). There is no task index in the database: a page, an API route and an MCP tool
+each ask the board.
 
-**Who it is.** The site acts as its deployment, `vercel:project:<id>:production`, whoever is signed in. Every write
-it makes for a person or a bot is made as a profile named for them (`actorProfile`: `human:kyleroche` writes as
-`human-kyleroche`, `bot:grok-bot` as `bot-grok-bot`), so the board shows who opened, approved or closed a task. A
-team's projects start with read, post and label on its board; lifting a hold or calling off a task someone else
-opened takes everything in `work/`, which is the grant `relay setup --board --site-project <name>` makes
-(`docs/WORKERS.md`, "A machine becomes a worker").
+**Who it is, and its two voices.** The site acts as its deployment, `vercel:project:<id>:production`, whoever is
+signed in. A caller's own words and decisions (a task's text, a review note, an approval) are written as a profile
+named for them (`actorProfile`: `human:kyleroche` writes as `human-kyleroche`, `bot:grok-bot` and `bot:oauth:grok-bot`
+both as `bot-grok-bot`), so the board shows who opened, approved or closed a task. Those profiles never start
+`relay-`, and relay believes data only from a trusted principal itself or from relay's own `relay-…` profiles of it,
+so nothing in a caller's words is data, whatever carried it (`docs/SECURITY.md`, "Who relay believes"). What the
+site itself says as data, a gate release or an eval that could not run, goes out as its own profile `relay-site`,
+after the site has checked who asked. A team's projects start with read, post and label on its board; lifting a
+hold or calling off a task someone else opened takes everything in `work/`, which is the grant
+`relay setup --board --site-project <name>` makes (`docs/WORKERS.md`, "A machine becomes a worker"). The board page
+shows a warning when the deployment does not manage `work/`.
 
 **What it reads.** Open tasks with `listTasks` (the board's working columns, `relay_task_list`,
 `GET /api/v1/tasks`), oldest first as a queue is worked. Finished tasks and History with `recentTasks`, newest
 first by latest activity: one project pages back through everything, and across projects it is the newest page
 only. Workers with `listWorkers`, read at most once every 20 seconds per instance; the header's plan meters are
-`RELAY_PLAN_METERS` when set, else the freshest readings in the workers' own messages.
+`RELAY_PLAN_METERS` when set, else the freshest readings in the workers' own messages. A task's usage, on its page
+and in `relay_task_get`, is only the rows relay's own authors wrote. A thread outside a project's queue
+(`work/<project>`) is no task to any of these, whatever its ID.
 
-**What it writes.** `apps/web/lib/task-ops.ts` is every decision (open, approve, request changes, release, requeue,
-close) for the API routes and the pages' server actions, and each one is the function the CLI calls
-(`packages/core/src/board/tasks.ts`); the MCP tools at `/mcp` call the same functions. One rule is the site's own,
-because only the site knows a caller is a bot with a token: releasing a gate hold needs `tokens:write`, and a bot
-never releases a task it opened, judged by who the board says wrote the task.
+**The desk: what it writes, and its rules.** `packages/core/src/board/desk.ts` is the one layer for what a site does
+to a task (open, approve, request changes, release, requeue, close). The site's API routes and its pages' server
+actions reach it through `apps/web/lib/task-ops.ts`, and the MCP server calls it directly, so a decision is the same
+wherever it was asked for. Underneath are the functions the CLI calls (`packages/core/src/board/tasks.ts`). Two
+rules are the site's own, because only the site knows a caller is a bot (a token, not a signed-in person): a bot
+never approves a task it opened, and it never releases a task whose text it wrote any part of, the task itself or a
+note in its thread; a release also needs `tokens:write`. Both are judged from who the board says wrote a message,
+and `bot:oauth:<name>` and `bot:<name>` are the same bot. An approval checks first that the deployment can settle
+the task, so a site without the grant refuses before anything merges.
+
+**The brief.** A task the site opens (its API, the MCP tool, GitHub intake) has `brief.md` in its thread
+before any worker can claim it: the task is made out of every worker's reach, the brief is posted as `relay-brief`,
+then the task is released. A brief that cannot be made never stops the task from opening.
 
 **What the board wakes it for.** Two watchers on every project's queue (`work/`), served at `/api/board`
 (`apps/web/lib/board-watch.ts`); the board verifies its own wake-ups, so the route needs no session.
 
 - `ledger` brings the feed up to the board (`syncLedger`). It reads the queues' events from a cursor kept in the
-  settings table (`board.ledger.cursor`; the first call starts from the last 100 events) and writes each row once,
-  by its dedupe key, so a wake-up and a page load can overlap. Where nothing wakes the deployment (local dev, a
-  board at `BOARD_URL`), the pages that show the feed run the same sync, at most once every 15 seconds per
-  instance. The board keeps a task's changes for 30 days; the feed is the durable copy, and the usage page is a
-  view over it.
+  settings table (`board.ledger.cursor`) and writes each row once, by its dedupe key, so a wake-up and a page load
+  can overlap. The first sync has no cursor and takes the board's own summary of its last 100 events, which leaves
+  out a hold that was since lifted; every sync after reads from the cursor, which is every event. Where nothing
+  wakes the deployment (local dev, a board at `BOARD_URL`), the pages that show the feed run the same sync, at most
+  once every 15 seconds per instance. The board keeps a task's changes for 30 days; the feed is the durable copy,
+  and the usage page is a view over it.
 
   | On the board | Feed row |
   |---|---|
   | a task is created | `task.created` |
   | a worker's lane profile (`relay-<worker>-<lane>`) claims it | `run.started` |
-  | a `relay-run@1` block from a trusted author | `run.finished`, or `run.failed` when its outcome is `failed` |
-  | a `relay-usage@1` block from a trusted author | `step.usage` |
+  | a `relay-run@1` block from an author the site believes | `run.finished`, or `run.failed` when its outcome is `failed` |
+  | a `relay-usage@1` block from an author the site believes | `step.usage` |
   | a hold with kind `gate` | `task.held` |
-  | the task is completed | `task.approved` |
+  | a `relay-release@1` block from an author the site believes | `task.released`, by who asked |
+  | a note left with a send-back (a `relay=note` reply not written by one of relay's own profiles) | `task.changes_requested` |
+  | the task is completed, unless it is a step's own task | `task.approved` |
   | the task is canceled | `task.closed` |
   | a failed task is reopened | `task.requeued` |
+  | the database refused one event's rows | `ledger.skipped`, and the rest go on |
 
-  A usage or run block counts only from an author the site believes: its own deployment and the worker logins in
-  `RELAY_BOARD_FROM`. A task's own turns are the board's facts and count from anyone.
-- `brief` posts relay's memory for a new task in its thread as `brief.md`, once, so a worker needs nothing from the
-  site but the board. A step's own task gets none. A worker hands the file to its lane when the site's deployment
-  is in that worker's `board.from`.
+  The site believes its own deployment and the worker logins in `RELAY_BOARD_FROM`, under the same rule as a worker:
+  the principal itself or its `relay-…` profiles. A task's own turns are the board's facts and count from anyone. A
+  row names a person `human:<login>` or a bot `bot:<name>` only when the site itself wrote the message. Numbers are
+  clamped to what the columns hold. Rows are not rewritten later: usage from a login that was not yet in
+  `RELAY_BOARD_FROM` stays uncounted.
+- `relay-brief` posts relay's memory for a new task in its thread as `brief.md`. It covers tasks opened elsewhere
+  (the CLI); for a task the site opened it is the same author posting the same message, which changes nothing. A
+  step's own task gets none. A worker hands the file to its lane when the site's deployment is in that worker's
+  `board.from`, and only a brief from an author it believes is used.
 
 **GitHub.** Two deliveries act on the board (`apps/web/lib/webhooks/board.ts`). An issue opened with, or given, an
-`agent:<lane>` label by an allowed sender (`RELAY_ALLOWED_SENDERS`) opens a task in the queue of the project registered for
-that repository, answering that issue: one task per issue, written as `bot:github`. A pull request merged on GitHub
-completes the task in review that waits on it (`settleMerged`), under the same branch check as an approval. The
-site merges with its own GitHub credential, the GitHub App or `GITHUB_TOKEN`.
+`agent:<lane>` label by an allowed sender (`RELAY_ALLOWED_SENDERS`) opens a task in the queue of the project
+registered for that repository, answering that issue. It is written as the profile `github` (shown as `bot:github`),
+which no token's profile can be. One task per issue: the `opened` and `labeled` deliveries of a new issue and a
+redelivery find the same task, a label put on again after that task finished opens the next one, and a redelivery
+of an older label opens none. A lane nobody serves is refused. A pull request merged on GitHub completes the task
+that waits on it (`settleMerged`), in review or still held for an eval, under the same branch check as an approval.
+When a delivery cannot do its part (the lane was refused, the board could not be reached), a `board.delivery_failed`
+row in the feed says what did not happen.
+The site merges with its own GitHub credential, the GitHub App or `GITHUB_TOKEN`.
 
 **Demo mode** (`RELAY_DATA=mock`) is an in-memory board with relay's schemas, seeded through the same functions a
 real one is written with, so every page reads real threads. It has nobody to wake it, and `/api/board` answers 404.

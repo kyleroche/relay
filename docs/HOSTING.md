@@ -38,10 +38,13 @@ its deployment's own identity, so there is no board credential to set.
    grants the project's production deployment everything in `work/`, adds that deployment
    (`vercel:project:<id>:production`) to the machine's `board.from` so its workers take the tasks the site opens,
    and prints the `RELAY_BOARD_FROM` line for step 3 (`docs/WORKERS.md`, "A machine becomes a worker"). The same
-   command registers relay's schemas, once per team.
+   command registers relay's schemas, once per team. Without the grant the site can open tasks but cannot approve,
+   release, requeue or close one someone else opened: an approval is refused before anything merges, and the board
+   page shows a warning that the deployment does not manage `work/`.
 3. **Tell the site whose blocks to believe.** Set `RELAY_BOARD_FROM` on the project to the worker logins, as
    comma-separated actor IDs. The site counts a usage or run block only from its own deployment and those logins;
-   without it the feed shows tasks opening, being claimed and closing, and no run outcomes or usage.
+   without it the feed shows tasks opening, being claimed and closing, and no run outcomes or usage. Set it before
+   the workers run: usage from a login that was not yet listed is not counted, and is not backfilled later.
 4. **Another board than the team's default** is `RELAY_BOARD_TEAM` and `RELAY_BOARD_NAME`, the same names a worker
    reads.
 

@@ -148,11 +148,12 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["tasks"],
         summary: "Approve a task in review",
         description:
-          "With a pull request: squash-merges it through GitHub, deletes the head branch and completes the task. The pull request is the one the runner's hold names, and it is merged only when its head is a branch relay pushed for this task. With outputs instead (the nodes lane): completes the task. A signed-in person may approve anything in review; a bot's token must hold `tasks:write`, and a bot never approves a task it opened or ran (403). When GitHub refuses the merge (conflicts, required checks, permissions) the refusal is a line in the task's thread and the answer is 502; the task stays in review.",
+          "With a pull request: squash-merges it through GitHub, deletes the head branch and completes the task. The pull request is the one the runner's hold names, and it is merged only when its head is a branch relay pushed for this task. With outputs instead (the nodes lane): completes the task. A signed-in person may approve anything in review; a bot's token must hold `tasks:write`, and a bot never approves a task it opened (403). Before anything merges the site checks that its deployment can settle the task on the board (403 when it neither opened the task nor manages the queue). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success. When GitHub refuses the merge (conflicts, required checks, permissions) the refusal is a line in the task's thread and the answer is 502; the task stays in review.",
         security: [{ bearer: ["tasks:write"] }],
         parameters: [taskIdParam],
         responses: {
           "200": response("Approved; the completed task, with the merge when there was one.", "#/components/schemas/TaskApproved"),
+          "403": problemResponse("A bot approving a task it opened, or a deployment that cannot settle the task on the board."),
           "404": problemResponse("No such task."),
           "409": problemResponse("Not in review, nothing to approve, or the pull request is closed or is not this task's."),
           "501": notImplemented,
@@ -240,12 +241,12 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["tasks"],
         summary: "Release a task the injection gate held",
         description:
-          "A task in state `held` was stopped by the injection gate before a lane ran it: its text (or a note added to its thread) read as instructions aimed at the agent, and the hold's `reason` says what the gate saw. Release lifts the hold for the text as it stands: the task is `queued`, that text is not graded again, and anything added later is. For text a person has read and judged safe. A signed-in person may release anything held; a bot's token must hold `tokens:write`, and a bot never releases a task it opened itself. A tripwire in front of the sandbox, not a boundary.",
+          "A task in state `held` was stopped by the injection gate before a lane ran it: its text (or a note added to its thread) read as instructions aimed at the agent, and the hold's `reason` says what the gate saw. Release lifts the hold for the text as it stands: the task is `queued`, that text is not graded again, and anything added later is. For text a person has read and judged safe. A signed-in person may release anything held; a bot's token must hold `tokens:write`, and a bot never releases a task whose text it wrote any part of: the task itself or a note in its thread. A tripwire in front of the sandbox, not a boundary.",
         security: [{ bearer: ["tokens:write"] }],
         parameters: [taskIdParam],
         responses: {
           "200": response("Released; the updated task (state queued).", "#/components/schemas/Task"),
-          "403": problemResponse("A token without tokens:write, or the bot that opened the task."),
+          "403": problemResponse("A token without tokens:write, or a bot that wrote part of the task's text."),
           "404": problemResponse("No such task."),
           "409": problemResponse("The task is not held."),
           "501": notImplemented,

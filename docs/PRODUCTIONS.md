@@ -85,7 +85,7 @@ Nothing here needs a person at a keyboard except the decision, and even that can
 
 - **A script or story agent** (Claude, Codex, Grok through a `relay link`-ed checkout of the tracker, or a bot over MCP) writes `script.md` and `shots.md` and opens one task per character pass and per shot, with the prompt in the manifest. It reads the production's memory first (`relay_brief` / `relay brief`): the decisions and preferences, and the vendor guidance for the model it is prompting (`relay onboard bytedance/seedance-2.5`, `relay_guidance`).
 - **The nodes workers** do the rendering: the Mac with the engine, the mini, a machine with a local model; a machine serves the lane when `relay doctor` shows `nodes` and the keys the workflow needs are in its environment. Nothing of the workflow's keys leaves that machine.
-- **A chief of staff** (the Grok Bot walkthrough in `docs/INTEGRATIONS.md`, "Running a production") asks `relay_task_list({project, state: "review"})` for what is waiting, tells you with the task's page link, opens the next stage when the previous one is approved, and decides on your word with `relay_task_approve` or `relay_task_request_changes`.
+- **A chief of staff** (the Grok Bot walkthrough in `docs/INTEGRATIONS.md`, "Running a production") asks `relay_task_list({project, state: "review"})` for what is waiting, tells you with the task's page link, opens the next stage when the previous one is approved, and sends a task back on your word with `relay_task_request_changes`. It cannot approve a task it opened itself (a bot never approves its own work): you approve on the task's page, or a second bot that did not open the task calls `relay_task_approve`.
 - **You** look at the board.
 
 ## Limits, stated
