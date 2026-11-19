@@ -3,8 +3,6 @@
  * the service files, the container plan and the container login helpers.
  */
 import { describe, it, expect } from "vitest";
-import * as repo from "../src/db/repo.ts";
-import { deriveTaskStatus, type ClaimLike } from "../src/db/tasks.ts";
 import { servicePlan } from "../src/work/service.ts";
 import { fxLoginWords, isLoginProvider, LOGIN_PROVIDERS, loginDonePage, manualLoginSteps, OAUTH_PROVIDERS, parseLoginCallback, parseLoginUrl, replayUrl } from "../src/work/login.ts";
 import {
@@ -23,50 +21,6 @@ import {
   loginStatesFromDoctorOutput,
   tokenNameFromDoctorOutput,
  currentWorkArgs } from "../src/work/container.ts";
-
-describe("workers", () => {
-  it("derives online, idle and offline from last_seen", () => {
-    const now = Date.now();
-    expect(repo.workerState({ last_seen: new Date(now - 30_000).toISOString(), status: "online" }, now)).toBe("online");
-    expect(repo.workerState({ last_seen: new Date(now - 10 * 60_000).toISOString(), status: "online" }, now)).toBe("idle");
-    expect(repo.workerState({ last_seen: new Date(now - 2 * 3_600_000).toISOString(), status: "online" }, now)).toBe("offline");
-    expect(repo.workerState({ last_seen: new Date(now).toISOString(), status: "offline" }, now)).toBe("offline");
-  });
-
-  it("marks a worker offline for more than 7 days as retired; a fresh offline report is not retired", () => {
-    const now = Date.parse("2026-10-17T12:00:00Z");
-    const day = 24 * 60 * 60_000;
-    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "online" }, now)).toBe(true);
-    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "offline" }, now)).toBe(true);
-    expect(repo.workerRetired({ last_seen: new Date(now - 3 * day).toISOString(), status: "offline" }, now)).toBe(false);
-    expect(repo.workerRetired({ last_seen: new Date(now - 60_000).toISOString(), status: "offline" }, now)).toBe(false);
-    expect(repo.workerRetired({ last_seen: new Date(now - 8 * day).toISOString(), status: "online" }, now - 8 * day + 1000)).toBe(false);
-  });
-});
-
-describe("deriveTaskStatus with claims", () => {
-  const task = { repo: "acme/demo", issue: 1 };
-  const ev = (kind: string, ts: string, extra: Partial<repo.EventRow> = {}): repo.EventRow => ({ id: 0, ts, kind, actor: "runner:mini", project: "demo", repo: "acme/demo", issue: 1, pr: null, lane: "claude", model: null, subscription: null, tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost_equiv: 0, duration_ms: null, summary: kind, url: null, payload: {}, dedupe_key: null, ...extra });
-  const now = Date.parse("2026-10-16T10:30:00Z");
-  const claim = (over: Partial<ClaimLike> = {}): ClaimLike => ({ worker: "mini", claimed_at: "2026-10-16T10:00:00.000Z", lease_until: "2026-10-16T11:00:00.000Z", released_at: null, outcome: null, ...over });
-
-  it("a live lease on a queued task is `claimed`", () => {
-    const s = deriveTaskStatus(task, [], [claim()], now);
-    expect(s.state).toBe("claimed");
-    expect(s.runner).toBe("runner:mini");
-  });
-  it("run.started under a live lease is running; a finished run is review regardless of the lease", () => {
-    expect(deriveTaskStatus(task, [ev("run.started", "2026-10-16T10:05:00.000Z")], [claim()], now).state).toBe("running");
-    expect(deriveTaskStatus(task, [ev("run.started", "2026-10-16T10:05:00.000Z"), ev("run.finished", "2026-10-16T10:20:00.000Z", { payload: { conclusion: "success" } })], [claim({ released_at: "2026-10-16T10:20:00.000Z", outcome: "finished" })], now).state).toBe("review");
-  });
-  it("a lease that expired mid-run puts the task back to queued; an expired lease before any run is plain queued", () => {
-    const expired = claim({ released_at: "2026-10-16T10:29:00.000Z", outcome: "expired" });
-    expect(deriveTaskStatus(task, [ev("run.started", "2026-10-16T10:05:00.000Z")], [expired], now).state).toBe("queued");
-    expect(deriveTaskStatus(task, [], [expired], now).state).toBe("queued");
-    // a lease past its time that nobody marked yet is not live either
-    expect(deriveTaskStatus(task, [], [claim({ lease_until: "2026-10-16T10:10:00.000Z" })], now).state).toBe("queued");
-  });
-});
 
 describe("service files", () => {
   const base = { node: "/opt/node/bin/node", cliArgv: ["/usr/lib/relay/dist/relay.js"], home: "/Users/relay/.harness", userHome: "/Users/relay", path: "/opt/node/bin:/usr/bin:/bin", uid: 502 } as const;

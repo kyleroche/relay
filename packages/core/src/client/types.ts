@@ -6,31 +6,11 @@
 import type { EventRow, ListEventsOpts, UsageSummaryRow } from "../db/events.ts";
 import type { DecisionRow, PreferenceRow } from "../db/memory.ts";
 import type { ProjectRow } from "../db/projects.ts";
-import type { TaskState, TaskView } from "../db/tasks.ts";
 import type { InviteRow } from "../db/oauth.ts";
 import type { TokenRow } from "../db/tokens.ts";
-import type { PublicWebhook } from "../db/webhooks.ts";
-import type { CreateTaskInput } from "../tasks/create.ts";
-import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { BriefIssue } from "../brief/index.ts";
 
 export type ClientMode = "local" | "site";
-
-/** `relay task requeue`, `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue`: the lane to move to and why. */
-export interface RequeueTaskInput {
-  lane?: string | null;
-  reason?: string | null;
-}
-
-/** `relay task close`, `relay_task_close`, `POST /api/v1/tasks/{id}/close`: why the task is closed without a merge. */
-export interface CloseTaskInput {
-  reason?: string | null;
-}
-
-/** `relay task release` / `relay_task_release` / `POST /api/v1/tasks/{id}/release`: lift the injection gate's hold. */
-export interface ReleaseTaskInput {
-  note?: string | null;
-}
 
 /** `relay_event_log` / `POST /api/v1/events`: an external bot's note in the feed. Kind must start with `external.`. */
 export interface ExternalEventInput {
@@ -122,14 +102,6 @@ export interface PreferInput {
   reason?: string | null;
 }
 
-export interface WebhookInput {
-  url: string;
-  events: string[];
-  project?: string | null;
-  bearer?: string | null;
-  secret?: string;
-}
-
 export interface SiteHealth {
   ok: boolean;
   detail: string;
@@ -211,20 +183,6 @@ export interface RelayClient {
   listTokens(opts?: { includeRevoked?: boolean }): Promise<TokenRow[]>;
   revokeToken(idOrName: string): Promise<TokenRow | undefined>;
 
-  // tasks
-  createTask(input: Omit<CreateTaskInput, "actor">): Promise<{ task_id: string; issue_url: string; created: boolean; task: TaskView }>;
-  getTask(id: string): Promise<TaskView | undefined>;
-  listTasks(opts?: { project?: string; state?: TaskState; limit?: number }): Promise<TaskView[]>;
-  /** Approve a task in review: squash-merge its PR, delete the branch, write task.approved (tasks/review.ts). */
-  approveTask(id: string): Promise<TaskView>;
-  /** Send a task's PR back with a note: a PR comment plus task.changes_requested; the task is queued again. */
-  requestChanges(id: string, note: string): Promise<TaskView>;
-  /** Put a task back in the queue, optionally on another lane (the agent:* label moves with it); any state but done (tasks/requeue.ts). */
-  requeueTask(id: string, opts?: RequeueTaskInput): Promise<TaskView>;
-  /** Close a task without a merge: the issue (and an open PR) closed on GitHub, a live claim released, task.closed written; any state but done (tasks/close.ts). */
-  closeTask(id: string, opts?: CloseTaskInput): Promise<TaskView>;
-  /** Release a task the injection gate held: task.released, the task is queued again (tasks/gate.ts). */
-  releaseTask(id: string, opts?: ReleaseTaskInput): Promise<TaskView>;
 
 
   // invites (approval without a browser)
@@ -235,11 +193,6 @@ export interface RelayClient {
   /** Who this client is to the backing store. */
   whoami(): Promise<WhoAmI>;
 
-  // webhooks
-  addWebhook(input: WebhookInput): Promise<{ webhook: PublicWebhook; secret: string }>;
-  listWebhooks(opts?: { project?: string }): Promise<PublicWebhook[]>;
-  removeWebhook(id: string): Promise<boolean>;
-  testWebhook(id: string): Promise<DeliveryResult>;
 
   /** Is the backing store answering, and with what. */
   health(): Promise<SiteHealth>;

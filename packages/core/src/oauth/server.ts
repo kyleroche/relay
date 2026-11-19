@@ -66,8 +66,6 @@ export interface OAuthServerOptions {
   /** The site's origin, e.g. https://relay.example.com. Also the only accepted `resource`. */
   issuer: string;
   now?: () => number;
-  /** Called with every feed row the server writes (the web app fans webhooks out from here). */
-  onEvent?: (row: EventRow) => void | Promise<void>;
 }
 
 const nowMs = (o: OAuthServerOptions): number => (o.now ?? Date.now)();
@@ -363,9 +361,8 @@ async function mint(db: Db, o: OAuthServerOptions, input: { tokenName: string; s
   };
 }
 
-async function emit(db: Db, o: OAuthServerOptions | undefined, ev: { kind: (typeof ACCESS_EVENT_KINDS)[number]; actor: string; summary: string; payload: Record<string, unknown>; dedupe_key?: string }): Promise<void> {
-  const row = await writeEvent(db, { ...ev, project: null }).catch(() => undefined);
-  if (row && o?.onEvent) await Promise.resolve(o.onEvent(row)).catch(() => {});
+async function emit(db: Db, ev: { kind: (typeof ACCESS_EVENT_KINDS)[number]; actor: string; summary: string; payload: Record<string, unknown>; dedupe_key?: string }): Promise<void> {
+  await writeEvent(db, { ...ev, project: null }).catch(() => undefined);
 }
 
 export const tokenNameFor = (clientName: string): string => `oauth:${clientName}`;
@@ -401,7 +398,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     if (!verifyPkce(str(p.code_verifier), row.code_challenge, row.code_challenge_method)) throw new OAuthError("invalid_grant", "code_verifier does not match code_challenge.");
     checkResource(o, p.resource);
     const { response, row: tok } = await mint(db, o, { tokenName: tokenNameFor(client.name), scopes: row.scopes as TokenScope[], actor: row.actor, clientId: client.client_id });
-    await emit(db, o, { kind: "access.granted", actor: row.actor, summary: `${client.name} received a token (${scopeString(row.scopes)})`, payload: { via: "authorization_code", client_id: client.client_id, token_id: tok.id, scopes: row.scopes } });
+    await emit(db, { kind: "access.granted", actor: row.actor, summary: `${client.name} received a token (${scopeString(row.scopes)})`, payload: { via: "authorization_code", client_id: client.client_id, token_id: tok.id, scopes: row.scopes } });
     return response;
   }
 
@@ -419,7 +416,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
       // A second use means the token leaked: cut the whole lineage, access tokens included.
       const ids = await q.revokeRefreshLineage(db, rt.token_hash);
       for (const id of ids) await revokeTokenById(db, id);
-      await emit(db, o, { kind: "access.revoked", actor: rt.actor, summary: `Refresh token reuse detected for ${client?.name ?? rt.client_id}; lineage revoked`, payload: { client_id: rt.client_id, reason: "refresh_reuse", revoked_tokens: ids } });
+      await emit(db, { kind: "access.revoked", actor: rt.actor, summary: `Refresh token reuse detected for ${client?.name ?? rt.client_id}; lineage revoked`, payload: { client_id: rt.client_id, reason: "refresh_reuse", revoked_tokens: ids } });
       throw new OAuthError("invalid_grant", "The refresh token was already used; the grant has been revoked. Authorize again.");
     }
     if (isPast(o, rt.expires_at)) throw new OAuthError("invalid_grant", "The refresh token expired.");
@@ -461,7 +458,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
       await revokeTokenById(db, tok.id);
       throw new OAuthError("invalid_grant", "The device code was already redeemed.");
     }
-    await emit(db, o, { kind: "access.granted", actor, summary: `${client.name} received a token via ${d.user_code} (${scopeString(d.scopes)})`, payload: { via: "device_code", user_code: d.user_code, client_id: client.client_id, token_id: tok.id, scopes: d.scopes }, dedupe_key: `access:${d.user_code}:granted` });
+    await emit(db, { kind: "access.granted", actor, summary: `${client.name} received a token via ${d.user_code} (${scopeString(d.scopes)})`, payload: { via: "device_code", user_code: d.user_code, client_id: client.client_id, token_id: tok.id, scopes: d.scopes }, dedupe_key: `access:${d.user_code}:granted` });
     return response;
   }
 
@@ -483,7 +480,7 @@ export async function exchangeToken(db: Db, p: TokenParams, o: OAuthServerOption
     const clientId = client?.client_id ?? (await ensureInviteClient(db, redeemerName ?? invite.name)).client_id;
     const actor = `invite:${invite.id}`;
     const { response, row: tok } = await mint(db, o, { tokenName: tokenNameFor(invite.name), scopes: invite.scopes as TokenScope[], actor, clientId });
-    await emit(db, o, { kind: "access.granted", actor: invite.created_by, summary: `${invite.name} redeemed invite ${invite.id} (${scopeString(invite.scopes)}; ${spent.uses_left} use(s) left)`, payload: { via: "invite", invite_id: invite.id, token_id: tok.id, scopes: invite.scopes, uses_left: spent.uses_left } });
+    await emit(db, { kind: "access.granted", actor: invite.created_by, summary: `${invite.name} redeemed invite ${invite.id} (${scopeString(invite.scopes)}; ${spent.uses_left} use(s) left)`, payload: { via: "invite", invite_id: invite.id, token_id: tok.id, scopes: invite.scopes, uses_left: spent.uses_left } });
     return response;
   }
 
@@ -561,7 +558,7 @@ export async function deviceAuthorization(db: Db, p: DeviceAuthorizationParams, 
   const verification_uri_complete = `${verification_uri}?code=${encodeURIComponent(userCode)}`;
   // The summary is a fixed sentence with the (pattern-checked) name quoted; the scopes travel in the payload only, so
   // a client cannot write its own feed line.
-  await emit(db, o, {
+  await emit(db, {
     kind: "access.requested",
     actor: `bot:${client.name}`,
     summary: `client "${client.name}" asks for access: approve ${userCode} at ${verification_uri}`,
@@ -625,7 +622,7 @@ export async function decideDeviceRequest(db: Db, typed: string, decision: "appr
   }
   const row = await q.decideDevice(db, code, { status: decision === "approve" ? "approved" : "denied", actor, now: new Date(nowMs(o)) });
   if (!row) throw new OAuthError("invalid_grant", "That request was decided by someone else.");
-  await emit(db, o, {
+  await emit(db, {
     kind: decision === "approve" ? "access.granted" : "access.denied",
     actor,
     summary: `${actor.replace(/^human:/, "")} ${decision === "approve" ? "approved" : "denied"} ${row.user_code} for ${row.client_name}`,
@@ -689,7 +686,7 @@ export async function removeClient(db: Db, clientId: string, actor: string, o?: 
     throw new OAuthError("invalid_request", e instanceof Error ? e.message : String(e));
   }
   if (!row) throw new OAuthError("invalid_client", "Unknown client_id.");
-  await emit(db, o, { kind: "access.client_removed", actor, summary: `${actor.replace(/^human:/, "")} removed client ${row.name}`, payload: { client_id: row.client_id, client_name: row.name, origin: clientOrigin(row) } });
+  await emit(db, { kind: "access.client_removed", actor, summary: `${actor.replace(/^human:/, "")} removed client ${row.name}`, payload: { client_id: row.client_id, client_name: row.name, origin: clientOrigin(row) } });
   return row;
 }
 
@@ -709,7 +706,7 @@ export async function purgeAccess(db: Db, o?: OAuthServerOptions, actor = "bot:r
       r.refresh_tokens ? `${r.refresh_tokens} refresh token(s)` : "",
       r.clients.length ? `${r.clients.length} orphan client(s)` : "",
     ].filter(Boolean);
-    await emit(db, o, { kind: "access.purged", actor, summary: `Access retention removed ${parts.join(", ")}`, payload: { ...r } });
+    await emit(db, { kind: "access.purged", actor, summary: `Access retention removed ${parts.join(", ")}`, payload: { ...r } });
   }
   return r;
 }
@@ -722,12 +719,12 @@ export async function revokeToken(db: Db, token: string, o: OAuthServerOptions):
   if (rt) {
     await q.revokeRefreshToken(db, rt.token_hash);
     if (rt.access_token_id) await revokeTokenById(db, rt.access_token_id);
-    await emit(db, o, { kind: "access.revoked", actor: rt.actor, summary: `Refresh token for ${rt.client_id} revoked`, payload: { client_id: rt.client_id, token_id: rt.access_token_id } });
+    await emit(db, { kind: "access.revoked", actor: rt.actor, summary: `Refresh token for ${rt.client_id} revoked`, payload: { client_id: rt.client_id, token_id: rt.access_token_id } });
     return { revoked: "refresh" };
   }
   const row = await revokeTokenByHash(db, hashToken(token));
   if (row) {
-    await emit(db, o, { kind: "access.revoked", actor: row.created_by, summary: `Token ${row.name} revoked`, payload: { token_id: row.id, client_id: row.client_id } });
+    await emit(db, { kind: "access.revoked", actor: row.created_by, summary: `Token ${row.name} revoked`, payload: { token_id: row.id, client_id: row.client_id } });
     return { revoked: "access" };
   }
   return { revoked: "none" };
@@ -762,7 +759,7 @@ export async function createInvite(db: Db, input: CreateInviteInput, o: OAuthSer
   if (!Number.isFinite(ttl) || ttl <= 0 || ttl > 365 * 86_400) throw new OAuthError("invalid_request", "expires must be between 1 second and 365 days.");
   const code = opaqueSecret("rin_", 24);
   const invite = await q.insertInvite(db, { code, name, scopes, uses, expires_at: after(o, ttl), created_by: input.createdBy });
-  await emit(db, o, { kind: "access.invite_created", actor: input.createdBy, summary: `${input.createdBy.replace(/^human:/, "")} created invite ${invite.id} for ${name} (${scopeString(scopes)}; ${uses} use(s))`, payload: { invite_id: invite.id, name, scopes, uses, expires_at: invite.expires_at } });
+  await emit(db, { kind: "access.invite_created", actor: input.createdBy, summary: `${input.createdBy.replace(/^human:/, "")} created invite ${invite.id} for ${name} (${scopeString(scopes)}; ${uses} use(s))`, payload: { invite_id: invite.id, name, scopes, uses, expires_at: invite.expires_at } });
   return { code, invite };
 }
 
@@ -771,6 +768,6 @@ export const listInvites = (db: Db, opts?: { includeSpent?: boolean; now?: Date 
 /** Stop an unredeemed invite by id or name; writes access.invite_revoked. Undefined when nothing live matched. */
 export async function revokeInvite(db: Db, idOrName: string, actor?: string, o?: OAuthServerOptions): Promise<q.InviteRow | undefined> {
   const row = await q.revokeInvite(db, idOrName);
-  if (row) await emit(db, o, { kind: "access.invite_revoked", actor: actor ?? row.created_by, summary: `Invite ${row.id} for ${row.name} revoked (${row.uses_left} use(s) left)`, payload: { invite_id: row.id, name: row.name, uses_left: row.uses_left } });
+  if (row) await emit(db, { kind: "access.invite_revoked", actor: actor ?? row.created_by, summary: `Invite ${row.id} for ${row.name} revoked (${row.uses_left} use(s) left)`, payload: { invite_id: row.id, name: row.name, uses_left: row.uses_left } });
   return row;
 }

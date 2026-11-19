@@ -17,7 +17,6 @@ export const TOKEN_SCOPES = [
   "tasks:write",
   "events:write",
   "projects:write",
-  "webhooks:write",
   "tokens:write",
 ] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
@@ -32,11 +31,10 @@ export const TOKEN_SCOPE_DESCRIPTIONS: Record<TokenScope, string> = {
   "assets:read": "List and view assets (signed URLs).",
   "assets:write": "Upload, finalize and publish assets.",
   "assets:review": "Approve or reject assets.",
-  "tasks:read": "Read tasks and their derived state.",
-  "tasks:write": "Open tasks (GitHub issues with a lane label).",
+  "tasks:read": "Read tasks on the board.",
+  "tasks:write": "Open tasks on the board and decide on them: approve, send back, requeue, close.",
   "events:write": "Log external.* events; the actor is always bot:<token name>.",
   "projects:write": "Register projects and upload digests and summaries (relay link in site mode).",
-  "webhooks:write": "Add, list, remove and test outbound webhooks.",
   "tokens:write": "Mint, list and revoke tokens (relay token in site mode).",
 };
 

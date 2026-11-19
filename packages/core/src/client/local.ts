@@ -3,25 +3,13 @@ import { compileBrief, matchingDecisions, mergedPreferences, renderDecision, ren
 import type { Db } from "../db/client.ts";
 import { currentVersion } from "../db/migrate.ts";
 import * as repo from "../db/repo.ts";
-import { detectGitHub, type GitHubClient } from "../github/client.ts";
 import { createInvite, listInvites, revokeInvite } from "../oauth/server.ts";
 import { TOKEN_SCOPES } from "../db/tokens.ts";
-import { openTask } from "../tasks/create.ts";
-import { approveTask, requestChanges } from "../tasks/review.ts";
-import { requeueTask } from "../tasks/requeue.ts";
-import { closeTask } from "../tasks/close.ts";
-import { releaseTask } from "../tasks/gate.ts";
-import { deliverWebhook, dispatchEvent, pingPayload, type DeliverOptions } from "../webhooks/dispatch.ts";
 import type { RelayClient } from "./types.ts";
 
 export interface LocalClientOptions {
   actor: string;
   embed?: CompileBriefOptions["embed"];
-  /** GitHub access for opening tasks; default: env token, then the gh CLI. */
-  github?: GitHubClient | (() => GitHubClient | undefined);
-  /** Deliver matching webhooks after every event written here (default true). */
-  dispatch?: boolean;
-  deliver?: Omit<DeliverOptions, "db">;
   /** Called after the client is closed. */
   onClose?: () => Promise<void>;
   /** The issuer invites are minted for (only used in the invite's feed events). */
@@ -36,12 +24,7 @@ export const GITHUB_INSTALLATIONS_URL = "https://github.com/settings/installatio
 export const EXTERNAL_KIND = /^external\.[a-z0-9_.-]+$/i;
 
 export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
-  const github = () => (typeof opts.github === "function" ? opts.github() : opts.github ?? detectGitHub());
   const embed = opts.embed;
-  const afterWrite = async (row: repo.EventRow | undefined) => {
-    if (!row || opts.dispatch === false) return;
-    await dispatchEvent(db, row, opts.deliver ?? {}).catch(() => {});
-  };
   return {
     mode: "local",
     actor: opts.actor,
@@ -59,7 +42,6 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
         cost_equiv: input.cost_equiv ?? 0,
         payload: { ...(input.payload ?? {}), ...(input.source ? { source: input.source } : {}) },
       });
-      await afterWrite(row);
       return row;
     },
     usageSummary: (since) => repo.usageSummary(db, since),
@@ -117,56 +99,18 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
       const row = d.supersedesId
         ? await repo.supersedeDecision(db, d.supersedesId, { text: d.text, source: d.source, ...(d.sourceRef ? { sourceRef: d.sourceRef } : {}) })
         : await repo.addDecision(db, { project: d.project, text: d.text, source: d.source, ...(d.sourceRef ? { sourceRef: d.sourceRef } : {}) });
-      const ev = await repo.writeEvent(db, { kind: "decision.captured", actor: opts.actor, project: d.project, summary: d.text.slice(0, 200), payload: { decision_id: row.id, source: d.source, source_ref: d.sourceRef ?? null, superseded: d.supersedesId ?? null } });
-      await afterWrite(ev);
+      await repo.writeEvent(db, { kind: "decision.captured", actor: opts.actor, project: d.project, summary: d.text.slice(0, 200), payload: { decision_id: row.id, source: d.source, source_ref: d.sourceRef ?? null, superseded: d.supersedesId ?? null } });
       return { id: row.id };
     },
     async prefer(p) {
       await repo.upsertPreference(db, { key: p.key, value: p.value, scope: p.scope, scope_id: p.scopeId, reason: p.reason ?? null });
-      const ev = await repo.writeEvent(db, { kind: "preference.set", actor: opts.actor, project: p.scope === "project" ? p.scopeId : null, summary: `${p.key} = ${p.value} (${p.scope}${p.scopeId ? `: ${p.scopeId}` : ""})`, payload: { key: p.key, value: p.value, scope: p.scope, scope_id: p.scopeId, reason: p.reason ?? null } });
-      await afterWrite(ev);
+      await repo.writeEvent(db, { kind: "preference.set", actor: opts.actor, project: p.scope === "project" ? p.scopeId : null, summary: `${p.key} = ${p.value} (${p.scope}${p.scopeId ? `: ${p.scopeId}` : ""})`, payload: { key: p.key, value: p.value, scope: p.scope, scope_id: p.scopeId, reason: p.reason ?? null } });
     },
     listDecisions: (project, o = {}) => repo.listDecisions(db, project, o),
 
     createToken: (i) => repo.createToken(db, { name: i.name, scopes: i.scopes, createdBy: opts.actor }),
     listTokens: (o = {}) => repo.listTokens(db, o),
     revokeToken: (idOrName) => repo.revokeToken(db, idOrName),
-
-    async createTask(input) {
-      const r = await openTask(db, github(), { ...input, actor: opts.actor });
-      for (const ev of r.events) await afterWrite(ev);
-      return { task_id: r.task_id, issue_url: r.issue_url, created: r.created, task: r.task };
-    },
-    async getTask(id) {
-      const t = await repo.getTask(db, id);
-      return t ? repo.taskView(db, t) : undefined;
-    },
-    listTasks: (o = {}) => repo.listTaskViews(db, o),
-    async approveTask(id) {
-      const r = await approveTask(db, github(), id, opts.actor);
-      for (const ev of r.events) await afterWrite(ev);
-      return r.task;
-    },
-    async requestChanges(id, note) {
-      const r = await requestChanges(db, github(), id, opts.actor, note);
-      for (const ev of r.events) await afterWrite(ev);
-      return r.task;
-    },
-    async requeueTask(id, o = {}) {
-      const r = await requeueTask(db, github(), id, opts.actor, { lane: o.lane ?? null, reason: o.reason ?? null });
-      for (const ev of r.events) await afterWrite(ev);
-      return r.task;
-    },
-    async closeTask(id, o = {}) {
-      const r = await closeTask(db, github(), id, opts.actor, { reason: o.reason ?? null });
-      for (const ev of r.events) await afterWrite(ev);
-      return r.task;
-    },
-    async releaseTask(id, o = {}) {
-      const r = await releaseTask(db, id, opts.actor, { note: o.note ?? null });
-      for (const ev of r.events) await afterWrite(ev);
-      return r.task;
-    },
 
     async createInvite(i) {
       const r = await createInvite(db, { name: i.name, scopes: i.scopes, ...(i.expiresInSeconds ? { expiresInSeconds: i.expiresInSeconds } : {}), ...(i.uses ? { uses: i.uses } : {}), createdBy: opts.actor }, { issuer: opts.issuer ?? "relay://local" });
@@ -175,18 +119,6 @@ export function localClient(db: Db, opts: LocalClientOptions): RelayClient {
     listInvites: (o = {}) => listInvites(db, o),
     revokeInvite: (idOrName) => revokeInvite(db, idOrName, opts.actor),
     whoami: async () => ({ actor: opts.actor, name: opts.actor, scopes: [...TOKEN_SCOPES], expires_at: null, source: "local" }),
-
-    async addWebhook(input) {
-      const row = await repo.createWebhook(db, { project: input.project ?? null, url: input.url, events: input.events, bearer: input.bearer ?? null, ...(input.secret ? { secret: input.secret } : {}), createdBy: opts.actor });
-      return { webhook: repo.publicWebhook(row), secret: row.secret };
-    },
-    listWebhooks: async (o = {}) => (await repo.listWebhooks(db, { ...(o.project ? { project: o.project } : {}), includeInactive: true })).map(repo.publicWebhook),
-    removeWebhook: (id) => repo.deleteWebhook(db, id),
-    async testWebhook(id) {
-      const hook = await repo.getWebhook(db, id);
-      if (!hook) throw new Error(`no webhook ${id}`);
-      return deliverWebhook(hook, pingPayload(hook), { ...(opts.deliver ?? {}), db });
-    },
 
     async health() {
       try {

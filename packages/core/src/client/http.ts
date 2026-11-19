@@ -1,5 +1,5 @@
 /**
- * RelayClient over a hosted site: REST under `<site>/api/v1` for feed, projects, tokens, tasks and webhooks, and the
+ * RelayClient over a hosted site: REST under `<site>/api/v1` for feed, projects and tokens, and the
  * site's MCP server at `<site>/mcp` (JSON-RPC `tools/call`, stateless) for the memory tools. One bearer token for both.
  * The token is sent only to the configured site, in the Authorization header, never in a URL.
  */
@@ -7,10 +7,7 @@ import type { EventRow } from "../db/events.ts";
 import type { DecisionRow, PreferenceRow } from "../db/memory.ts";
 import type { InviteRow } from "../db/oauth.ts";
 import type { ProjectRow } from "../db/projects.ts";
-import type { TaskView } from "../db/tasks.ts";
 import type { TokenRow } from "../db/tokens.ts";
-import type { PublicWebhook } from "../db/webhooks.ts";
-import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { GitHubStatus, RelayClient, WhoAmI } from "./types.ts";
 
 /** The fetch the clients use; the body is JSON text, or raw bytes for a multipart upload. */
@@ -222,65 +219,6 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
       return r.body;
     },
 
-    async createTask(input) {
-      const r = await rest<{ task_id: string; issue_url: string; created: boolean; task: TaskView }>("POST", "/tasks", input);
-      return r.body;
-    },
-    async getTask(id) {
-      try {
-        const r = await rest<TaskView>("GET", `/tasks/${taskPath(id)}`);
-        return r.body;
-      } catch (e) {
-        if (e instanceof RelayHttpError && e.status === 404) return undefined;
-        throw e;
-      }
-    },
-    async listTasks(o = {}) {
-      const r = await rest<{ tasks: TaskView[] }>("GET", "/tasks", undefined, { project: o.project, state: o.state, limit: o.limit });
-      return r.body.tasks;
-    },
-    async approveTask(id) {
-      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/approve`, {});
-      return r.body;
-    },
-    async requestChanges(id, note) {
-      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/request-changes`, { note });
-      return r.body;
-    },
-    async requeueTask(id, o = {}) {
-      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/requeue`, { ...(o.lane ? { lane: o.lane } : {}), ...(o.reason ? { reason: o.reason } : {}) });
-      return r.body;
-    },
-    async closeTask(id, o = {}) {
-      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/close`, { ...(o.reason ? { reason: o.reason } : {}) });
-      return r.body;
-    },
-    async releaseTask(id, o = {}) {
-      const r = await rest<TaskView>("POST", `/tasks/${taskPath(id)}/release`, { ...(o.note ? { note: o.note } : {}) });
-      return r.body;
-    },
-
-    async addWebhook(input) {
-      const r = await rest<{ webhook: PublicWebhook; secret: string }>("POST", "/webhooks", input);
-      return r.body;
-    },
-    async listWebhooks(o = {}) {
-      const r = await rest<{ webhooks: PublicWebhook[] }>("GET", "/webhooks", undefined, { project: o.project });
-      return r.body.webhooks;
-    },
-    async removeWebhook(id) {
-      try {
-        await rest("DELETE", `/webhooks/${encodeURIComponent(id)}`);
-        return true;
-      } catch (e) {
-        if (e instanceof RelayHttpError && e.status === 404) return false;
-        throw e;
-      }
-    },
-    async testWebhook(id) {
-      const r = await rest<DeliveryResult>("POST", `/webhooks/${encodeURIComponent(id)}/test`);
-      return r.body;
-    },
 
     async health() {
       try {
@@ -298,12 +236,6 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
     },
     close: async () => {},
   };
-}
-
-/** `owner/repo#12` -> `owner/repo%2312`: the slash stays a path separator, the hash is escaped. */
-export function taskPath(id: string): string {
-  const i = id.lastIndexOf("#");
-  return i < 0 ? encodeURIComponent(id) : `${id.slice(0, i)}%23${encodeURIComponent(id.slice(i + 1))}`;
 }
 
 interface JsonRpcMessage {
