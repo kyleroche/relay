@@ -19,8 +19,8 @@ export const ASSET_SCHEMA = "relay-asset@1";
 
 /** What a run cost, as the ledger records it. `billing` keeps a subscription's run apart from one paid per token. */
 export interface UsageBlock {
-  /** run: the lane's work on the task; gate: the injection gate's grade; media: one output model of the nodes lane. */
-  kind: "run" | "gate" | "media";
+  /** run: the lane's work on the task; gate: the injection gate's grade; media: one output model of the nodes lane; step: a step's own model call (`step` names it). */
+  kind: "run" | "gate" | "media" | "step";
   lane: string;
   tool: string;
   model: string | null;
@@ -35,6 +35,8 @@ export interface UsageBlock {
   worker: string;
   /** How the run ended, for a `run`: review, failed, held, settled. */
   outcome?: string;
+  /** The step, for a `step` row. */
+  step?: string;
 }
 
 export interface WorkerBlock {
@@ -72,7 +74,7 @@ const SCHEMAS: Array<{ name: string; version: number; description: string; schem
       type: "object",
       required: ["kind", "lane", "tool", "billing", "tokens_in", "tokens_out", "cost_equiv", "duration_ms", "worker"],
       properties: {
-        kind: { enum: ["run", "gate", "media"] },
+        kind: { enum: ["run", "gate", "media", "step"] },
         lane: str(64),
         tool: str(64),
         model: { type: ["string", "null"], maxLength: 128 },
@@ -86,6 +88,7 @@ const SCHEMAS: Array<{ name: string; version: number; description: string; schem
         duration_ms: num,
         worker: str(128),
         outcome: str(32),
+        step: str(48),
       },
     },
   },

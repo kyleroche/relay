@@ -19,12 +19,13 @@ import { registerMemory } from "./commands/memory.ts";
 import { registerToken } from "./commands/token.ts";
 import { registerInvite } from "./commands/invite.ts";
 import { registerTask } from "./commands/task.ts";
+import { registerSteps } from "./commands/steps.ts";
 import { registerWebhook } from "./commands/webhook.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { openReady, RELAY_ROOT } from "./commands/_common.ts";
-import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, recordedNodeCheck, sandboxCheck, type Check } from "./commands/probes.ts";
+import { boardCheck, containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, recordedNodeCheck, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
@@ -37,6 +38,7 @@ registerAssetCommands(program);
 registerToken(program);
 registerInvite(program);
 registerTask(program);
+registerSteps(program);
 registerWebhook(program);
 registerWork(program, version);
 registerLane(program);
@@ -137,6 +139,7 @@ program
     } catch (e) {
       checks.push({ status: siteMode ? "warn" : "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
     }
+    checks.push(await boardCheck(cfg.board));
     // the stdio MCP server the CLIs start follows the same mode; in site mode, prove the site answers it
     checks.push(await mcpCheck(live, { entry: hookPaths(defaultHookContext(RELAY_ROOT)).mcpBin }));
     checks.push({ status: cfg.gateway.apiKey ? "ok" : "warn", name: "gateway", detail: cfg.gateway.apiKey ? "AI_GATEWAY_API_KEY set (embeddings on)" : "AI_GATEWAY_API_KEY unset; retrieval uses full-text only" });

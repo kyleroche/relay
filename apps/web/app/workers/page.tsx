@@ -7,7 +7,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { StatusBadge, type StatusTone } from "@/components/ui/status-badge";
-import { dataMode, getWorkers } from "@/lib/data";
+import { getWorkers } from "@/lib/data";
 import type { WorkerStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -23,7 +23,7 @@ export const dynamic = "force-dynamic";
 const STATUS: Record<WorkerStatus, { label: string; tone: StatusTone; icon: LucideIcon; hint: string }> = {
   online: { label: "online", tone: "ok", icon: Circle, hint: "Heartbeat in the last 2 minutes: running a task, or just checked the queue." },
   idle: { label: "idle", tone: "muted", icon: Pause, hint: "Heartbeat under an hour ago. An empty queue slows the worker's check-ins to one every 5 minutes, so this is the normal state of a worker with nothing to do." },
-  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait. After 7 days offline the worker is retired: folded away below, and relay work forget removes it." },
+  offline: { label: "offline", tone: "bad", icon: Power, hint: "No heartbeat for over an hour, or the worker reported a shutdown. Tasks for its lanes wait. After 7 days offline the worker is retired: folded away below." },
 };
 
 const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
@@ -31,7 +31,7 @@ const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6
 export default async function WorkersPage() {
   const all = await getWorkers();
   const now = Date.now();
-  // offline for more than 7 days: a renamed or decommissioned machine; folded away, with a Forget button (docs/WORKERS.md, "Retiring a worker")
+  // offline for more than 7 days: a renamed or decommissioned machine; folded away
   const workers = all.filter((w) => !w.retired);
   const retired = all.filter((w) => w.retired);
   return (
@@ -118,7 +118,7 @@ npx @kyleroche/relay work --install --yes`}>
           );
         })}
       </ul>
-      {retired.length > 0 && <RetiredWorkers workers={retired} canWrite={dataMode() === "db"} now={now} />}
+      {retired.length > 0 && <RetiredWorkers workers={retired} now={now} />}
     </>
   );
 }

@@ -1,6 +1,6 @@
 /**
  * Requeue (tasks/requeue.ts): a task comes back to the queue from any state but done, its lane and the issue's
- * agent:* label move together, a live claim is released, and the doorbell counts it again.
+ * agent:* label move together, a live claim is released, and the queue version moves.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
@@ -10,6 +10,7 @@ import { deriveTaskStatus } from "../src/db/tasks.ts";
 import { getQueueVersion } from "../src/db/queue.ts";
 import { requeueTask, TaskRequeueError } from "../src/tasks/requeue.ts";
 import { GitHubError, type GitHubClient, type GitHubIssue } from "../src/github/client.ts";
+import { seedClaim, seedWorker } from "./helpers/claims.ts";
 
 let db: Db;
 let issue = 100;
@@ -74,11 +75,10 @@ const open = async (lane: string) => (await repo.createTask(db, { project: "demo
 const state = async (t: repo.TaskRow) => (await repo.taskState(db, t)).state;
 
 describe("requeueTask", () => {
-  it("re-lanes a dispatched cloud task onto a worker lane: the row, the labels and the state move, and the doorbell counts it", async () => {
+  it("re-lanes a dispatched cloud task onto a worker lane: the row, the labels and the state move, and the queue version with them", async () => {
     const t = await open("claude-cloud");
     await repo.writeEvent(db, { project: "demo", repo: t.repo, issue: t.issue, lane: "claude-cloud", kind: "run.dispatched", actor: "bot:grok", summary: "Dispatched", ts: at(1) });
     expect(await state(t)).toBe("running");
-    expect((await repo.doorbell(db, { lanes: ["claude"] })).queued).toBe(0);
     const before = await getQueueVersion(db);
     const { gh, removed, added } = fakeGitHub({ labels: ["agent:claude-cloud", "priority:high"] });
 
@@ -96,21 +96,12 @@ describe("requeueTask", () => {
     expect(ev.summary).toBe("Requeued #101 on the claude lane (was claude-cloud), was running: the cloud lane is not wired");
     expect(ev.payload).toMatchObject({ previous_state: "running", previous_lane: "claude-cloud", lane: "claude", reason: "the cloud lane is not wired", github: { relabelled: true, removed: ["agent:claude-cloud"], added: "agent:claude" }, claim_released: null });
     expect(await getQueueVersion(db)).toBeGreaterThan(before);
-    // the doorbell for a claude worker now sees it, and a claude worker can claim it
-    expect((await repo.doorbell(db, { lanes: ["claude"] })).queued).toBe(1);
-    expect((await repo.doorbell(db, { lanes: ["codex"] })).queued).toBe(0);
-    const { worker } = await repo.registerWorker(db, { name: "w-cloud", lanes: ["claude"] });
-    const got = await repo.claimNext(db, { workerId: worker.id, lanes: ["claude"] });
-    expect(got?.task.id).toBe(t.id);
-    expect(got?.task.lane).toBe("claude");
-    await repo.releaseClaim(db, t.id, worker.id, "released");
   });
 
-  it("releases a live claim on a running task so a worker can claim it again", async () => {
+  it("releases a live claim on a running task so it can be claimed again", async () => {
     const t = await open("codex");
-    const { worker } = await repo.registerWorker(db, { name: "w-run", lanes: ["codex"] });
-    const got = await repo.claimNext(db, { workerId: worker.id, lanes: ["codex"] });
-    expect(got?.task.id).toBe(t.id);
+    const worker = await seedWorker(db, { name: "w-run", lanes: ["codex"] });
+    await seedClaim(db, t.id, worker.id);
     await repo.writeEvent(db, { project: "demo", repo: t.repo, issue: t.issue, lane: "codex", kind: "run.started", actor: "runner:w-run", summary: "codex on w-run", payload: { branch: `relay/codex-${t.issue}` } });
     expect(await state(t)).toBe("running");
     expect(await repo.liveClaim(db, t.id)).toBeDefined();
@@ -120,16 +111,15 @@ describe("requeueTask", () => {
     expect(r.task.state).toBe("queued");
     expect(r.task.lane).toBe("codex");
     expect(await repo.liveClaim(db, t.id)).toBeUndefined();
-    const claims = await repo.listClaims(db, { taskId: t.id });
+    const claims = await db.query<{ outcome: string; released_at: unknown }>("SELECT outcome, released_at FROM claims WHERE task_id = $1", [t.id]);
     expect(claims[0]).toMatchObject({ outcome: "released" });
     expect(claims[0]?.released_at).toBeTruthy();
     expect(r.events[0]?.payload).toMatchObject({ previous_state: "running", previous_lane: "codex", lane: "codex", claim_released: "w-run", branch: `relay/codex-${t.issue}` });
     // the lane did not change: the issue already carries its label, so nothing moved on GitHub
     expect(removed).toEqual([]);
     expect(added).toEqual([]);
-    // the same worker claims it again and starts over
-    const again = await repo.claimNext(db, { workerId: worker.id, lanes: ["codex"] });
-    expect(again?.task.id).toBe(t.id);
+    // a new lease on it starts over
+    await seedClaim(db, t.id, worker.id);
     expect(await state(t)).toBe("claimed");
     await repo.releaseClaim(db, t.id, worker.id, "released");
   });
@@ -197,7 +187,7 @@ describe("requeue onto a registered worker's lane", () => {
     await expect(requeueTask(db, gh, t.id, "human:kyle", { lane: "laser" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/no worker serves lane 'laser'/) });
     expect((await repo.getTask(db, t.id))?.lane).toBe("claude");
 
-    await repo.registerWorker(db, { name: "cutter", lanes: ["laser"] });
+    await seedWorker(db, { name: "cutter", lanes: ["laser"] });
     const r = await requeueTask(db, gh, t.id, "human:kyle", { lane: "laser", reason: "the hoop is busy" });
     expect(r.task.lane).toBe("laser");
     expect(await state(await repo.getTask(db, t.id) as repo.TaskRow)).toBe("queued");

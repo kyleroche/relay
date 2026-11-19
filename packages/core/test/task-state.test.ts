@@ -16,6 +16,7 @@ import { deriveStation, failureLine, IN_MOTION, taskTitle } from "../src/tasks/s
 import { requeueTask } from "../src/tasks/requeue.ts";
 import { approveTask } from "../src/tasks/review.ts";
 import type { GitHubClient, GitHubIssue, GitHubPull } from "../src/github/client.ts";
+import { seedClaim, seedWorker } from "./helpers/claims.ts";
 
 let db: Db;
 let issue = 1000;
@@ -84,13 +85,13 @@ describe("refreshTaskState after each write path", () => {
     expect(c.state_updated_at).toBeTruthy();
   });
 
-  it("claimNext caches claimed with the worker's name; releaseClaim puts it back", async () => {
+  it("a live claim caches claimed with the worker's name; releaseClaim puts it back", async () => {
     const t = await open("codex");
-    const { worker } = await repo.registerWorker(db, { name: "ts-claimer", lanes: ["codex"] });
-    const got = await repo.claimNext(db, { workerId: worker.id, lanes: ["codex"] });
-    expect(got?.task.id).toBe(t.id);
+    const worker = await seedWorker(db, { name: "ts-claimer", lanes: ["codex"] });
+    const claimedAt = Date.now();
+    await seedClaim(db, t.id, worker.id, { now: claimedAt });
     expect(await cache(t.id)).toMatchObject({ state: "claimed", station: "Claimed", runner: "runner:ts-claimer" });
-    expect((await cache(t.id)).since).toBe(got!.claim.claimed_at);
+    expect((await cache(t.id)).since).toBe(new Date(claimedAt).toISOString());
     await repo.releaseClaim(db, t.id, worker.id, "released");
     expect(await cache(t.id)).toMatchObject({ state: "queued", station: "Queue", runner: null });
   });
@@ -155,10 +156,9 @@ describe("refreshTaskState after each write path", () => {
 
   it("expireLeases puts a vanished worker's task back in the queue in the cache too", async () => {
     const t = await open("grok");
-    const { worker } = await repo.registerWorker(db, { name: "ts-vanisher", lanes: ["grok"] });
+    const worker = await seedWorker(db, { name: "ts-vanisher", lanes: ["grok"] });
     // a short lease, live while the run starts (the refresh folds at the wall clock)
-    const got = await repo.claimNext(db, { workerId: worker.id, lanes: ["grok"], leaseMs: 60 * M, now: NOW });
-    expect(got?.task.id).toBe(t.id);
+    await seedClaim(db, t.id, worker.id, { leaseMs: 60 * M, now: NOW });
     await write(t, "run.started", { ts: new Date(NOW + 10).toISOString(), actor: "runner:ts-vanisher" });
     expect(await cache(t.id)).toMatchObject({ state: "running", station: "Running", runner: "runner:ts-vanisher" });
     // an hour later the heartbeat never renewed it: the lease ran out, nobody released it
@@ -295,11 +295,11 @@ describe("boardTasks: the one-query read", () => {
       let n = 0;
       const mk = async (lane: string, project = "demo", repoName = "acme/demo") => (await repo.createTask(h, { project, repo: repoName, issue: ++n, createdBy: "human:kyle", lane, title: `T${n}` })).task;
       const w = (t: repo.TaskRow, kind: string, extra: Partial<repo.EventInput> = {}) => repo.writeEvent(h, { project: t.project, repo: t.repo, issue: t.issue, lane: t.lane, actor: "runner:mini", summary: kind, kind, ...extra });
-      const { worker } = await repo.registerWorker(h, { name: "mini", lanes: ["claude", "codex", "grok"] });
+      const worker = await seedWorker(h, { name: "mini", lanes: ["claude", "codex", "grok"] });
 
       await mk("claude"); // queued, nothing yet
       const claimed = await mk("codex");
-      expect((await repo.claimNext(h, { workerId: worker.id, lanes: ["codex"], now: NOW - 2 * M }))?.task.id).toBe(claimed.id);
+      await seedClaim(h, claimed.id, worker.id, { now: NOW - 2 * M });
       const running = await mk("claude", "other", "acme/other");
       await w(running, "run.started", { ts: ago(8 * M), payload: { branch: `relay/claude-${running.issue}` } });
       const pr = await mk("claude");
@@ -330,9 +330,8 @@ describe("boardTasks: the one-query read", () => {
       await w(sentBack, "task.changes_requested", { ts: ago(14 * M), actor: "human:kyle", pr: 6, payload: { note: "more" } });
       const cloud = await mk("codex-cloud");
       await w(cloud, "run.dispatched", { ts: ago(12 * M), actor: "bot:codex" });
-      // codex: the one claimed task holds a live lease and the done ones are not queued, so this is the next codex claim
       const vanished = await mk("codex");
-      expect((await repo.claimNext(h, { workerId: worker.id, lanes: ["codex"], leaseMs: 6 * M, now: NOW - 6 * M }))?.task.id).toBe(vanished.id);
+      await seedClaim(h, vanished.id, worker.id, { leaseMs: 6 * M, now: NOW - 6 * M });
       await w(vanished, "run.started", { ts: ago(5 * M) });
       await repo.expireLeases(h, NOW);
       // a production: the deliverable is an asset on the issue, in review with its thumbnail

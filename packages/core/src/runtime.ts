@@ -33,6 +33,8 @@ export interface RuntimePaths {
   mcpEntry: string;
   /** The caller workflows `relay link` copies into a repo. */
   templatesDir: string;
+  /** The steps relay ships (`steps/index.ts`): remove-yap, eval, eval-respond, cleanup. */
+  stepsDir: string;
   migrationsDir: string;
   /** The worker image's build context: Dockerfile and relay-entry (`relay work --isolation container`). */
   containerDir: string;
@@ -91,6 +93,7 @@ function packageAt(root: string): RuntimePaths {
     statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(dist, "relay-mcp.js"),
     templatesDir: join(root, "templates"),
+    stepsDir: join(dist, "steps"),
     migrationsDir: join(dist, "migrations"),
     containerDir: join(dist, "container"),
     pythonDir: join(dist, "python"),
@@ -111,6 +114,7 @@ function checkoutAt(root: string): RuntimePaths {
     statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(root, "packages", "mcp", "bin", "relay-mcp.mjs"),
     templatesDir: join(root, "packages", "cli", "templates"),
+    stepsDir: join(root, "packages", "cli", "steps"),
     migrationsDir: join(root, "packages", "core", "src", "db", "migrations"),
     containerDir: join(root, "packages", "cli", "container"),
     pythonDir: join(root, "packages", "cli", "python"),

@@ -10,11 +10,10 @@ import type { ProjectRow } from "../db/projects.ts";
 import type { TaskView } from "../db/tasks.ts";
 import type { TokenRow } from "../db/tokens.ts";
 import type { PublicWebhook } from "../db/webhooks.ts";
-import type { WorkerRow } from "../db/workers.ts";
 import type { DeliveryResult } from "../webhooks/dispatch.ts";
 import type { GitHubStatus, RelayClient, WhoAmI } from "./types.ts";
 
-/** The fetch the clients use; the body is JSON text, or raw bytes for a multipart upload (`httpWorkApi().uploadAsset`). */
+/** The fetch the clients use; the body is JSON text, or raw bytes for a multipart upload. */
 export type HttpFetch = (url: string, init: { method: string; headers: Record<string, string>; body?: string | Uint8Array<ArrayBuffer> }) => Promise<{ ok: boolean; status: number; headers: { get(name: string): string | null }; text(): Promise<string> }>;
 
 export interface HttpClientOptions {
@@ -195,16 +194,6 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
       try {
         const r = await rest<{ revoked: TokenRow }>("DELETE", `/tokens/${encodeURIComponent(idOrName)}`);
         return r.body.revoked;
-      } catch (e) {
-        if (e instanceof RelayHttpError && e.status === 404) return undefined;
-        throw e;
-      }
-    },
-
-    async forgetWorker(idOrName) {
-      try {
-        const r = await rest<{ forgotten: WorkerRow }>("DELETE", `/workers/${encodeURIComponent(idOrName)}`);
-        return r.body.forgotten;
       } catch (e) {
         if (e instanceof RelayHttpError && e.status === 404) return undefined;
         throw e;

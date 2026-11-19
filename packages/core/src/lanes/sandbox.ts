@@ -18,9 +18,11 @@ export const SANDBOX_DEFAULT_DOMAINS = ["registry.npmjs.org", "registry.yarnpkg.
 /**
  * Paths no sandboxed process and no Read/Edit tool call may touch: relay's own secrets and database, every vendor CLI's login and
  * config, SSH and cloud credentials, gh, netrc, npmrc (registry tokens) and the global git config (credential
- * helpers, URL rewrites). `~` is home-relative in Claude Code settings.
+ * helpers, URL rewrites). The worker reaches the board with the machine's Vercel login, so the Vercel CLI's auth
+ * directory (macOS and Linux) and the board's own token and claim cache are here too: a lane never talks to the
+ * board, the runner does. `~` is home-relative in Claude Code settings.
  */
-export const SANDBOX_DENIED_DIRS = ["~/.harness/relay.pglite", "~/.claude", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh"] as const;
+export const SANDBOX_DENIED_DIRS = ["~/.harness/relay.pglite", "~/.claude", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh", "~/Library/Application Support/com.vercel.cli", "~/.local/share/com.vercel.cli", "~/.config/board", "~/.vercel"] as const;
 /** relay's own home is NOT denied wholesale: the worker clones into `~/.harness/work/<repo>`, which the lane must read. Its secrets are named one by one. */
 export const SANDBOX_DENIED_FILES = ["~/.harness/credentials.json", "~/.harness/config.json", "~/.harness/work.log", "~/.claude.json", "~/.netrc", "~/.npmrc", "~/.gitconfig"] as const;
 export const SANDBOX_DENIED_PATHS = [...SANDBOX_DENIED_DIRS, ...SANDBOX_DENIED_FILES] as const;

@@ -3,7 +3,7 @@
  * (`DATABASE_URL`, `AI_GATEWAY_API_KEY`) and ~/.harness/config.json for preferences (`staleDays`, the embedding
  * model). Nothing is read from other tools' config files.
  */
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readSiteConfig } from "./client/site.ts";
@@ -117,6 +117,26 @@ export function loadConfig(): HarnessConfig {
   if (site.tokenName) cfg.siteTokenName = site.tokenName;
   if (process.env.AI_GATEWAY_API_KEY) cfg.gateway.apiKey = process.env.AI_GATEWAY_API_KEY;
   return cfg;
+}
+
+/**
+ * Write the `board` entry of the config file: the fields given replace what is there, the rest is kept, and a field
+ * given as null is removed. Returns the entry as written and the file it is in.
+ */
+export function writeBoardConfig(input: { team?: string | null; name?: string | null; from?: string[] | null }, home: string = HOME): { board: NonNullable<FileConfig["board"]>; configPath: string } {
+  const configPath = join(home, "config.json");
+  mkdirSync(home, { recursive: true });
+  const file = (existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {}) as FileConfig;
+  const board: NonNullable<FileConfig["board"]> = { ...(file.board ?? {}) };
+  for (const key of ["team", "name", "from"] as const) {
+    const v = input[key];
+    if (v === null || (Array.isArray(v) && !v.length)) delete board[key];
+    else if (v !== undefined) (board[key] as string | string[]) = v;
+  }
+  if (Object.keys(board).length) file.board = board;
+  else delete file.board;
+  writeFileSync(configPath, JSON.stringify(file, null, 2) + "\n");
+  return { board, configPath };
 }
 
 export function ensureHome(cfg: HarnessConfig): void {

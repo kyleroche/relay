@@ -1,15 +1,16 @@
 /**
  * Close (tasks/close.ts): a task is finished without a merge from any state but done; the issue (and an open PR) is
- * closed on GitHub best effort, a live claim is released, task.closed folds to done and the doorbell drops it.
+ * closed on GitHub best effort, a live claim is released and task.closed folds to done.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
 import * as repo from "../src/db/repo.ts";
 import { getQueueVersion } from "../src/db/queue.ts";
-import { queuedCount, registerWorker, claimNext, liveClaim } from "../src/db/workers.ts";
+import { liveClaim } from "../src/db/workers.ts";
 import { closeComment, closeTask, TaskCloseError } from "../src/tasks/close.ts";
 import { GitHubError, type GitHubClient, type GitHubIssue, type GitHubPull } from "../src/github/client.ts";
+import { seedClaim, seedWorker } from "./helpers/claims.ts";
 
 let db: Db;
 let issue = 300;
@@ -66,10 +67,9 @@ const open = async (lane: string) => (await repo.createTask(db, { project: "shut
 const state = async (t: repo.TaskRow) => (await repo.taskState(db, t)).state;
 
 describe("closeTask", () => {
-  it("closes a queued task: the issue closes as not planned with the reason, task.closed folds to done, the doorbell drops it", async () => {
+  it("closes a queued task: the issue closes as not planned with the reason, task.closed folds to done, the queue version moves", async () => {
     const t = await open("claude");
     expect(await state(t)).toBe("queued");
-    const before = await queuedCount(db, { lanes: ["claude"] });
     const version = await getQueueVersion(db);
     const { gh, calls, comments } = fakeGitHub();
     const r = await closeTask(db, gh, t.id, "human:kyle", { reason: "opened against a spec the repo does not match" });
@@ -81,7 +81,6 @@ describe("closeTask", () => {
     expect(comments).toEqual([`${t.issue}: ${closeComment("human:kyle", "opened against a spec the repo does not match")}`]);
     expect(calls).toEqual([`PATCH /repos/acme/shut/issues/${t.issue} {"state":"closed","state_reason":"not_planned"}`]);
     expect(await state(t)).toBe("done");
-    expect(await queuedCount(db, { lanes: ["claude"] })).toBe(before - 1);
     expect(await getQueueVersion(db)).toBeGreaterThan(version);
   });
 
@@ -101,9 +100,8 @@ describe("closeTask", () => {
 
   it("releases a live claim so the worker stops, and records which worker held it", async () => {
     const t = await open("codex");
-    const { worker: w } = await registerWorker(db, { name: "mini", lanes: ["codex"], version: "0.3.2" });
-    const c = await claimNext(db, { workerId: w.id, lanes: ["codex"], leaseMs: 60_000 });
-    expect(c.claim?.task_id).toBe(t.id);
+    const w = await seedWorker(db, { name: "mini", lanes: ["codex"] });
+    await seedClaim(db, t.id, w.id, { leaseMs: 60_000 });
     await repo.writeEvent(db, { project: "shut", repo: t.repo, issue: t.issue, lane: "codex", kind: "run.started", actor: "runner:mini", summary: "started", ts: new Date().toISOString() });
     expect(await state(t)).toBe("running");
     const { gh } = fakeGitHub();

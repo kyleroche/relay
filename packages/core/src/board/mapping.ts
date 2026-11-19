@@ -13,6 +13,7 @@
  *              repo=<owner/name>, base=<branch>, issue=<owner/name#n>, priority=<p>
  *              pr=<owner/name#n>, branch=<name>   written by the runner once the pull request exists
  *              role=plan|review                   what kind of work the text describes
+ *              step=<name>, evaluates=<task>      on a step's own task (steps/index.ts); eval=pending|answer|done on the task it looks at
  *              relay=<kind> on a reply            a message relay wrote: log, result, usage, brief, note, asset
  *
  *   states     the board keeps `board.task`; a hold says why in its `kind`. `relayState` folds the two into the
@@ -54,12 +55,16 @@ export const LABEL = {
   pr: "pr",
   branch: "branch",
   role: "role",
+  /** On a step's own task: which step it runs, and the task whose work it looks at. */
+  step: "step",
+  evaluates: "evaluates",
+  /** On a task whose work a step evaluates: `pending` while the step's task runs, `answer` once its findings are in the thread, `done` after the lane answered them. */
+  eval: "eval",
   /** On a reply: which of relay's own messages it is (`RELAY_MESSAGE`). */
   relay: "relay",
 } as const;
 
-/** The lane label any code lane may claim. */
-export const ANY_LANE = "any";
+export { ANY_LANE } from "../tasks/lanes.ts";
 
 /** What a reply of relay's own is, in its `relay` label. Anything without the label is a person's (or another agent's) words. */
 export const RELAY_MESSAGE = { log: "log", result: "result", usage: "usage", brief: "brief", note: "note", asset: "asset" } as const;
@@ -75,6 +80,8 @@ export const HOLD = {
   approval: "awaiting_approval",
   /** The worker asked a question. */
   input: "needs_input",
+  /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. */
+  eval: "awaiting_eval",
 } as const;
 
 /** The board's own states for a task. */

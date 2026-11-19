@@ -130,7 +130,7 @@ export function usageEvents(block: UsageBlock, ctx: { repo: string | null; proje
   const usage = ctx.trusted
     ? { tokens_in: block.tokens_in, tokens_out: block.tokens_out, cache_read: block.cache_read, cache_write: block.cache_write, cost_equiv: cost }
     : { tokens_in: 0, tokens_out: 0, cache_read: 0, cache_write: 0, cost_equiv: 0 };
-  // A relay worker (`relay work`, docs/WORKERS.md) already reported this run's usage through POST /api/v1/work/{task}/release;
+  // A relay worker (`relay work`, docs/WORKERS.md) reports its run's usage itself;
   // its comment block is for the human reading the PR, so it must not count twice in the ledger.
   const fromWorker = block.extra.source === "relay-work";
   const events: NewEvent[] = [];

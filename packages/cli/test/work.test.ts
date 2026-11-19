@@ -159,7 +159,7 @@ describe("relay work: isolation flag", () => {
   });
   it("bakes the worker options into arguments the same way for the service and the container", () => {
     expect(bakedArgs({ jobs: "1" })).toEqual([]);
-    expect(bakedArgs({ lanes: "claude", labels: "gpu", jobs: "2", maxInterval: "900", sandbox: false })).toEqual(["--lanes", "claude", "--labels", "gpu", "--jobs", "2", "--max-interval", "900", "--no-sandbox"]);
+    expect(bakedArgs({ lanes: "claude", labels: "gpu", jobs: "2", sandbox: false })).toEqual(["--lanes", "claude", "--labels", "gpu", "--jobs", "2", "--no-sandbox"]);
   });
   it("rejects an unknown isolation before doing anything", async () => {
     const f = fakeDeps();

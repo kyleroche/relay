@@ -25,6 +25,9 @@ import {
   type CliName,
   type OAuthTokenResponse,
   type SiteCredential,
+  board,
+  loadConfig,
+  writeBoardConfig,
 } from "@relay/core";
 import { log, RELAY_ROOT } from "./_common.ts";
 
@@ -44,6 +47,10 @@ interface SetupOpts {
   invite?: string;
   scopes?: string;
   name?: string;
+  board?: boolean;
+  team?: string;
+  boardName?: string;
+  from?: string;
 }
 
 export function registerSetup(program: Command): void {
@@ -60,6 +67,10 @@ export function registerSetup(program: Command): void {
     .option("--scopes <list>", `scopes to ask for in the device flow (default: ${DEFAULT_CLI_SCOPES.join(",")})`)
     .option("--name <client-name>", `how this machine appears on the consent page and in the token's name (default: ${defaultClientName()})`)
     .option("--no-site", "leave site mode: remove the site and its token; the CLI opens the local database again")
+    .option("--board", "set this machine up on the team's Vercel Board: save which board it works from, check this machine's Vercel login on it, and register relay's schemas there")
+    .option("--team <id-or-slug>", "with --board: the Vercel team that owns the board (default: the login's default team)")
+    .option("--board-name <name>", "with --board: a named board of that team instead of its default one ('default' goes back)")
+    .option("--from <actors>", "with --board: whose tasks a worker here claims besides your own, as comma-separated actor IDs ('none' clears it), such as the project that runs relay's site")
     .action(async (o: SetupOpts) => {
       if (o.only && !(CLI_NAMES as readonly string[]).includes(o.only)) throw new Error(`--only must be one of ${CLI_NAMES.join(", ")}`);
       // --- site mode ---
@@ -70,6 +81,10 @@ export function registerSetup(program: Command): void {
       }
       if (typeof o.site === "string" || o.token || o.invite) {
         await connectSite(o);
+        return;
+      }
+      if (o.board) {
+        await connectToBoard(o);
         return;
       }
       const siteCfg = readSiteConfig();
@@ -103,6 +118,34 @@ export function registerSetup(program: Command): void {
 }
 
 /** `relay setup --site <url> [--token t | --invite c | (device flow)]`. */
+/**
+ * `relay setup --board`: there is no token to fetch, since the board takes this machine's own `vercel login`. What is
+ * saved is which board and whose tasks; what is checked is that the login reaches it; and relay's schemas are
+ * registered, which is the one step that needs someone who manages the board.
+ */
+async function connectToBoard(o: SetupOpts): Promise<void> {
+  const from = o.from === undefined ? undefined : o.from === "none" ? null : o.from.split(",").map((a) => a.trim()).filter(Boolean);
+  if (o.team !== undefined || o.boardName !== undefined || from !== undefined) {
+    const w = writeBoardConfig({ ...(o.team !== undefined ? { team: o.team } : {}), ...(o.boardName !== undefined ? { name: o.boardName === "default" ? null : o.boardName } : {}), ...(from !== undefined ? { from } : {}) });
+    log(`wrote the board entry of ${w.configPath}: ${JSON.stringify(w.board)}`);
+  }
+  const cfg = loadConfig().board;
+  let session: board.BoardSession;
+  try {
+    session = await board.connectBoard(board.openBoard(cfg), cfg);
+  } catch (e) {
+    throw new Error(`cannot reach the board: ${board.describeBoardError(e)}. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board again.`);
+  }
+  const { url, name } = await session.board.discovery();
+  console.log(`board:   ${name ?? "General"} at ${url}`);
+  console.log(`you:     ${session.me.handle} (${session.me.principal})`);
+  console.log(`can:     ${Object.entries(session.me.can ?? {}).map(([pattern, what]) => `${pattern} = ${Array.isArray(what) ? what.join(",") : String(what)}`).join("; ") || "nothing"}`);
+  console.log(`from:    ${session.from.join(", ")}`);
+  const registered = await board.ensureSchemas(session.board);
+  console.log(`schemas: ${registered ? "relay's schemas are registered" : "this login cannot register schemas (it takes `manage` everywhere): ask someone who manages the board to run relay setup --board"}`);
+  log("next: relay work --once to drain the queue here, or relay work --install --yes to keep a worker running");
+}
+
 async function connectSite(o: SetupOpts): Promise<void> {
   const current = readSiteConfig();
   const site = typeof o.site === "string" ? o.site : current.site;

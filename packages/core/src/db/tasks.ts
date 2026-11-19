@@ -105,7 +105,7 @@ export function parseTaskId(id: string): { repo: string; issue: number } | undef
 }
 
 const cols = "id, project, repo, issue, idempotency_key, created_by, created_at, lane, title";
-/** Row normaliser shared with the scheduler (db/workers.ts). */
+/** Row normaliser shared with the state cache (db/task-state.ts). */
 export const toTask = (r: Record<string, unknown>): TaskRow => ({
   id: r.id as string,
   project: r.project as string,

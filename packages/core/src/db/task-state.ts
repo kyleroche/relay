@@ -7,7 +7,7 @@
  * query instead of folding every task on every call.
  *
  * Who calls `refreshTaskState`: `writeEvent` for a row that names a task (repo + issue, or a `preview.*` row matched
- * by PR or branch), `createTask`, and the claim writes in db/workers.ts (`claimNext`, `releaseClaim`, `expireLeases`).
+ * by PR or branch), `createTask`, and the claim writes in db/workers.ts (`releaseClaim`, `expireLeases`).
  * `approveTask`, `requestChanges` and `requeueTask` change a task only through those writes, so they are covered.
  * `backfillTaskState` fills rows whose cache was never written: the migration runner calls it once after 010 lands,
  * and the readers fill any `state IS NULL` row they meet (a row inserted by an older process).

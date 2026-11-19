@@ -47,6 +47,9 @@ export interface BoardTask {
   base: string | null;
   priority: string | null;
   role: string | null;
+  /** On a step's own task: the step it runs and the task whose work it looks at. */
+  step: string | null;
+  evaluates: string | null;
   /** The GitHub issue it came from, when it did. */
   issue: { repo: string; number: number } | null;
   /** The pull request the runner opened. */
@@ -84,6 +87,8 @@ export function toTask(m: MessageView): BoardTask {
     base: labels[LABEL.base] ?? null,
     priority: labels[LABEL.priority] ?? null,
     role: labels[LABEL.role] ?? null,
+    step: labels[LABEL.step] ?? null,
+    evaluates: labels[LABEL.evaluates] ?? null,
     issue: parseRef(labels[LABEL.issue]) ?? null,
     pr: pr ? { ...pr, url: `https://github.com/${pr.repo}/pull/${pr.number}` } : null,
     branch: labels[LABEL.branch] ?? null,
@@ -110,6 +115,10 @@ export interface OpenTaskInput {
   /** The branch to start from instead of the repository's default one (a handoff of work in progress). */
   base?: string;
   role?: string;
+  /** A step this task runs (steps/index.ts), and for an after-pr step the task whose work it looks at and that work's branch. */
+  step?: string;
+  evaluates?: string;
+  branch?: string;
   /** `owner/name#n` of the GitHub issue this task answers. */
   issue?: string;
   /** Tasks that must complete first, by ID. */
@@ -147,6 +156,9 @@ export async function openTask(board: Board, input: OpenTaskInput): Promise<Boar
   if (input.priority) labels[LABEL.priority] = input.priority;
   if (input.role) labels[LABEL.role] = labelValue(input.role);
   if (input.issue) labels[LABEL.issue] = input.issue;
+  if (input.step) labels[LABEL.step] = input.step;
+  if (input.evaluates) labels[LABEL.evaluates] = input.evaluates;
+  if (input.branch) labels[LABEL.branch] = labelValue(input.branch);
   let text = taskText(title, body);
   const attachments = [];
   if (text.length > TEXT_MAX) {

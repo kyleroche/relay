@@ -5,7 +5,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
+import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -256,6 +256,26 @@ function fmtAge(ms: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.round(m / 60);
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+/**
+ * The board this machine works from, as its own Vercel login sees it: which board, who it is there, whether relay's
+ * schemas are registered, and how many workers are on it. The board takes no relay credential, so a failure here is
+ * a Vercel login that is missing, expired or not on the team.
+ */
+export async function boardCheck(cfg: BoardConfig, connect: (cfg: BoardConfig) => Promise<board.BoardSession> = (c) => board.connectBoard(board.openBoard(c), c), timeoutMs = 15_000): Promise<Check> {
+  const name = "board";
+  try {
+    const session = await Promise.race([connect(cfg), new Promise<never>((_, no) => setTimeout(() => no(new Error(`no answer in ${timeoutMs / 1000}s`)), timeoutMs).unref())]);
+    const [{ url, name: boardName }, schemas, workers] = await Promise.all([session.board.discovery(), session.board.schemas().catch(() => []), board.listWorkers(session.board).catch(() => [])]);
+    const registered = schemas.some((x) => x.name === "relay-usage");
+    const online = workers.filter((w) => w.state === "online").length;
+    const detail = `${boardName ?? "General"} at ${new URL(url).host} as ${session.me.handle}; takes tasks from ${session.from.length} owner${session.from.length === 1 ? "" : "s"}; ${workers.length} worker${workers.length === 1 ? "" : "s"}${workers.length ? ` (${online} online)` : ""}`;
+    if (!registered) return { status: "warn", name, detail: `${detail}; relay's schemas are not registered there yet. Run: relay setup --board` };
+    return { status: "ok", name, detail };
+  } catch (e) {
+    return { status: "fail", name, detail: `${board.describeBoardError(e).slice(0, 240)}. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board` };
+  }
 }
 
 /** What marks a command as relay's in a CLI's config: its MCP entry, its bundle, or one of its hook scripts (a checkout's path need not say "relay"). */

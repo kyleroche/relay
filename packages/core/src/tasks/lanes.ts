@@ -6,7 +6,8 @@
 export const CODE_LANES = ["claude", "codex", "grok"] as const;
 /** The lanes `relay work` serves: the code lanes on the vendors' CLIs, and Griptape Nodes. */
 export const WORKER_LANES = [...CODE_LANES, "nodes"] as const;
-export const BUILTIN_LANES: readonly string[] = WORKER_LANES;
+/** The same four, by the name that says what they are now that other lanes exist. */
+export const BUILTIN_LANES = WORKER_LANES;
 /** Claimed by any worker that serves a code lane; the worker runs it on the first of its code lanes that is free. */
 export const ANY_LANE = "any";
 /** Run in a Vercel Sandbox instead of on a subscription machine. Never claimed by `relay work`. */

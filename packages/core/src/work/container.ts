@@ -62,7 +62,7 @@ export interface ContainerSpec {
   /** The worker's name and the Mac's hostname, both passed into the container as environment. */
   workerName: string;
   host: string;
-  /** `relay work` arguments baked into the container's command (`--lanes`, `--labels`, `--jobs`, `--max-interval`). */
+  /** `relay work` arguments baked into the container's command (`--lanes`, `--labels`, `--jobs`). */
   args?: string[];
   /** Extra environment for the worker inside (`RELAY_LANE_ALLOWED_DOMAINS`, `RELAY_WORK_MAX_INTERVAL`). */
   env?: Record<string, string>;

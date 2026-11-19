@@ -5,6 +5,7 @@ import * as repo from "../src/db/repo.ts";
 import { deriveTaskStatus } from "../src/db/tasks.ts";
 import { isLaneName, knownLanes, laneUnservedProblem, openTask, TaskCreateError, taskMarker } from "../src/tasks/create.ts";
 import type { GitHubClient, GitHubIssue } from "../src/github/client.ts";
+import { seedWorker } from "./helpers/claims.ts";
 
 let db: Db;
 beforeAll(async () => {
@@ -249,7 +250,7 @@ describe("the lane registry", () => {
     expect(gh.ensured.length).toBe(0);
 
     // the embroidery app registers as a worker serving its lane (later also laser)
-    await repo.registerWorker(db, { name: "digitizer", lanes: ["embroidery"] });
+    await seedWorker(db, { name: "digitizer", lanes: ["embroidery"] });
     expect(await laneUnservedProblem(db, "embroidery")).toBeUndefined();
     expect(await laneUnservedProblem(db, "laser")).toBe("no worker serves lane 'laser'; lanes with a worker: embroidery; built-in: claude, codex, grok, nodes; cloud: claude-cloud, codex-cloud");
     const r = await openTask(db, gh, { project: "hoop", title: "Hoop the logo", lane: "embroidery", actor: "bot:digitizer" });
@@ -264,13 +265,13 @@ describe("the lane registry", () => {
     await openTask(db, gh, { project: "hoop", title: "Cloud", lane: "codex-cloud", actor: "human:kyle" });
     expect(gh.ensured.length).toBe(1);
 
-    await repo.registerWorker(db, { name: "digitizer", lanes: ["embroidery", "laser"] });
+    await seedWorker(db, { name: "digitizer", lanes: ["embroidery", "laser"] });
     const known = await knownLanes(db);
     expect(known.builtin).toEqual(["claude", "codex", "grok", "nodes"]);
     expect(known.cloud).toEqual(["claude-cloud", "codex-cloud"]);
     expect(known.registered).toEqual(["embroidery", "laser"]);
     // a worker that also serves a built-in lane adds nothing to the registered list
-    await repo.registerWorker(db, { name: "mini", lanes: ["claude", "codex"] });
+    await seedWorker(db, { name: "mini", lanes: ["claude", "codex"] });
     expect((await knownLanes(db)).registered).toEqual(["embroidery", "laser"]);
   });
 
@@ -287,27 +288,5 @@ describe("the lane registry", () => {
       },
     };
     expect((await openTask(db, failing, { project: "bare", title: "Failing", lane: "embroidery", actor: "bot:digitizer" })).task.lane).toBe("embroidery");
-  });
-});
-
-describe("openTask with a relay-job block", () => {
-  const fence = (inner: string) => `Digitize the logo for the left chest.\n\n\`\`\`relay-job\n${inner}\n\`\`\`\n`;
-  it("refuses a block that does not parse, or names an asset that is missing or on another project", async () => {
-    const gh = fakeGitHub();
-    await repo.upsertProject(db, { slug: "stitch", repo: "acme/stitch" });
-    await repo.upsertProject(db, { slug: "other", repo: "acme/other" });
-    await repo.registerWorker(db, { name: "stitcher", lanes: ["digitize"] });
-    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs: [01JMISSING]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest: input asset 01JMISSING does not exist/) });
-    await repo.createAsset(db, { id: "01JELSE", project: "other", title: "elsewhere", kind: "image", mime: "image/png", size: 3, sha256: "e".repeat(64), storageKey: "other/01JELSE/a.png", createdBy: "human:kyle" });
-    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs: [01JELSE]"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/belongs to project 'other'/) });
-    await expect(openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("wrong: 1"), actor: "human:kyle" })).rejects.toMatchObject({ status: 400, message: expect.stringMatching(/relay-job manifest:/) });
-    expect(gh.created.some((c) => c.title === "Logo")).toBe(false);
-  });
-  it("opens the issue when the block parses and its inputs are the project's own", async () => {
-    const gh = fakeGitHub();
-    await repo.createAsset(db, { id: "01JLOGO", project: "stitch", title: "logo", kind: "image", mime: "image/png", size: 3, sha256: "a".repeat(64), storageKey: "stitch/01JLOGO/logo.png", createdBy: "human:kyle" });
-    const r = await openTask(db, gh, { project: "stitch", title: "Logo", lane: "digitize", body: fence("inputs:\n  - asset: 01JLOGO\n    as: artwork\nparams:\n  hoop: 100x100\noutputs: [stitch-file]"), actor: "human:kyle" });
-    expect(r.task.lane).toBe("digitize");
-    expect(gh.created.at(-1)?.body).toContain("```relay-job");
   });
 });

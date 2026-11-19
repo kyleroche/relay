@@ -1,14 +1,14 @@
 /**
- * `relay work`: this machine becomes a worker (docs/WORKERS.md). It registers with the lanes its logins allow, reads
- * the queue's doorbell on a tick that stretches from 15 s to 5 min while nothing is queued, claims the oldest queued
- * task it can run, runs it with the vendor CLI under the machine's own login, opens the PR and reports usage. In site mode (`relay setup --site`) everything goes through the
- * hosted relay; without a site it schedules against the local database.
+ * `relay work`: this machine becomes a worker (docs/WORKERS.md). The queue is the team's Vercel Board: the worker
+ * shows itself in `relay/workers` with the lanes its logins allow, claims the oldest ready task under `work/` whose
+ * lane it serves, runs it with the vendor CLI under the machine's own login, opens the PR and reports in the task's
+ * thread. With nothing to take it waits on the board. It reaches the board with this machine's own Vercel login.
  *
  *   relay work                 foreground loop; logs to $RELAY_HOME/work.log
  *   relay work --once          drain the queue once and exit
  *   relay work --install       print the LaunchAgent (macOS) or systemd user unit (Linux); --yes writes and starts it
  *   relay work --uninstall     stop and remove the service; --yes to do it
- *   relay work status          the service, this site's workers, the log tail
+ *   relay work status          the service, the board's workers, the log tail
  *   relay work forget <name>   remove a retired worker's row (a renamed or decommissioned machine); it comes back if it runs `relay work` again
  *
  * Isolation tier 2 (docs/WORKERS.md, "Isolation"): `--isolation container` runs the whole worker inside one
@@ -25,13 +25,13 @@
  * sets RELAY_ISOLATION=container and `relay work` adds the labels `isolation:container` and `sandbox:on` or
  * `sandbox:container`, waits for the site and the logins instead of exiting, and names itself `<host>-container`.
  */
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import { execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { CONTAINER_CPUS, CONTAINER_CREDENTIALS, CONTAINER_HOME, CONTAINER_IMAGE, CONTAINER_LOGIN_COMMAND, CONTAINER_LOGIN_COMMAND_WHY, CONTAINER_MEMORY, CONTAINER_NAME, CONTAINER_PASSTHROUGH_ENV, CONTAINER_RELAY_HOME, CONTAINER_SANDBOX_LABEL, CONTAINER_VOLUME, CONTAINER_WORKER_HOST_ENV, CONTAINER_WORKER_NAME_ENV, containerLoginSteps, containerPlan, containerSettingsFrom, containerStateFrom, containerWorkerName, imageStatus, isLoginProvider, lanesFromDoctorOutput, loginDonePage, loginStatesFromDoctorOutput, manualLoginSteps, parseLoginCallback, parseLoginUrl, replayUrl, tokenNameFromDoctorOutput, detectGitHub, httpWorkApi, ISOLATION_LABEL, ISOLATIONS, laneRunner, localWorkApi, LOGIN_CALLBACK_PORTS, WORKER_LANES, LOGIN_PROVIDERS, LOGIN_TIMEOUT_MS, MAX_IDLE_MS, NO_SANDBOX_LABEL, POLL_MS, readSiteConfig, relayHome, runtimePaths, runWorker, stableNodePath, SANDBOX_ON_LABEL, servicePlan, type ContainerPlan, type Isolation, type LoginProvider, type LoginRedirect, type WorkApi, type WorkerView, workerRetired, refreshSiteTokenIfStale } from "@relay/core";
+import { CONTAINER_CPUS, CONTAINER_CREDENTIALS, CONTAINER_HOME, CONTAINER_IMAGE, CONTAINER_LOGIN_COMMAND, CONTAINER_LOGIN_COMMAND_WHY, CONTAINER_MEMORY, CONTAINER_NAME, CONTAINER_PASSTHROUGH_ENV, CONTAINER_RELAY_HOME, CONTAINER_SANDBOX_LABEL, CONTAINER_VOLUME, CONTAINER_WORKER_HOST_ENV, CONTAINER_WORKER_NAME_ENV, containerLoginSteps, containerPlan, containerSettingsFrom, containerStateFrom, containerWorkerName, imageStatus, isLoginProvider, lanesFromDoctorOutput, loginDonePage, loginStatesFromDoctorOutput, manualLoginSteps, parseLoginCallback, parseLoginUrl, replayUrl, tokenNameFromDoctorOutput, board, IDLE_WAIT_MS, ISOLATION_LABEL, ISOLATIONS, laneRunner, loadConfig, LOGIN_CALLBACK_PORTS, WORKER_LANES, LOGIN_PROVIDERS, LOGIN_TIMEOUT_MS, NO_SANDBOX_LABEL, readSiteConfig, relayHome, runtimePaths, runWorker, stableNodePath, SANDBOX_ON_LABEL, servicePlan, type BriefSource, type ContainerPlan, type Isolation, type LoginProvider, type LoginRedirect } from "@relay/core";
 import { log, onPath, openReady } from "./_common.ts";
 import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.ts";
 
@@ -41,8 +41,6 @@ interface WorkOptions {
   labels?: string;
   jobs: string;
   name?: string;
-  interval: string;
-  maxInterval?: string;
   maxMinutes: string;
   keep?: boolean;
   /** commander's `--no-sandbox`: true unless the flag was passed. */
@@ -76,10 +74,10 @@ export interface WorkDeps {
 
 const defaultSpawn = (words: string[]): ChildProcess => spawn(words[0]!, words.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
 
-/** `relay work` runs the built-in adapters only; a lane an app serves is that app's to register (docs/WORKER-AGENTS.md). */
+/** `relay work` runs the built-in adapters only; a lane an app serves is claimed by that app's own worker on the board. */
 const LANES: readonly string[] = WORKER_LANES;
 const assertBuiltinLanes = (lanes: readonly string[]): void => {
-  for (const l of lanes) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}. relay work runs the built-in lanes ${LANES.join(", ")}; an app that serves another lane registers itself (docs/WORKER-AGENTS.md)`);
+  for (const l of lanes) if (!LANES.includes(l)) throw new Error(`--lanes: '${l}' is not one of ${LANES.join(", ")}. relay work runs the built-in lanes ${LANES.join(", ")}; an app that serves another lane claims it with its own worker on the board`);
 };
 const list = (s: string | undefined): string[] => (s ?? "").split(",").map((x) => x.trim()).filter(Boolean);
 export const workLogPath = (): string => join(relayHome(), "work.log");
@@ -97,34 +95,47 @@ function fileLog(path: string): (m: string) => void {
   };
 }
 
-/** Site mode talks to the hosted relay; local mode schedules against this machine's database. */
-async function openWorkApi(): Promise<{ api: WorkApi; where: string; close: () => Promise<void> }> {
-  const h = await openReady();
-  if (h.mode === "site") {
-    // the worker runs for days: renew the token before it lapses instead of dying on the first 401 (serialised across processes in core)
-    let cfg = h.cfg;
-    const token = async () => {
-      cfg = await refreshSiteTokenIfStale(cfg);
-      return cfg.siteToken!;
-    };
-    return { api: httpWorkApi({ site: cfg.site!, token }), where: cfg.site!, close: () => h.close() };
+/**
+ * The board this machine works from, as its own Vercel login sees it (`vercel login`, or `BOARD_TOKEN` in CI, or
+ * `BOARD_URL` for a local board). No relay credential is involved: what the worker may claim is what the board's
+ * grants give that login.
+ */
+export async function openWorkBoard(): Promise<{ session: board.BoardSession; where: string }> {
+  const cfg = loadConfig();
+  try {
+    const session = await board.connectBoard(board.openBoard(cfg.board), cfg.board);
+    const { url, name } = await session.board.discovery();
+    return { session, where: `${name ? `the ${name} board` : "the board"} at ${url}` };
+  } catch (e) {
+    throw new Error(`cannot reach the board: ${board.describeBoardError(e)} (relay doctor's board line has the fix)`);
   }
-  return { api: localWorkApi(h.db, { github: detectGitHub() }), where: h.db.driver === "pg" ? "postgres via DATABASE_URL" : `pglite at ${h.cfg.dbFile}`, close: () => h.close() };
 }
 
+/**
+ * Memory for a task whose thread carries no brief yet: this machine's own database, or the hosted site it is set up
+ * with. Best effort; a worker with neither runs on the repository's rules and the thread alone.
+ */
+const memoryBrief: BriefSource = async (q) => {
+  const h = await openReady();
+  try {
+    return (await h.client.brief({ project: q.project, intent: "implement the task", maxTokens: 2500, lane: q.lane, issue: { title: q.title, body: q.body } })).text;
+  } finally {
+    await h.close();
+  }
+};
+
 /** The `relay work` arguments an install bakes into the service (host) or the container's command. */
-export function bakedArgs(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>): string[] {
+export function bakedArgs(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>): string[] {
   const args: string[] = [];
   if (o.lanes) args.push("--lanes", o.lanes);
   if (o.labels) args.push("--labels", o.labels);
   if (o.jobs && o.jobs !== "1") args.push("--jobs", o.jobs);
   if (o.name) args.push("--name", o.name);
-  if (o.maxInterval) args.push("--max-interval", o.maxInterval);
   if (o.sandbox === false) args.push("--no-sandbox");
   return args;
 }
 
-function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name" | "maxInterval"> & Partial<Pick<WorkOptions, "sandbox">>, deps: WorkDeps, containerBin?: string) {
+function plan(o: Pick<WorkOptions, "lanes" | "labels" | "jobs" | "name"> & Partial<Pick<WorkOptions, "sandbox">>, deps: WorkDeps, containerBin?: string) {
   const platform = deps.platform === "darwin" ? "darwin" : "linux";
   const rp = runtimePaths();
   // extra hosts for the Claude lane's sandbox travel with the service when set at install time
@@ -164,26 +175,11 @@ export const defaultDeps: WorkDeps = {
   platform: process.platform,
 };
 
-const fmtInterval = (ms: number): string => (ms >= 60_000 ? `${Math.round(ms / 6000) / 10}m` : `${Math.round(ms / 1000)}s`);
-
-/** Offline for more than 7 days (WORKER_RETIRED_MS) reads `retired`; older sites without the flag get the same rule applied here. */
-const isRetired = (w: WorkerView, now: number): boolean => w.retired ?? workerRetired(w, now);
-
-function fmtWorker(w: WorkerView, now: number): string {
+function fmtWorker(w: board.WorkerView, now: number): string {
   const ago = Math.max(0, Math.round((now - new Date(w.last_seen).getTime()) / 1000));
   const seen = ago < 90 ? `${ago}s ago` : ago < 5400 ? `${Math.round(ago / 60)}m ago` : ago < 48 * 3600 ? `${Math.round(ago / 3600)}h ago` : `${Math.round(ago / 86_400)}d ago`;
-  const cur = w.current ? `  on ${w.current.task_id} since ${w.current.claimed_at.slice(11, 16)}Z` : "";
-  const every = w.poll_ms && w.state !== "offline" ? `  every ${fmtInterval(w.poll_ms)}` : "";
-  const state = isRetired(w, now) ? "retired" : w.state;
-  return `${w.name.padEnd(14)} ${state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${every}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}${cur}`;
-}
-
-/** `--max-interval`, else RELAY_WORK_MAX_INTERVAL, else 5 minutes; never below the first tick. */
-function maxIntervalMs(flag: string | undefined, pollMs: number): number {
-  const raw = flag ?? process.env.RELAY_WORK_MAX_INTERVAL;
-  const n = raw === undefined || raw === "" ? NaN : Number(raw);
-  if (raw !== undefined && raw !== "" && (!Number.isFinite(n) || n <= 0)) throw new Error(`--max-interval: '${raw}' is not a number of seconds`);
-  return Math.max(pollMs, Number.isFinite(n) ? n * 1000 : MAX_IDLE_MS);
+  const state = w.retired ? "retired" : w.state;
+  return `${w.name.padEnd(14)} ${state.padEnd(8)} ${(w.lanes.join(",") || "-").padEnd(18)} ${w.version.padEnd(8)} seen ${seen}${w.running ? `  running ${w.running}` : ""}${w.labels.length ? `  [${w.labels.join(",")}]` : ""}  (${w.by})`;
 }
 
 export function isolationOf(flag: string | undefined): Isolation {
@@ -206,15 +202,18 @@ const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
 
 /**
  * Inside the container the process must stay up for `container exec` to reach it, so instead of exiting on "no
- * lanes" the worker waits for the site token (`relay setup --site` inside) and the logins, re-probing every 30 s.
+ * lanes" the worker waits for the board (a Vercel login inside) and the vendor logins, re-probing every 30 s.
  */
 async function waitForReadiness(out: (m: string) => void, forced: string[] | undefined, signal: AbortSignal): Promise<string[]> {
   let said = "";
   for (;;) {
-    const site = readSiteConfig();
     const d = forced ? { lanes: forced, reasons: [] as string[] } : await detectLanes();
     const missing: string[] = [];
-    if (!site.site || !site.token) missing.push("no site yet: on the Mac run `relay work --isolation container --install`, or inside: relay setup --site <url>");
+    const unreachable = await openWorkBoard().then(
+      () => undefined,
+      (e: unknown) => (e instanceof Error ? e.message : String(e)),
+    );
+    if (unreachable) missing.push(`no board yet (${unreachable}): log in from the Mac with: relay work container login vercel`);
     if (!d.lanes.length) missing.push(`no lanes yet: ${d.reasons.join("; ")}; log in from the Mac with: ${CONTAINER_LOGIN_COMMAND}`);
     if (!missing.length) return d.lanes;
     const msg = `waiting: ${missing.join(" | ")}`;
@@ -236,8 +235,9 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .option("--labels <list>", "capabilities this worker advertises, matched against a project's lane.labels preference, e.g. gpu,xcode")
     .option("--jobs <n>", "concurrent jobs (the lanes still serialize per vendor login)", "1")
     .option("--name <name>", "worker name (default: this host's short name)")
-    .option("--interval <seconds>", "the first tick after activity; the loop doubles it while nothing is queued", String(POLL_MS / 1000))
-    .option("--max-interval <seconds>", `the longest tick while idle (default ${MAX_IDLE_MS / 1000}, or RELAY_WORK_MAX_INTERVAL); set it above your database's auto-suspend timeout to let it sleep`)
+    // installed services and containers made before the board may still pass these; the worker waits on the board now and ignores them
+    .addOption(new Option("--interval <seconds>").hideHelp())
+    .addOption(new Option("--max-interval <seconds>").hideHelp())
     .option("--max-minutes <n>", "time limit per run", "60")
     .option("--keep", "keep each clone under $RELAY_HOME/work after the run")
     .option("--no-sandbox", `run the Claude lane's Bash without Claude Code's OS sandbox (allowlist only); logged, and advertised as the label ${NO_SANDBOX_LABEL}`)
@@ -275,8 +275,6 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         if (!serving.length) throw new Error(`no lanes to serve: ${d.reasons.join("; ")}. Log in, or force with --lanes.`);
         if (d.reasons.length) out(`not serving: ${d.reasons.join("; ")}`);
       }
-      const pollMs = Math.max(5, Number(o.interval) || POLL_MS / 1000) * 1000;
-      const maxIdleMs = maxIntervalMs(o.maxInterval, pollMs);
       const debug = process.env.RELAY_DEBUG ? (m: string) => out(`debug: ${m}`) : undefined;
       const labels = list(o.labels);
       let sandbox = o.sandbox;
@@ -295,11 +293,11 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers").`);
         if (!labels.includes(NO_SANDBOX_LABEL)) labels.push(NO_SANDBOX_LABEL);
       }
-      const { api, where, close } = await openWorkApi();
-      out(`relay work ${version}: ${name} serving ${serving.join(", ")} via ${where}; jobs=${jobs}, ${o.once ? "once" : `doorbell every ${fmtInterval(pollMs)} to ${fmtInterval(maxIdleMs)} while idle`}, sandbox ${sandbox ? "on" : inside ? "container" : "OFF"}, log ${workLogPath()}`);
+      const { session, where } = await openWorkBoard();
+      out(`relay work ${version}: ${name} serving ${serving.join(", ")} from ${where}; jobs=${jobs}, ${o.once ? "once" : `waiting on the board, looking again every ${Math.round(IDLE_WAIT_MS / 60_000)}m`}, sandbox ${sandbox ? "on" : inside ? "container" : "OFF"}, log ${workLogPath()}`);
       try {
         const r = await runWorker({
-          api,
+          session,
           name,
           host,
           lanes: serving,
@@ -307,27 +305,25 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           version,
           jobs,
           ...(o.once ? { once: true } : {}),
-          pollMs,
-          maxIdleMs,
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), lane: laneRunner({ sandbox }) },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), brief: memoryBrief },
         });
-        const held = r.results.filter((x) => x.outcome === "held").length;
-        out(`done: ${r.ran} job(s)${r.results.length ? `; ${r.results.filter((x) => x.outcome === "finished").length} finished, ${r.results.filter((x) => x.outcome === "failed").length} failed${held ? `, ${held} held at the gate` : ""}` : ""}`);
-        if (r.results.some((x) => x.outcome === "failed")) process.exitCode = 1;
+        const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
+        const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("settled") ? [`${count("settled")} settled`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];
+        out(`done: ${r.ran} job(s)${r.results.length ? `; ${parts.join(", ")}` : ""}`);
+        if (count("failed")) process.exitCode = 1;
       } finally {
         process.off("SIGINT", stop);
         process.off("SIGTERM", stop);
-        await close();
       }
     });
 
   work
     .command("status")
     .option("--json")
-    .description("The service on this machine, the workers the site knows, and the last lines of work.log")
+    .description("The service on this machine, the workers on the board, and the last lines of work.log")
     .action(async (o: { json?: boolean }) => {
       const p = plan({ jobs: "1" }, deps);
       const installed = existsSync(p.path);
@@ -335,15 +331,15 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       // the container-mode service runs `container start --attach`; the host-mode one runs relay itself
       const mode = installed && /--attach/.test(readFileSync(p.path, "utf8")) ? "container" : "host";
       const container = deps.platform === "darwin" && !inContainer() && deps.onPath("container") ? await containerReport({ withDoctor: false }) : undefined;
-      const { api, where, close } = await openWorkApi();
-      let workers: WorkerView[] = [];
+      let workers: board.WorkerView[] = [];
+      let where = "the board";
       let error: string | undefined;
       try {
-        workers = await api.workers();
+        const opened = await openWorkBoard();
+        where = opened.where;
+        workers = await board.listWorkers(opened.session.board);
       } catch (e) {
         error = e instanceof Error ? e.message : String(e);
-      } finally {
-        await close();
       }
       const logTail = existsSync(p.logPath) ? readFileSync(p.logPath, "utf8").trimEnd().split("\n").slice(-10) : [];
       if (o.json) {
@@ -352,14 +348,14 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       }
       console.log(`service:  ${installed ? (loaded ? "installed and loaded" : "installed, not loaded") : "not installed"}${installed ? ` (${mode} mode)` : ""} (${p.path})`);
       if (container) console.log(`container: ${container.container.exists ? `${CONTAINER_NAME} ${container.container.state ?? "unknown"}${container.container.image ? ` (${container.container.image})` : ""}; relay work container status for the lanes inside` : `no ${CONTAINER_NAME} container (relay work --isolation container --install)`}`);
-      console.log(`backend:  ${where}`);
+      console.log(`board:    ${where}`);
       if (error) console.log(`workers:  unavailable (${error})`);
       else if (!workers.length) console.log("workers:  none registered yet; run `relay work` or `relay work --install --yes`");
       else {
         const now = Date.now();
         console.log("workers:");
         for (const w of workers) console.log(`  ${fmtWorker(w, now)}`);
-        const retired = workers.filter((w) => isRetired(w, now));
+        const retired = workers.filter((w) => w.retired);
         if (retired.length) console.log(`  retired: offline for more than 7 days (${retired.map((w) => w.name).join(", ")}); relay work forget <name> removes one, and it comes back if that machine runs relay work again`);
       }
       if (logTail.length) {
@@ -370,21 +366,17 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
 
   work
     .command("forget")
-    .argument("<name-or-id>", "the worker as `relay work status` lists it")
-    .description("Remove a retired worker (a renamed or decommissioned machine) from the workers list; its past runs stay attributed, and it comes back if it runs relay work again")
-    .action(async (nameOrId: string) => {
-      const h = await openReady();
-      try {
-        const w = await h.client.forgetWorker(nameOrId);
-        if (!w) {
-          log(`no worker named '${nameOrId}' (relay work status lists them)`);
-          process.exitCode = 1;
-          return;
-        }
-        log(`forgot ${w.name} (${w.id}; ${w.lanes.join(", ") || "no lanes"}; last seen ${w.last_seen.slice(0, 16)}Z); its past runs stay in the feed, and it registers again if that machine runs relay work`);
-      } finally {
-        await h.close();
+    .argument("<name>", "the worker as `relay work status` lists it")
+    .description("Remove a retired worker (a renamed or decommissioned machine) from the board's workers; its past runs stay in their threads, and it comes back if it runs relay work again")
+    .action(async (name: string) => {
+      const { session } = await openWorkBoard();
+      const w = await board.forgetWorker(session.board, name);
+      if (!w) {
+        log(`no worker named '${name}' (relay work status lists them)`);
+        process.exitCode = 1;
+        return;
       }
+      log(`forgot ${w.name} (${w.lanes.join(", ") || "no lanes"}; last seen ${w.last_seen.slice(0, 16)}Z); its past runs stay in their threads, and it registers again if that machine runs relay work`);
     });
 
   // ---------- relay work container <shell|status|stop|start|rm|logs> ----------
@@ -474,7 +466,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .option("--memory <size>", "the VM's memory (default: what the container has now)")
     .option("--cpus <n>", "the VM's CPUs (default: what the container has now)")
     .option("--yes", "rebuild the image and recreate the container")
-    .action((o: { site?: string; invite?: string; memory?: string; cpus?: string; yes?: boolean }) => containerInstall({ jobs: "1", interval: String(POLL_MS / 1000), maxMinutes: "60", sandbox: true, ...o }, "update"));
+    .action((o: { site?: string; invite?: string; memory?: string; cpus?: string; yes?: boolean }) => containerInstall({ jobs: "1", maxMinutes: "60", sandbox: true, ...o }, "update"));
   container
     .command("login [provider]")
     .description(

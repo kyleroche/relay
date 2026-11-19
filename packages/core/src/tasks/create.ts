@@ -16,8 +16,7 @@ import { createTask, findTaskByKey, taskView, type TaskView } from "../db/tasks.
 import type { GitHubClient } from "../github/client.ts";
 import { ulid } from "../util.ts";
 import { heldEvent, precheckTask } from "./gate.ts";
-import { assertJobManifest } from "./job-manifest.ts";
-import { ManifestError } from "./manifest.ts";
+import { BUILTIN_LANES, isLaneName, isTaskPriority, laneNameProblem, TASK_PRIORITIES, WORKER_LANES, type TaskPriority } from "./lanes.ts";
 
 /**
  * The lane registry is open. The built-in worker lanes execute on a machine that ran `relay work`, with the adapters in
@@ -29,25 +28,13 @@ import { ManifestError } from "./manifest.ts";
  * has named it (`laneUnservedProblem`). `isLaneName` is the shape every surface checks; `knownLanes` is the list the
  * CLI, the MCP server and the Requeue sheet show.
  */
-export const WORKER_LANES = ["claude", "codex", "grok", "nodes"] as const;
-/** The same four, by the name that says what they are now that other lanes exist: the lanes `relay work` runs itself. */
-export const BUILTIN_LANES = WORKER_LANES;
+export { BUILTIN_LANES, isLaneName, isTaskPriority, isWorkerLane, LANE_NAME, LANE_NAME_PATTERN, LANE_NAME_RULE, laneNameProblem, TASK_PRIORITIES, WORKER_LANES, type TaskPriority, type WorkerLane } from "./lanes.ts";
 export const CLOUD_LANES = ["claude-cloud", "codex-cloud"] as const;
 export const TASK_LANES = [...WORKER_LANES, ...CLOUD_LANES] as const;
-export type WorkerLane = (typeof WORKER_LANES)[number];
 export type CloudLane = (typeof CLOUD_LANES)[number];
 export type TaskLane = (typeof TASK_LANES)[number];
 export const isTaskLane = (s: string): s is TaskLane => (TASK_LANES as readonly string[]).includes(s);
-export const isWorkerLane = (s: string): s is WorkerLane => (WORKER_LANES as readonly string[]).includes(s);
 export const isCloudLane = (s: string): s is CloudLane => (CLOUD_LANES as readonly string[]).includes(s);
-
-/** The shape of a lane name, as a pattern source for composed regexes (`agent:<lane>` labels, `relay/<lane>-<n>` branches, OpenAPI). */
-export const LANE_NAME_PATTERN = "[a-z][a-z0-9-]{0,31}";
-export const LANE_NAME = new RegExp(`^${LANE_NAME_PATTERN}$`);
-/** The rule in words, for every message that refuses a name. */
-export const LANE_NAME_RULE = "lowercase letters, digits and dashes, 1 to 32 characters, starting with a letter";
-export const isLaneName = (s: string): boolean => LANE_NAME.test(s);
-export const laneNameProblem = (lane: string): string => `lane '${lane}' is not a lane name (${LANE_NAME_RULE})`;
 
 export interface KnownLanes {
   /** `relay work`'s own lanes: claude, codex, grok, nodes. */
@@ -82,9 +69,6 @@ export async function laneUnservedProblem(db: Db, lane: string): Promise<string 
 
 /** The colour and description `openTask` gives the `agent:<lane>` label of a lane `relay link` does not install (one outside TASK_LANES). */
 export const laneLabelSpec = (lane: string): { name: string; color: string; description: string } => ({ name: `agent:${lane}`, color: "8A2BE2", description: `relay: served by the ${lane} worker` });
-export const TASK_PRIORITIES = ["low", "normal", "high", "urgent"] as const;
-export type TaskPriority = (typeof TASK_PRIORITIES)[number];
-export const isTaskPriority = (s: string): s is TaskPriority => (TASK_PRIORITIES as readonly string[]).includes(s);
 
 export interface CreateTaskInput {
   project: string;
@@ -156,13 +140,6 @@ export async function openTask(db: Db, github: GitHubClient | undefined, input: 
   }
   const unserved = await laneUnservedProblem(db, input.lane);
   if (unserved) throw new TaskCreateError(unserved, 400);
-  // a relay-job block (docs/WORKER-AGENTS.md) must parse and name assets of this project before the issue exists
-  try {
-    await assertJobManifest(db, input.body ?? "", input.project);
-  } catch (e) {
-    if (e instanceof ManifestError) throw new TaskCreateError(`relay-job manifest: ${e.message}`, 400);
-    throw e;
-  }
   if (!github) throw new TaskCreateError("No GitHub credential: set GITHUB_TOKEN (web) or log in with gh (CLI).", 503);
   // a registered worker's lane has no label from `relay link`: make it before the issue carries it, so it gets relay's colour rather than GitHub's default (best effort)
   if (!isTaskLane(input.lane)) await github.ensureLabel?.(project.repo, laneLabelSpec(input.lane)).catch(() => {});
