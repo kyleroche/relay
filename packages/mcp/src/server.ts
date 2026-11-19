@@ -1,6 +1,6 @@
 /**
  * The relay MCP server: one tool set for every transport. Memory tools over the shared Postgres memory, public read
- * tools over the feed and projects, asset tools over the asset library, task, webhook and external-event tools for
+ * tools over the feed and projects, asset tools over the asset library, task and external-event tools for
  * bots, and the access and invite tools (tokens:write) that let one trusted bot approve other agents' device codes
  * and mint invites without anyone opening the Access page. One factory serves stdio and HTTP; the granted scopes
  * decide what runs (stdio: everything; HTTP: the bearer token's scopes, plus the read scopes when the deployment
@@ -80,8 +80,6 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_requeue", scope: "tasks:write", description: "Put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it; relay_task_close stops a run." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
-  { name: "relay_webhook_subscribe", scope: "webhooks:write", description: "Register an outbound webhook for event kinds (exact, a prefix ending in '.', or '*'), optionally one project and a bearer for deliveries. The signing secret is returned once." },
-  { name: "relay_webhook_unsubscribe", scope: "webhooks:write", description: "Remove an outbound webhook by id." },
   { name: "relay_access_list", scope: "tokens:write", description: "Device requests waiting for a decision (user_code, client_name, scopes, requested and expiry times) and approvals the device has not polled yet. For the bot that approves other agents." },
   { name: "relay_access_approve", scope: "tokens:write", description: "Approve (default) or deny a pending device request by its user code: the same decision the Access page makes. The device receives its token on its next poll; the decision is attributed to this token. A bot can approve only scopes it holds itself, and never tokens:write; wider requests are for a person at /activate." },
   { name: "relay_invite_create", scope: "tokens:write", description: "Mint an invite code for an agent or machine trusted in advance: a name, scopes, optional expiry (24h default) and uses (1 default). The code is returned once; redeeming it needs no approval. A bot can invite only to scopes it holds itself, and never tokens:write." },
@@ -135,8 +133,6 @@ export interface RelayServerOptions {
   board?: { open: () => Promise<board.BoardSession>; asActor: boolean };
   /** GitHub access for relay_task_approve, relay_task_request_changes and relay_task_close (env token on the web, the gh login locally). Without it the review tools answer with an error; requeue records the missing credential and queues anyway. */
   github?: GitHubClient;
-  /** Called with every feed row a tool writes, after the write (the web app fans out webhooks from here). */
-  afterEvent?: (row: repo.EventRow) => void | Promise<void>;
   /** What relay_whoami reports about this connection's credential (HTTP: from the token row). */
   identity?: ConnectionIdentity;
   /** Where an anonymous caller can get access (the site's OAuth metadata); shown by relay_whoami and in scope errors. */
@@ -146,7 +142,7 @@ export interface RelayServerOptions {
   /**
    * The authorization server this database belongs to, for the access and invite tools: `issuer` is the site whose
    * `relay setup --site <issuer> --invite <code>` line relay_invite_create prints (unset locally: the line keeps a
-   * placeholder); `now` is the clock (tests). Feed rows these tools write go through `afterEvent` like every other.
+   * placeholder); `now` is the clock (tests).
    */
   oauth?: { issuer?: string; now?: () => number };
 }
@@ -229,14 +225,6 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       invalidateBriefCache(project ?? undefined);
     } catch {
       /* cache is best effort */
-    }
-  };
-  const emit = async (row: repo.EventRow | undefined) => {
-    if (!row || !opts.afterEvent) return;
-    try {
-      await opts.afterEvent(row);
-    } catch {
-      /* delivery problems are the dispatcher's to record */
     }
   };
   const anonymous = !opts.canWrite && !opts.scopes?.length;
@@ -364,7 +352,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'; run relay link in that repo first`);
       const src = source ?? actor.replace(/^(agent|human):/, "");
       const row = supersedes_id ? await repo.supersedeDecision(db, supersedes_id, { text: t, source: src }) : await repo.addDecision(db, { project, text: t, source: src });
-      await emit(await repo.writeEvent(db, { kind: "decision.captured", actor, project, summary: t.slice(0, 200), payload: { decision_id: row.id, source: src, superseded: supersedes_id ?? null } }));
+      await repo.writeEvent(db, { kind: "decision.captured", actor, project, summary: t.slice(0, 200), payload: { decision_id: row.id, source: src, superseded: supersedes_id ?? null } });
       afterWrite(project);
       return text(`recorded decision #${row.id}${supersedes_id ? ` (supersedes #${supersedes_id})` : ""}`);
     },
@@ -387,7 +375,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (g) return g;
       if (scope !== "global" && !scope_id) return fail(`scope '${scope}' needs scope_id`);
       await repo.upsertPreference(db, { key, value, scope, scope_id: scope === "global" ? null : scope_id!, reason: reason ?? null });
-      await emit(await repo.writeEvent(db, { kind: "preference.set", actor, project: scope === "project" ? scope_id! : null, summary: `${key} = ${value} (${scope}${scope_id ? `: ${scope_id}` : ""})`, payload: { key, value, scope, scope_id: scope_id ?? null } }));
+      await repo.writeEvent(db, { kind: "preference.set", actor, project: scope === "project" ? scope_id! : null, summary: `${key} = ${value} (${scope}${scope_id ? `: ${scope_id}` : ""})`, payload: { key, value, scope, scope_id: scope_id ?? null } });
       afterWrite(scope === "project" ? scope_id : undefined);
       return text(`set ${key} = ${value} at ${scope}${scope_id ? ` ${scope_id}` : ""}`);
     },
@@ -752,43 +740,9 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     });
   });
 
-  server.registerTool(
-    "relay_webhook_subscribe",
-    {
-      title: "Subscribe a webhook",
-      description: toolDescription("relay_webhook_subscribe"),
-      inputSchema: {
-        url: z.string().url().describe("where relay POSTs deliveries"),
-        events: z.array(z.string().min(1)).min(1).describe("kinds such as pr.merged, run.failed; a prefix like 'run.'; or '*'"),
-        bearer: z.string().min(1).max(500).optional().describe("sent as Authorization: Bearer on every delivery, e.g. the bot's routine key"),
-        project: z.string().optional().describe("limit to one project slug"),
-      },
-    },
-    async ({ url, events, bearer, project }) => {
-      const g = gate("webhooks:write", "relay_webhook_subscribe");
-      if (g) return g;
-      const badUrl = repo.validateWebhookUrl(url);
-      if (badUrl) return fail(`relay: ${badUrl}`);
-      if (project && !(await repo.getProject(db, project))) return fail(`relay: unknown project '${project}'`);
-      try {
-        const row = await repo.createWebhook(db, { project: project ?? null, url, events, bearer: bearer ?? null, createdBy: externalActor(actor) });
-        return json({ webhook: repo.publicWebhook(row), secret: row.secret, note: "The secret is shown once; verify X-Relay-Signature with it (docs/FEED.md)." });
-      } catch (e) {
-        return fail(`relay: ${e instanceof Error ? e.message : String(e)}`);
-      }
-    },
-  );
-
-  server.registerTool("relay_webhook_unsubscribe", { title: "Unsubscribe a webhook", description: toolDescription("relay_webhook_unsubscribe"), inputSchema: { id: z.string().min(1) } }, async ({ id }) => {
-    const g = gate("webhooks:write", "relay_webhook_unsubscribe");
-    if (g) return g;
-    const removed = await repo.deleteWebhook(db, id);
-    return removed ? json({ removed: id }) : fail(`relay: no webhook ${id}`);
-  });
-
   // ---------- access and invites (tokens:write): the chief-of-staff bot approving other agents ----------
 
-  const oauth: OAuthServerOptions = { issuer: opts.oauth?.issuer ?? "relay", ...(opts.oauth?.now ? { now: opts.oauth.now } : {}), onEvent: (row) => emit(row) };
+  const oauth: OAuthServerOptions = { issuer: opts.oauth?.issuer ?? "relay", ...(opts.oauth?.now ? { now: opts.oauth.now } : {}) };
   const site = opts.oauth?.issuer?.replace(/\/+$/, "");
   const accessView = (r: AccessRequestView) => ({ user_code: r.user_code, client_name: r.client_name, scopes: r.scopes, state: r.state, requested_at: r.created_at, expires_at: r.expires_at });
   const oauthFail = (e: unknown, tool: string) => {
@@ -906,7 +860,6 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       if (g) return g;
       if (project && !(await repo.getProject(db, project))) return fail(`relay: unknown project '${project}'`);
       const row = await repo.writeEvent(db, { kind, actor: externalActor(actor), project: project ?? null, summary, url: url ?? null, cost_equiv: cost_equiv ?? 0, payload: source ? { source } : {} });
-      await emit(row);
       return json(row ? { id: row.id, ts: row.ts, kind: row.kind, actor: row.actor } : { deduped: true });
     },
   );

@@ -72,8 +72,6 @@ describe("relay mcp tools", () => {
       "relay_task_release",
       "relay_task_request_changes",
       "relay_task_requeue",
-      "relay_webhook_subscribe",
-      "relay_webhook_unsubscribe",
       "relay_whoami",
     ]);
     await client.close();
@@ -242,25 +240,11 @@ describe("relay mcp tools", () => {
     await rv.server.close();
   });
 
-  it("whoami and webhook subscribe/unsubscribe over a scoped connection", async () => {
-    const { client, server } = await connect({ canWrite: false, scopes: ["webhooks:write"], actor: "token:oauth:grok-bot", identity: { name: "oauth:grok-bot", expires_at: "2026-10-17T10:00:00.000Z", source: "db" } });
+  it("whoami over a scoped connection", async () => {
+    const { client, server } = await connect({ canWrite: false, scopes: ["events:write"], actor: "token:oauth:grok-bot", identity: { name: "oauth:grok-bot", expires_at: "2026-10-17T10:00:00.000Z", source: "db" } });
     const who = jsonOf<{ actor: string; name: string; scopes: string[]; expires_at: string; source: string; authenticated: boolean }>(await client.callTool({ name: "relay_whoami", arguments: {} }));
-    expect(who).toMatchObject({ actor: "token:oauth:grok-bot", name: "oauth:grok-bot", scopes: ["webhooks:write"], expires_at: "2026-10-17T10:00:00.000Z", source: "db", authenticated: true });
+    expect(who).toMatchObject({ actor: "token:oauth:grok-bot", name: "oauth:grok-bot", scopes: ["events:write"], expires_at: "2026-10-17T10:00:00.000Z", source: "db", authenticated: true });
 
-    const sub = jsonOf<{ webhook: { id: string; url: string; events: string[]; has_bearer: boolean; project: string | null; created_by: string }; secret: string }>(
-      await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "https://grok.example/routines/relay", events: ["pr.merged", "run."], bearer: "rk_1", project: "demo" } }),
-    );
-    expect(sub.secret).toMatch(/^whsec_/);
-    expect(sub.webhook).toMatchObject({ url: "https://grok.example/routines/relay", events: ["pr.merged", "run."], has_bearer: true, project: "demo", created_by: "bot:oauth:grok-bot" });
-    expect(sub.webhook).not.toHaveProperty("secret");
-    expect((await repo.getWebhook(db, sub.webhook.id))?.bearer).toBe("rk_1");
-
-    expect((await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "ftp://x", events: ["*"] } })).isError).toBe(true);
-    expect((await client.callTool({ name: "relay_webhook_subscribe", arguments: { url: "https://x.example", events: ["*"], project: "ghost" } })).isError).toBe(true);
-
-    expect(jsonOf<{ removed: string }>(await client.callTool({ name: "relay_webhook_unsubscribe", arguments: { id: sub.webhook.id } })).removed).toBe(sub.webhook.id);
-    expect((await client.callTool({ name: "relay_webhook_unsubscribe", arguments: { id: sub.webhook.id } })).isError).toBe(true);
-    expect(await repo.getWebhook(db, sub.webhook.id)).toBeUndefined();
     await client.close();
     await server.close();
   });
@@ -402,9 +386,12 @@ describe("relay mcp tools", () => {
     // anchored to the real clock: findToken compares expiry against the database's now(), so a fixed date would expire the tokens
     let clock = Math.floor(Date.now() / 1000) * 1000 - 3 * 3_600_000;
     const o = { issuer: "https://relay.test", now: () => clock };
-    const events: repo.EventRow[] = [];
+    /** The access rows the bot wrote since `mark`, oldest first: what its tool calls left in the feed. */
+    let mark = 0;
+    const newest = async () => (await repo.listEvents(db, { limit: 1 }))[0]?.id ?? 0;
+    const written = async () => (await repo.listEvents(db, { kind: "access.", limit: 50 })).filter((e) => e.id > mark && e.actor === "bot:oauth:concierge").reverse();
     const HELD: TokenScope[] = ["tasks:read", "tasks:write", "events:write", "tokens:write"];
-    const concierge = () => connect({ canWrite: false, scopes: HELD, actor: "token:oauth:concierge", oauth: o, afterEvent: (row) => void events.push(row) });
+    const concierge = () => connect({ canWrite: false, scopes: HELD, actor: "token:oauth:concierge", oauth: o });
     const poll = (d: { device_code: string; client_id: string }) => exchangeToken(db, { grant_type: GRANT_DEVICE_CODE, device_code: d.device_code, client_id: d.client_id }, o);
     const oauthCode = async (p: Promise<unknown>): Promise<string> => {
       try {
@@ -427,7 +414,7 @@ describe("relay mcp tools", () => {
       await anon.client.close();
       await anon.server.close();
 
-      const narrow = await connect({ canWrite: false, scopes: ["webhooks:write", "tasks:write"], actor: "token:oauth:grok-bot" });
+      const narrow = await connect({ canWrite: false, scopes: ["events:write", "tasks:write"], actor: "token:oauth:grok-bot" });
       const r = await narrow.client.callTool({ name: "relay_access_list", arguments: {} });
       expect(r.isError).toBe(true);
       expect(textOf(r)).toMatch(/relay_access_list needs a bearer token with the tokens:write scope/);
@@ -437,7 +424,7 @@ describe("relay mcp tools", () => {
     });
 
     it("lists a pending request, approves it as the bot, and the device's poll then redeems it", async () => {
-      events.length = 0;
+      mark = await newest();
       const d = await deviceAuthorization(db, { client_name: "grok-bot", scope: "tasks:read tasks:write" }, o);
       expect(await oauthCode(poll(d))).toBe("authorization_pending");
       const { client, server } = await concierge();
@@ -455,8 +442,8 @@ describe("relay mcp tools", () => {
         await client.callTool({ name: "relay_access_approve", arguments: { user_code: d.user_code.toLowerCase() } }),
       );
       expect(approved).toMatchObject({ user_code: d.user_code, status: "approved", client_name: "grok-bot", scopes: ["tasks:read", "tasks:write"], decided_by: "bot:oauth:concierge" });
-      expect(events.map((e) => e.kind)).toEqual(["access.granted"]);
-      expect(events[0]!.actor).toBe("bot:oauth:concierge");
+      expect((await written()).map((e) => e.kind)).toEqual(["access.granted"]);
+      expect((await written())[0]!.actor).toBe("bot:oauth:concierge");
 
       const after = jsonOf<{ pending: Array<{ user_code: string }>; approved_awaiting_poll: Array<{ user_code: string; state: string }> }>(await client.callTool({ name: "relay_access_list", arguments: {} }));
       expect(after.pending.map((p) => p.user_code)).not.toContain(d.user_code);
@@ -532,7 +519,7 @@ describe("relay mcp tools", () => {
     });
 
     it("mints an invite the invite grant accepts, revokes one, and rejects bad input", async () => {
-      events.length = 0;
+      mark = await newest();
       const { client, server } = await concierge();
       const made = jsonOf<{ invite: { id: string; name: string; scopes: string[]; uses_left: number; expires_at: string }; code: string; setup: string; redeem: string; note: string }>(
         await client.callTool({ name: "relay_invite_create", arguments: { name: "runner", scopes: ["tasks:read", "events:write"], expires_in: "1h", uses: 2 } }),
@@ -542,8 +529,8 @@ describe("relay mcp tools", () => {
       expect(Date.parse(made.invite.expires_at)).toBe(clock + 3_600_000);
       expect(made.setup).toBe(`relay setup --site https://relay.test --invite ${made.code}`);
       expect(made.redeem).toContain(GRANT_INVITE);
-      expect(events.map((e) => e.kind)).toEqual(["access.invite_created"]);
-      expect(events[0]!.actor).toBe("bot:oauth:concierge");
+      expect((await written()).map((e) => e.kind)).toEqual(["access.invite_created"]);
+      expect((await written())[0]!.actor).toBe("bot:oauth:concierge");
 
       const t = await exchangeToken(db, { grant_type: GRANT_INVITE, invite: made.code, client_name: "runner@box" }, o);
       expect(t.token_name).toBe("oauth:runner");
@@ -554,7 +541,8 @@ describe("relay mcp tools", () => {
 
       const revoked = jsonOf<{ revoked: { id: string; name: string; uses_left: number } }>(await client.callTool({ name: "relay_invite_revoke", arguments: { id_or_name: "runner" } }));
       expect(revoked.revoked).toMatchObject({ id: made.invite.id, name: "runner", uses_left: 1 });
-      expect(events.map((e) => e.kind)).toEqual(["access.invite_created", "access.invite_revoked"]);
+      // the redemption above is in the feed too, under the bot whose invite it was
+      expect((await written()).map((e) => e.kind)).toEqual(["access.invite_created", "access.granted", "access.invite_revoked"]);
       expect(await oauthCode(exchangeToken(db, { grant_type: GRANT_INVITE, invite: made.code }, o))).toBe("invalid_grant");
       const twice = await client.callTool({ name: "relay_invite_revoke", arguments: { id_or_name: "runner" } });
       expect(twice.isError).toBe(true);

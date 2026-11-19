@@ -12,7 +12,7 @@
  * Logs go to stderr only; stdout is the protocol. The first stderr line names the mode.
  */
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { board, briefEmbedder, detectGitHub, dispatchEvent, ensureHome, loadConfig, migrate, openAssetStore, openHarness, refreshSiteTokenIfStale, type HarnessConfig } from "@relay/core";
+import { board, briefEmbedder, detectGitHub, ensureHome, loadConfig, migrate, openAssetStore, openHarness, refreshSiteTokenIfStale, type HarnessConfig } from "@relay/core";
 import { createSiteBridge, serveSiteBridge, siteAuth, tokenLabel } from "./bridge.ts";
 import { createRelayServer } from "./server.ts";
 
@@ -61,7 +61,6 @@ async function serveLocal(cfg: HarnessConfig): Promise<void> {
     board: { open: () => board.connectBoard(board.openBoard(h.cfg.board), h.cfg.board), asActor: false },
     // Invites minted here live in this database; the setup line names the site only when this machine has one configured.
     ...(h.cfg.site ? { oauth: { issuer: h.cfg.site } } : {}),
-    afterEvent: (row) => dispatchEvent(h.db, row).then(() => undefined),
   });
   const transport = new StdioServerTransport();
   // server.close() closes the transport, which fires server.onclose; the guard keeps the two paths from re-entering.

@@ -221,5 +221,5 @@ async function connectSite(o: SetupOpts): Promise<void> {
   } else log(`check: ${probe.detail}`);
   const paths = writeSiteConfig({ site, token: credential });
   log(`credential saved to ${paths.credentialsPath} (mode 0600, source: ${credential.source})`);
-  log(`site mode on: ${site} (${paths.configPath}); memory, feed, token, invite, task and webhook commands, the hooks and the stdio MCP server now use the site. relay link still digests locally and uploads.`);
+  log(`site mode on: ${site} (${paths.configPath}); memory, feed, token and invite commands, the hooks and the stdio MCP server now use the site (tasks are on the board: relay setup --board). relay link still digests locally and uploads.`);
 }
