@@ -245,7 +245,7 @@ describe("release, requeue and close", () => {
     await claim.complete("done");
     await expect(requeueTask(b, t.id)).rejects.toMatchObject({ status: 409 });
   });
-  it("close cancels the task with the reason, closes its own open pull request and its issue, and calls off a step that was looking at it", async () => {
+  it("close cancels the task with the reason, closes its own open pull request (and deletes its branch) and its issue, and calls off a step that was looking at it", async () => {
     const b = await relayBoard();
     const t = await open(b, { issue: `${REPO}#26` });
     const judge = await open(b, { title: "eval: Rate limit", lane: "codex", step: "eval", evaluates: t.id, branch: branchFor("claude", t.id) });
@@ -259,6 +259,7 @@ describe("release, requeue and close", () => {
     expect(r.github).toEqual({ pr_closed: true, issue_closed: true });
     expect(r.canceled).toEqual([judge.id]);
     expect(gh.calls.filter((c) => c[0] === "request").map((c) => c[2])).toEqual([`/repos/${REPO}/pulls/7`, `/repos/${REPO}/issues/26`]);
+    expect(gh.calls.filter((c) => c[0] === "deleteBranch")).toEqual([["deleteBranch", REPO, branchFor("claude", t.id)]]);
     expect((await getTask(b, judge.id)).task).toMatchObject({ state: "closed", reason: `the task it was to look at, ${t.id}, was closed` });
     await expect(closeTask(b, gh, t.id)).rejects.toMatchObject({ status: 409 });
   });

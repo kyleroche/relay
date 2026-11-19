@@ -487,8 +487,8 @@ export interface CloseResult {
 
 /**
  * Finish a task without a merge: canceled on the board with the reason, which also ends a run in progress at its
- * next look. On GitHub, its open pull requests (the ones whose head is a branch a lane pushed for this task) and the
- * issue its own text names are closed. Step tasks that were looking at it are called off.
+ * next look. On GitHub, its open pull requests (the ones whose head is a branch a lane pushed for this task) are closed
+ * and their branches deleted, and the issue its own text names is closed. Step tasks that were looking at it are called off.
  */
 export async function closeTask(board: Board, github: GitHubClient | undefined, id: string, opts: { reason?: string } = {}): Promise<CloseResult> {
   const reason = (opts.reason ?? "").trim();
@@ -519,6 +519,8 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
         await github.createComment(pr.repo, pr.number, comment);
         await github.request("PATCH", `/repos/${pr.repo}/pulls/${pr.number}`, { state: "closed" });
         gh.pr_closed = true;
+        // the commits stay reachable through the pull request, which can restore the branch
+        await github.deleteBranch(pr.repo, pull.head_ref).catch(() => undefined);
       }
       if (task.issue) {
         await github.createComment(task.issue.repo, task.issue.number, comment);
