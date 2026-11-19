@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { board, type Board } from "@vercel/board";
 import { connectBoard } from "../src/board/client.ts";
 import { branchFor, HOLD } from "../src/board/mapping.ts";
-import { actorProfile, ledgerRows, writtenAs } from "../src/board/site.ts";
+import { actorProfile, grantSite, ledgerRows, writtenAs } from "../src/board/site.ts";
 import { ensureSchemas, isTrustedActor } from "../src/board/schemas.ts";
 import { approveTask, getTask, listTasks, openTask, releaseTask } from "../src/board/tasks.ts";
 import { listWorkers } from "../src/board/workers.ts";
@@ -131,6 +131,13 @@ describe("a board served over HTTP", () => {
     const session = await connectBoard(team);
     const rows = (await team.poll({ channel: "work/site", last: 50 })).events.flatMap((e) => ledgerRows(e, session.from));
     expect(rows.map((r) => [r.kind, r.actor])).toEqual([["task.created", "bot:grok-bot"], ["run.started", "runner:mini-claude"], ["task.approved", "human:kyleroche"]]);
+  });
+
+  it("grants a site's project the queues once, and says who its deployment writes as", async () => {
+    const first = await grantSite(team, "prj_relaysite");
+    expect(first).toEqual({ actor: "vercel:project:prj_relaysite:production", granted: true });
+    expect(await grantSite(team, "prj_relaysite")).toEqual({ actor: first.actor, granted: false });
+    expect((await team.grants()).filter((g) => g.can["work/"] === "all" && g.principals.some((p) => p.kind === "project"))).toHaveLength(1);
   });
 
   it("holds flagged text as it is made and releases it for the text as it stands", async () => {

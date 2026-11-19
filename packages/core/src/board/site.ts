@@ -12,7 +12,7 @@
  *               needs nothing from the site but the board.
  *   merges      a pull request merged on GitHub settles the task that waits on it (`settleMerged`).
  */
-import type { Board, BoardEventView, MessageView } from "@vercel/board";
+import type { Board, BoardEventView, GrantView, MessageView } from "@vercel/board";
 import type { Db } from "../db/client.ts";
 import { writeEvent, type EventInput, type EventRow } from "../db/events.ts";
 import { getSetting, putSetting } from "../db/settings.ts";
@@ -195,3 +195,23 @@ export async function settleMerged(board: Board, pull: { url: string; head_ref: 
   if (!waiting) return undefined;
   return settleTask(board, waiting.id, `merged ${pr.repo}#${pr.number} on GitHub${pull.merge_sha ? ` in ${pull.merge_sha.slice(0, 7)}` : ""}`);
 }
+
+/**
+ * Let a Vercel project's production deployment run relay's site on this board: everything in the queues, so it can
+ * lift a hold or call off a task someone else opened (a project's deployments start with read, post and label only).
+ * Answers the actor that deployment writes as, which is what a worker names to take the tasks the site opens.
+ * Asking again finds the grant that is there. It takes `manage` on the queues to make one.
+ */
+export async function grantSite(b: Board, project: string): Promise<{ actor: string; granted: boolean }> {
+  const named = (g: GrantView): string | undefined => {
+    if (g.can[WORK_SUBTREE] !== "all") return undefined;
+    for (const p of g.principals) if (p.kind === "project" && (p.projectId === project || p.name === project)) return p.projectId;
+    return undefined;
+  };
+  let id = (await b.grants()).map(named).find(Boolean);
+  const granted = !id;
+  if (!id) id = named((await b.createGrant({ principals: [{ kind: "project", project, environments: ["production"] }], can: { [WORK_SUBTREE]: "all" } })).grant);
+  if (!id) throw new Error(`the board made the grant but did not say which project '${project}' is`);
+  return { actor: `vercel:project:${id}:production`, granted };
+}
+

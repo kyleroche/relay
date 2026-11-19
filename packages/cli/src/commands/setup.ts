@@ -50,6 +50,7 @@ interface SetupOpts {
   board?: boolean;
   team?: string;
   boardName?: string;
+  siteProject?: string;
   from?: string;
   create?: boolean;
 }
@@ -72,6 +73,7 @@ export function registerSetup(program: Command): void {
     .option("--team <id-or-slug>", "with --board: the Vercel team that owns the board (default: the login's default team)")
     .option("--board-name <name>", "with --board: a named board of that team instead of its default one ('default' goes back)")
     .option("--create", "with --board and --board-name: make the named board if the team does not have it")
+    .option("--site-project <name>", "with --board: the Vercel project that runs relay's site. Grants its production deployment the queues (it takes `manage` there) and adds it to --from, so workers here take the tasks the site opens")
     .option("--from <actors>", "with --board: whose tasks a worker here claims besides your own, as comma-separated actor IDs ('none' clears it), such as the project that runs relay's site")
     .action(async (o: SetupOpts) => {
       if (o.only && !(CLI_NAMES as readonly string[]).includes(o.only)) throw new Error(`--only must be one of ${CLI_NAMES.join(", ")}`);
@@ -145,6 +147,16 @@ async function connectToBoard(o: SetupOpts): Promise<void> {
   console.log(`you:     ${session.me.handle} (${session.me.principal})`);
   console.log(`can:     ${Object.entries(session.me.can ?? {}).map(([pattern, what]) => `${pattern} = ${Array.isArray(what) ? what.join(",") : String(what)}`).join("; ") || "nothing"}`);
   console.log(`from:    ${session.from.join(", ")}`);
+  if (o.siteProject) {
+    try {
+      const site = await board.grantSite(session.board, o.siteProject);
+      const w = writeBoardConfig({ from: [...new Set([...cfg.from, site.actor])] });
+      console.log(`site:    ${o.siteProject} writes as ${site.actor}; ${site.granted ? "granted it the queues (work/)" : "it already has the queues"}; this machine takes its tasks (from: ${(w.board.from ?? []).join(", ")})`);
+      console.log(`         set RELAY_BOARD_FROM=${session.me.principal} on that project, so the site counts this login's workers' usage and runs`);
+    } catch (e) {
+      throw new Error(`could not grant ${o.siteProject} the queues: ${board.describeBoardError(e)}. It takes someone who manages the board; the project must be on the team that owns it.`);
+    }
+  }
   const registered = await board.ensureSchemas(session.board);
   console.log(`schemas: ${registered ? "relay's schemas are registered" : "this login cannot register schemas (it takes `manage` everywhere): ask someone who manages the board to run relay setup --board"}`);
   log("next: relay work --once to drain the queue here, or relay work --install --yes to keep a worker running");
