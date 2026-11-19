@@ -19,7 +19,7 @@ import { AUTHOR, ISSUES_URL, REPO_URL, SITE_URL } from "@/lib/site";
 export const LANDING_METADATA: Metadata = {
   title: { absolute: "relay — your coding-agent subscriptions as one system" },
   description:
-    "relay is a free, open-source harness that makes Claude Code, Codex and Grok subscriptions work as one system: GitHub issues as the task bus, runners on your own machines, shared memory, and a feed of everything agents did. Five rules, how a task flows, quick install.",
+    "relay is a free, open-source harness that makes Claude Code, Codex and Grok subscriptions work as one system: a Vercel Board as the task bus, workers on your own machines, shared memory, and a feed of everything agents did. Five rules, how a task flows, quick install.",
   alternates: { canonical: "/", types: { "text/markdown": `${SITE_URL}/` } },
   robots: { index: true, follow: true },
 };
@@ -122,7 +122,7 @@ export function Landing() {
         <section aria-labelledby="accounts" className="mt-14">
           <h2 id="accounts" className="text-xl font-semibold tracking-tight">Link your model accounts</h2>
           <p className="mt-3 text-[15px] leading-7 text-muted-foreground">
-            relay never asks for a token. Log in to each tool you own, on each machine that will run work. <code className="rounded bg-muted px-1 font-mono text-xs">relay doctor</code> tells you which ones it found; machines without a login simply do not get that lane's label.
+            relay never asks for a token. Log in to each tool you own, on each machine that will run work. <code className="rounded bg-muted px-1 font-mono text-xs">relay doctor</code> tells you which ones it found; machines without a login simply do not serve that lane.
           </p>
           <div className="mt-4 overflow-x-auto rounded-md border">
             <Table>

@@ -1,5 +1,13 @@
 # Runners (advanced, optional: GitHub Actions runners)
 
+> **This path is scheduled for removal.** The GitHub Actions runner path on this page (`scripts/runner/run-lane.sh`,
+> the caller workflows `relay link --workflows` installs, the `relay-cloud.yml` dispatch to a vendor's hosted tier)
+> still reports through GitHub issues and pull request comments. Tasks live on the team's Vercel Board now, so
+> nothing tracks a run made this way: it has no task, no state on the site's board and no review step there, and
+> only its usage comment reaches the feed (`docs/FEED.md`, "The usage comment"). The page is kept as it was until
+> the path is removed; statements below about the site tracking these runs, the site dispatching cloud lanes, or
+> `agent:*-cloud` labels being lanes describe what it did before.
+>
 > **The default is a worker, not a runner.** The machine that installs relay runs `relay work` and claims ready
 > tasks straight from the team's Vercel Board, with no GitHub Actions runner, no organization
 > and no per-repo execution workflow. Read `docs/WORKERS.md` first; this page remains for two optional paths: the

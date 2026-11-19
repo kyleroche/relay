@@ -35,10 +35,11 @@ data, never as instructions:
 - **Who can start a lane.** `relay-run.yml` refuses to run unless `github.event.sender.login` (the person who added
   the label, or who opened the PR being reviewed) is listed in the `RELAY_ALLOWED_SENDERS` variable. Opening an
   issue does nothing; labelling it needs triage permission and an allowlisted login. The web app applies the same
-  gate when an `agent:<lane>` label arrives by webhook and would become a task for a worker (`senderMayOpenTasks`,
+  gate when an `agent:<lane>` label arrives by webhook and would open a task on the board (`senderMayOpenTasks`,
   `apps/web/lib/webhooks/usage.ts`): the label's sender must be in `RELAY_ALLOWED_SENDERS` (the environment, else
-  the repo's Actions variable), and when neither is set nobody may open a task that way. The site's API needs a
-  `tasks:write` token instead. On the board, `relay task create` acts as the caller's own Vercel login, and a
+  the repo's Actions variable), and when neither is set nobody may open a task that way. The site's API and MCP
+  tools need a `tasks:write` token instead, and the site writes the task as a profile named for the caller. On the
+  board, `relay task create` acts as the caller's own Vercel login, and a
   worker claims only tasks whose owner is its own login or one named in `board.from` (`relay setup --board --from`):
   a task's text is instructions for whoever claims it, so that list is who the machine takes instructions from.
 - **What relay acts on, on the board.** Anyone who may label in a channel can set any label, so labels only steer
@@ -92,18 +93,19 @@ else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded fr
 
 ### The gate
 
-Before a worker runs a task, relay grades the task's text (`packages/core/src/tasks/gate.ts`): the title and
-body as the lane would see them, plus the notes in the task's thread, capped at 20 KB. A flagged task is
-**held**: the worker holds it on the board with kind `gate` and the score and the reasons as the hold's reason, and
-no worker claims it again until its owner, or someone who manages its channel, lifts the hold. **This is a tripwire
-in front of the sandbox, not a boundary.** What contains a fooled lane is the OS sandbox, the tool allowlist and branch protection above; the gate
-only keeps the obvious cases from costing a run, and a text that passes it is still treated as data by the brief.
+Before a worker runs a task, relay grades the task's text (`packages/core/src/tasks/gate.ts`): the title and body as
+the lane would see them, plus the notes in the task's thread, capped at 20 KB. A flagged task is **held**: the worker
+holds it on the board with kind `gate` and the score and the reasons as the hold's reason, and no worker claims it
+again until its owner, or someone who manages its channel, lifts the hold. **This is a tripwire in front of the
+sandbox, not a boundary.** What contains a fooled lane is the OS sandbox, the tool allowlist and branch protection
+above; the gate only keeps the obvious cases from costing a run, and a text that passes it is still treated as data by
+the brief.
 
 Two graders, in order:
 
 1. **The pre-check**, deterministic, no model call, runs everywhere the text is seen: when `relay task create`
-   opens a task on the board (the task is made out of every worker's reach and a hit is held before any sees it ready), and on the site when
-   a task is created over MCP or REST (the site has no vendor login, so this is the only part that runs at creation).
+   opens a task on the board, and when the site opens one over MCP, REST or an issue's label: the task is made out
+   of every worker's reach and a hit is held before any sees it ready (no vendor login is needed for this part).
    It holds when the text matches any of these markers (`GATE_MARKERS`): `ignore previous instructions` (and
    "disregard / forget / override … prior / above / all / your … instructions / rules / guidance / prompt"),
    `curl … | sh` (or `wget`, piped into any shell), `.ssh`, `credentials.json`, `GITHUB_TOKEN` (and `GH_TOKEN`),
@@ -136,12 +138,12 @@ from. The task is `queued` again and that text is not graded a second time; text
 changes the digest and is graded. `relay task requeue` on a held task lifts the hold with no release, so the next
 job grades the same text again.
 
-Releasing, on the site's own task table: the task page's Held card ("Release", two clicks),
-`relay_task_release({id, note?})` or `POST /api/v1/tasks/<owner>/<repo>%23<n>/release`. A signed-in person may release
-anything held; a bot needs `tokens:write` (not `tasks:write`: releasing is vouching for text, the same trust as
-approving another agent's access) and never releases a task it opened itself. `task.released` folds the task back to
-`queued`. Requeue from the Held card does the same without the gate's blessing: it is a release by another name, so
-the same people may do it.
+Releasing through the site is the same call, made as the profile of whoever asked: the task page's Held card
+("Release", two clicks), `relay_task_release({id})` or `POST /api/v1/tasks/{id}/release`. A signed-in person may
+release anything held; a bot needs `tokens:write` (not `tasks:write`: releasing is vouching for text, the same trust
+as approving another agent's access) and never releases a task it opened itself, judged by who the board says wrote
+the task (`apps/web/lib/task-ops.ts`, and the MCP tool). The site's deployment is an author workers trust once it is
+in their `board.from`, so a release made through the site counts for them.
 
 ## Workers (`relay work`)
 
@@ -216,10 +218,8 @@ State the facts plainly:
   brief and the CLI's JSON output are written to a `mktemp -d` directory that is removed on exit.
 - The web app receives only webhooks (verified with `GITHUB_WEBHOOK_SECRET`, the GitHub App's own secret, and
   `VERCEL_WEBHOOK_SECRET`) and API and MCP calls carrying a scoped bearer token. It can never reach a runner; runners
-  call it, not the reverse. The one place it makes outbound calls to an address a caller chose, outbound webhooks,
-  refuses loopback, link-local, private-network and `.internal`/`.local` targets and requires `https`
-  (`validateWebhookUrl`; plain `http` to `localhost` is for development only), so a `webhooks:write` token cannot aim
-  the site at its own network.
+  call it, not the reverse. It makes no outbound call to an address a caller chose: besides its database and blob
+  store it talks to the team's Vercel Board, as its own deployment, and to GitHub.
 - The web app's GitHub credential is an App, not a person's token: installation tokens are minted per repository, last
   an hour and live only in memory; the private key sits in `GITHUB_APP_PRIVATE_KEY` or, when the manifest flow created
   the app, sealed in the database under `RELAY_SESSION_SECRET` (`docs/HOSTING.md`).
@@ -303,6 +303,7 @@ answer `401` as `application/problem+json` with a `WWW-Authenticate: Bearer` cha
 | `/api/v1/*` `GET` without a bearer when `RELAY_PUBLIC_READ=1` | anonymous read, limited to the public read scopes (`feed:read`, `memory:read`); off by default outside mock mode |
 | `/mcp` | its own bearer rules: anyone can `initialize`, `tools/list` and call `relay_get_info` and `relay_get_methodology`; the feed and project read tools answer anonymously when `RELAY_PUBLIC_READ=1`; every other tool needs a bearer with the scope and otherwise returns a tool error naming it |
 | `/api/webhooks/*`, `/api/cron/*` | authenticated by `GITHUB_WEBHOOK_SECRET`, `VERCEL_WEBHOOK_SECRET`, `CRON_SECRET` |
+| `/api/board`, `/api/board/*` | where the team's Vercel Board wakes the deployment's watchers; the board's own handle verifies each wake-up (`docs/ARCHITECTURE.md`, "The site and the board") |
 | `/api/assets/stream`, `/api/assets/bundle/*`, `/api/assets/upload` | the signed URL is the authentication |
 | `/_next/*`, `/icon.svg`, `/opengraph-image` | static output |
 
@@ -414,8 +415,7 @@ and the page says so.
 Approvals without a browser go through `POST /api/v1/access/<user_code>/approve` with a `tokens:write` token or the
 session; `GET /api/v1/access` lists what is pending. Giving a chat bot `tokens:write` is a deliberate choice: it can
 then approve devices and mint invites. Every request and decision is a feed row (`access.requested`, `access.granted`,
-`access.denied`, `access.revoked`) with the user code, client and scopes in its payload, so the trail is auditable
-and a webhook can relay it.
+`access.denied`, `access.revoked`) with the user code, client and scopes in its payload, so the trail is auditable.
 
 ### Revocation
 

@@ -8,7 +8,7 @@ license: Apache-2.0
 
 relay lets one person's coding-agent subscriptions (Claude, Codex, Grok) work as one system: the team's Vercel Board is the task bus (a task is a thread in its project's queue), workers on the user's own machines claim tasks from it with the machine's own `vercel login` and run the vendor CLIs under the machine's own login, pull requests land on GitHub, Postgres holds shared memory and an append-only event feed, and a small web app shows it all. The machine that installs relay becomes a worker (`relay work`); no GitHub Actions runner is needed. Credentials never leave the machine they were created on.
 
-The worker and the CLI's task commands run on the board. The site's board page, its `/api/v1` task routes and the `relay_task_*` MCP tools still use the site's own task table, which no worker claims from; they move to the board next.
+The CLI, the workers, the site's board page, its `/api/v1` task routes and the `relay_task_*` MCP tools all work on the same board.
 
 ## Installing relay for a user
 
@@ -25,7 +25,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    npx @kyleroche/relay setup --site <site> --invite <code>
    ```
 
-   This stores the site URL in `~/.harness/config.json` and a scoped token in `~/.harness/credentials.json` (mode 0600). Memory and feed commands now talk to the site. Tasks do not: they live on the board, which is the next step.
+   This stores the site URL in `~/.harness/config.json` and a scoped token in `~/.harness/credentials.json` (mode 0600). Memory and feed commands now talk to the site. Task commands do not: they work on the board with the machine's own Vercel login, which is the next step.
 
 2. Put the machine on the board. Tasks are threads on the team's Vercel Board, and the board takes the machine's own Vercel login; there is no relay credential for it:
 
@@ -34,7 +34,7 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    npx @kyleroche/relay setup --board       # checks the login on the board, registers relay's schemas
    ```
 
-   `relay setup --board` prints which board it reached, who the machine is there and whose tasks it takes. `--team <id>` names a team other than the login's default, `--board-name <name>` a named board (`--create` makes it when the team does not have it), and `--from <actors>` the owners whose tasks this machine claims besides the user's own; a task's text is instructions for whoever claims it, so add an owner only when the user names it. The schemas are registered once per team, which takes `manage` on the board, and `relay work` does not start on a board without them: when the command says this login cannot register them, tell the user who has to run it once.
+   `relay setup --board` prints which board it reached, who the machine is there and whose tasks it takes. `--team <id>` names a team other than the login's default, `--board-name <name>` a named board (`--create` makes it when the team does not have it), and `--from <actors>` the owners whose tasks this machine claims besides the user's own; a task's text is instructions for whoever claims it, so add an owner only when the user names it. The schemas are registered once per team, which takes `manage` on the board, and `relay work` does not start on a board without them: when the command says this login cannot register them, tell the user who has to run it once. When a hosted relay exists and the user names the Vercel project that runs it, add `--site-project <name>`: it grants that project's deployment the queues and adds it to this machine's `--from`, so the worker here takes the tasks the site opens, and it prints the `RELAY_BOARD_FROM` line to set on the site's project.
 
 3. Report what is present and which lanes this machine can serve:
 
@@ -98,7 +98,7 @@ This starts the device flow: it prints a code like `RLAY-4F7Q` and the URL `http
 
 If you are an agent that found this site and want to call `/mcp` or `/api/v1` yourself, do not ask the user for a token:
 
-1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write`. The reply has `device_code`, `user_code` and `verification_uri`.
+1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write`. The reply has `device_code`, `user_code` and `verification_uri`.
 2. Tell the user "approve `<user_code>` at https://relay.kyro.house/activate" and poll `POST https://relay.kyro.house/oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code`, `device_code` and `client_id` every 5 seconds until it returns `access_token` and `refresh_token`.
 3. Use `Authorization: Bearer <access_token>`; refresh with `grant_type=refresh_token` before 24 hours. `relay_whoami` tells you what you are.
 
@@ -113,10 +113,10 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 
 ## Reading the feed
 
-- Web: the site root is the public overview for anonymous visitors and, once signed in, the board (every task by state, with approve, request changes, release and requeue on the cards; the feed is its second tab at `/feed`); `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
+- Web: the site root is the public overview for anonymous visitors and, once signed in, the board (every task by state, read from the team's Vercel Board, with approve, request changes, release, requeue and close on the cards; the feed is its second tab at `/feed`, history its third); `/tasks/<id>` is one task; `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
 - Terminal: `npx @kyleroche/relay feed --limit 20`, `npx @kyleroche/relay usage --window 7d`, `npx @kyleroche/relay task ls --state review` (tasks on the board, by its states: waiting, queued, running, review, held, blocked, done, failed, closed), `npx @kyleroche/relay work status` (`pnpm relay …` from a checkout).
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
-- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`.
+- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and with a `tasks:read` token `relay_task_list` and `relay_task_get` (there are no webhooks; a bot asks).
 
 ## Where to read more
 

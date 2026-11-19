@@ -1,6 +1,8 @@
 # Assets: media that is too large to share, with a review loop
 
-Agents produce things that are not code: a short film from a cloud agent, a UX mockup, a rendered page, a storyboard. The asset library stores them privately, versions them, and gives a human an approve-or-reject path that writes back to the task and to memory. It is the visual counterpart of a pull request.
+Agents produce things that are not code: a short film from a cloud agent, a UX mockup, a rendered page, a storyboard. The asset library stores them privately, versions them, and gives a human an approve-or-reject path that writes back to the GitHub issue or pull request the asset names and to memory. It is the visual counterpart of a pull request.
+
+The library is separate from the board. A `nodes` task's outputs are attachments in the task's thread on the team's Vercel Board, approved with the task (`docs/WORKERS.md`, "The nodes lane"); a nodes run does not write to this library, and the site lists those outputs on the task's page without serving them yet.
 
 Code: `packages/core/src/db/assets.ts` (rows, review, retention), `packages/core/src/assets/` (`store.ts`, `ingest.ts`, `media.ts`, `index.ts`), `packages/cli/src/commands/assets.ts`, migration `packages/core/src/db/migrations/002_assets.sql`, tests `packages/core/test/assets.test.ts`.
 
@@ -191,8 +193,9 @@ deflate), so a bundle is never unpacked to disk.
   the store's own (`file://` locally); over HTTP the app rewrites them to its routes. Agents upload bytes to the
   returned URL; bytes never pass through the model.
 - GitHub (`apps/web/lib/github.ts`): with `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` set, an upload with an issue or PR
-  number gets a comment with the title and the viewer link; a review gets the decision, and a rejection also reopens
-  the issue (`PATCH /repos/{repo}/issues/{n}` with `state: open`). Without a token nothing is posted and nothing fails.
+  number gets a comment with the title and the viewer link; a review gets the decision, and on an asset that names an
+  issue an approval closes the issue and a rejection reopens it (`PATCH /repos/{repo}/issues/{n}`). The site acts as the
+  GitHub App when one is configured. Without a credential nothing is posted and nothing fails.
 
 ## Web
 

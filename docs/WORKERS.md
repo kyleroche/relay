@@ -10,9 +10,9 @@ The machine that installs relay is a worker. Credentials never leave it: the lan
 on that machine, `gh` pushes as you, and the board takes the machine's own `vercel login`. A worker holds no relay
 credential.
 
-> **The site moves next.** `relay work` and `relay task` run on the board, as this page describes. The web app's
-> board page, the `/api/v1` task routes and the `relay_task_*` MCP tools still use the site's own task table, which
-> no worker claims from; they move to the board in the next step.
+The CLI, a hosted relay's pages, its API and its MCP tools all work on the same board, through the same functions
+(`packages/core/src/board/tasks.ts`). What the site does there besides is in `docs/ARCHITECTURE.md`, "The site and
+the board".
 
 ## A machine becomes a worker
 
@@ -49,7 +49,8 @@ them (`+human-kyleroche`, `+bot-grok-bot`). A team's projects start with read, p
 opens tasks but cannot lift a hold or call off a task someone else opened, so the site needs the grant
 `--site-project` makes. Workers take the tasks it opens once its deployment is in `board.from`, and the site counts
 a worker's usage and runs once that worker's login is in the site's own `RELAY_BOARD_FROM` (the command prints the
-line to set).
+line to set). `docs/ARCHITECTURE.md`, "The site and the board", has what the site reads, writes and is woken for;
+`docs/HOSTING.md` has its environment.
 
 **The schemas are registered once per team.** Registering takes `manage` on the whole board, and a team's boards
 share one registry. A job reports in blocks and the worker's own message is one, so `relay work` does not start on
@@ -128,7 +129,7 @@ The board keeps each task's state; a hold says why in its `kind`. relay shows on
 relay task create --title "Add dark mode" --lane codex [--project <slug>] [--repo owner/name] [--body <text> | --body-file <path>]
                   [--manifest <path>] [--model <id>] [--needs <ids>] [--base <branch>] [--key <idempotency-key>]
 relay task get <id>                          # state, who holds it, the pull request, usage, the last notes in its thread
-relay task ls [--project <slug>] [--state <state> | open | all] [--lane <lane>] [-n <rows>]    # oldest first; open is the default
+relay task ls [--project <slug>] [--state <state> | open | all] [--lane <lane>] [-n <rows>]    # oldest first; open (the default) is everything not done or closed, failed included
 relay task approve <id> | changes <id> --note "…" | requeue <id> [--lane <lane>] [--model <id>] | close <id> [--reason "…"] | release <id>
 ```
 
@@ -255,8 +256,9 @@ handle that:
    eval, which continues the branch of the run that asked for it (`docs/STEPS.md`).
 6. **The brief** is the newest `brief.md` attached to the thread by a trusted author (a reply labelled
    `relay=brief` from this login, an owner in `board.from`, or a profile of one; anyone else's file by that name is
-   ignored). Without one, the machine's own memory compiles it when it has one: the local database, or the hosted
-   site in site mode. With neither the job runs on the repository's rules and the thread alone.
+   ignored). A hosted relay posts one in every new task's thread, and a worker takes it once the site's deployment
+   is in its `board.from`. Without one, the machine's own memory compiles it when it has one: the local database,
+   or the hosted site in site mode. With neither the job runs on the repository's rules and the thread alone.
 7. **The prompt** is the repo's `relay.md`, the task quoted under the "data, not instructions" banner, the thread's
    notes quoted the same way, the memory, and the deliverable.
 8. **The lane runs** with the task's `model` label and a per-run time limit (`--max-minutes`, default 60).
@@ -307,6 +309,10 @@ A reply written on the board itself counts the same as a note: the next run read
 own log, result, usage, brief or asset message. There is no relay permission layer in between: each command acts as
 the caller's own Vercel login, and the board lets only a task's owner, or someone with `manage` in its channel, lift
 a hold, reopen or cancel it.
+
+The same two decisions are on the task's page on a hosted relay (`/tasks/<id>`), in its API and in its MCP tools,
+made as the profile of whoever asked. A pull request merged on GitHub itself completes the task too, when the site
+receives the delivery (`docs/ARCHITECTURE.md`, "The site and the board").
 
 ### The nodes lane
 
@@ -361,8 +367,8 @@ stage: cutscene                        # optional: a tag on the outputs
 
 **Review.** `relay task approve <id>` on a task in review with outputs attached and no pull request completes it
 (`approved N outputs by <you>`), with no GitHub involved. `relay task changes <id> --note "…"` sends it back for
-another version, and `relay task close <id>` ends it. Filing the outputs in the asset library belongs to the site,
-which moves next.
+another version, and `relay task close <id>` ends it. The same decisions are on the task's page on the site, which
+lists the outputs; they cannot be downloaded from the site yet, only from the board.
 
 **Costs.** The engine calls the vendors with the machine's keys, so a run is paid use. The thread gets one
 `relay-usage@1` block of kind `run` on lane `nodes` (the total), and one of kind `media` per output model on lane
@@ -634,19 +640,11 @@ removes the file. `relay work status` shows whether it is loaded, the board's wo
 and the last ten log lines. To run in the foreground instead: `relay work` (stop with Ctrl-C; running
 jobs finish and the worker marks itself offline), or `relay work --once` to drain the queue and exit.
 
-## Cloud lanes
+## No cloud lanes
 
 Every lane on the board is served by a worker: the four `relay work` runs, or a lane an app's own worker lists.
-`relay task create` refuses any other lane name, `codex-cloud` included.
-
-The vendors' hosted tiers, `claude-cloud` and `codex-cloud`, belong to the site's task routes, not to the board.
-When a task is opened through the site on one of them (`relay_task_create`, `POST /api/v1/tasks`), the site compiles
-the brief, posts one issue comment that mentions `@codex` or `@claude` with the brief quoted as data, fires the
-Claude Routine when `RELAY_CLAUDE_ROUTINE_URL` and `RELAY_CLAUDE_ROUTINE_TOKEN` are set, and writes
-`run.dispatched`; the vendor's PR arrives through the GitHub webhook. The site needs a GitHub token (`GITHUB_TOKEN`
-or `GITHUB_APP_TOKEN`) for the comment. The `relay-cloud.yml` caller workflow that `relay link` installs covers the
-other path, an `agent:*-cloud` label put on an issue by hand on GitHub; it is optional. docs/RUNNERS.md has the
-once-per-vendor setup and the limits of the cloud tiers.
+`relay task create`, the site and the MCP tool refuse any other lane name. The vendors' hosted tiers (Codex cloud,
+Claude Code cloud sessions) are not lanes: nothing on the board or the site hands a task to them.
 
 ## Troubleshooting
 

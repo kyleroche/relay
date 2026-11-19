@@ -48,16 +48,17 @@ cap:
 
 | Section | Content | Atomicity |
 |---|---|---|
-| `review` | the notes reviewers left with "Request changes" on this issue's PR (`task.changes_requested` rows; only when `issue.number` is given) | whole or omitted |
 | `summary` | the project's ≤2K-token summary | whole or omitted |
 | `preferences` | merged preferences for the project (and lane / model when given), rendered as hard rules | whole or omitted |
 | `decisions` | current decisions matching the issue text and intent (`searchDecisions`, vector when `AI_GATEWAY_API_KEY` is set, else full text), topped up with the most recent and a few global ones | whole items until the budget; omitted when none fits |
 | `guidance` | vendor guidance for `model` matching the query (`vectorSearchGuidance` or `textSearchGuidance`) | whole chunks until the budget; omitted when none fits |
 
-Sections are allocated in the order review, preferences, decisions, summary, guidance (the reviewer's notes are why a
-re-run exists, then binding and cheap first, the big summary after, guidance last) and rendered in the order review,
-summary, preferences, decisions, guidance so every brief reads the same way. Nothing is ever cut mid-sentence; a section that does not fit is reported in `omitted`. Tokens
-are the ≈4-chars/token estimate from `approxTokens`; the ledger records real counts.
+Sections are allocated in the order preferences, decisions, summary, guidance (binding and cheap first, the big
+summary after, guidance last) and rendered in the order summary, preferences, decisions, guidance so every brief
+reads the same way. Nothing is ever cut mid-sentence; a section that does not fit is reported in `omitted`. Tokens
+are the ≈4-chars/token estimate from `approxTokens`; the ledger records real counts. A reviewer's notes are not a
+section of the brief: they are replies in the task's thread, which the job's prompt carries next to the brief
+(`docs/WORKERS.md`, "What a job does on the machine").
 
 ## How recall reaches a model
 
@@ -143,8 +144,8 @@ source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`
 for tests.
 
 Each linked repo gets a generated `relay.md` (`renderRulesFile`, ≤2K tokens): a header that says how relay works in
-this repo (labels, `relay/<lane>-<issue>` branches, cross-model review) and tells the model to use the memory
-tools, the hard rules from preferences, the top current decisions, and as many whole paragraphs of the project
+this repo (tasks opened on the team's board and claimed by relay workers, `relay/<lane>-<task>` branches, a person's
+approval before a merge) and tells the model to use the memory tools, the hard rules from preferences, the top current decisions, and as many whole paragraphs of the project
 summary as still fit. `run-lane.sh` puts `relay.md` at the top of every brief.
 
 So that every CLI reads it without being told, `relay link` adds a short owned section to `AGENTS.md` (and
@@ -154,8 +155,8 @@ So that every CLI reads it without being told, `relay link` adds a short owned s
 <!-- relay:begin -->
 This repository is managed with relay (project `demo`). Read `relay.md` before making changes; it holds the current
 decisions and preferences for this project.
-Issues labelled `agent:claude`, `agent:codex` or `agent:grok` are implemented by lanes on self-hosted runners that
-open pull requests from `relay/<lane>-<issue>` branches.
+Tasks for this repository are opened with `relay task create` on the team's board; relay workers (machines running
+`relay work`) claim them and open pull requests from `relay/<lane>-<task>` branches, which a person approves.
 Memory tools (MCP server `relay`): `relay_recall`, `relay_decide`, `relay_prefer`, `relay_guidance`, `relay_brief`,
 `relay_feed`, `relay_project`. Call `relay_recall` before choosing an approach and `relay_decide` when you settle one.
 <!-- relay:end -->
@@ -196,8 +197,8 @@ credential before saving (`--yes` saves anyway). `docs/INTEGRATIONS.md` has the 
 
 With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,
 `httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`,
-`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`,
-`relay webhook` and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`.
+`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`
+and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`.
 `relay task`, `relay steps run` and `relay work` use the team's Vercel Board in either mode, with the machine's own
 `vercel login` (`docs/WORKERS.md`). `relay link` still
 hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
@@ -210,7 +211,7 @@ nothing to repoint: with a site configured it opens no database and forwards eve
 `tools/list`, `tools/call`) to `<site>/mcp` with this machine's token, renewing the token before it lapses and once
 more if the site refuses it (`packages/mcp/src/bridge.ts`). The tool set, the descriptions and every answer are the
 site's, scope refusals and access hints included, so `relay_get_project` finds the projects registered on the site and
-a `relay_decide` from a session reaches the briefs the workers compile there. The server's first stderr line names its
+a `relay_decide` from a session reaches the briefs the site posts in new tasks' threads. The server's first stderr line names its
 mode (`relay-mcp: site mode, forwarding to <site> as <token name>` or `relay-mcp: local mode, <db path>`), and the
 `mcp` line of `relay doctor` says which mode the installed entry will use and, in site mode, that one `tools/list`
 against the site answered.
@@ -236,7 +237,6 @@ pnpm relay capture --transcript <path> [--source claude|codex|grok] [--dry-run] 
 pnpm relay memory history [--project <slug>] [--current]         # decisions including superseded ones
 pnpm relay task create --title <t> --lane claude|codex|grok|nodes|any [--model <id>] [--key <k>]   # open a task: a thread in the project's queue on the board (docs/WORKERS.md)
 pnpm relay task get <id> | relay task ls [--state review]                                  # the board's state; <id> is the board's message ID
-pnpm relay webhook add --url <url> --events pr.merged,run.failed [--bearer <k>] | ls | rm <id> | test <id>
 ```
 
 `relay decide` writes a `decision.captured` event, `relay prefer` a `preference.set` event, `relay link` a
@@ -264,8 +264,7 @@ Schema lives in `packages/core/src/db/migrations/NNN_name.sql`, applied in order
 | `skills` | provider-published skills installed under `~/.harness/skills` | `(name, model)` |
 | `events` | the append-only feed: who did what, with tokens and cost; `dedupe_key` makes webhook writes idempotent | `id` |
 | `tokens` | bearer tokens for the site: name, scopes, SHA-256 of the plaintext, revocation | `id` |
-| `tasks` | a GitHub issue relay opened or tracks as a task; state is derived from `events` (`docs/INTEGRATIONS.md`) | `id` = `owner/repo#n` |
-| `webhooks`, `webhook_deliveries` | outbound hooks (url, events, project, secret, bearer) and one row per delivery attempt set (`docs/FEED.md`) | `id` |
+| `settings` | sealed and plain settings of a site: the stored GitHub App, the cursor the ledger has read the board to | `key` |
 | `ledger` (view) | `events WHERE kind = 'step.usage'`; `relay usage` groups it by subscription | — |
 
 Full-text search uses `websearch_to_tsquery('english', …)` against the `tsv` columns; vector search uses the
@@ -281,16 +280,17 @@ retrieval falls back to full text.
 - `memory.ts`: `addDecision`, `supersedeDecision`, `listDecisions`, `searchDecisions`, `upsertPreference`, `listPreferences`
 - `events.ts`: `writeEvent`, `listEvents`, `usageSummary`
 - `tokens.ts`: `createToken`, `findToken`, `listTokens`, `revokeToken`, `TOKEN_SCOPES`
-- `tasks.ts`: `createTask`, `getTask`, `listTasks`, `taskState` / `deriveTaskStatus`, `listTaskViews`
-- `webhooks.ts`: `createWebhook`, `listWebhooks`, `matchingWebhooks`, `deleteWebhook`, the delivery log
 
 `repo.ts` re-exports all of them as one namespace (`repo.getModel(h.db, id)`). The `Ledger` class in
 `ledger/ledger.ts` is a thin adapter that writes `step.usage` events and holds the Gateway list-price table.
 
 Above the query layer: `brief/` (`compileBrief`, `renderRulesFile`, `mergedPreferences`), `rules/owned-section.ts`,
 `hooks/` (per-CLI installers, `planSetup`/`applyPlan`, the brief cache), `memory/capture.ts` (`captureDecisions`,
-`parseTranscript`, the gates), `tasks/create.ts` (`openTask`), `github/client.ts` (issues over an env token or `gh`),
-`webhooks/dispatch.ts` (signing, delivery, fan-out), `client/` (`RelayClient`: `localClient`, `httpClient`, site config).
+`parseTranscript`, the gates), `github/client.ts` (pull requests and issues over the GitHub App, an env token or
+`gh`), `client/` (`RelayClient`: `localClient`, `httpClient`, site config). Tasks and workers are not in the database:
+they live on the team's Vercel Board (`packages/core/src/board/`, `docs/WORKERS.md`). The tables of the earlier task
+model (`tasks`, `workers`, `claims`, `queue_state`, `webhooks`, `webhook_deliveries`) stay in the schema, unused; no
+shipped migration was edited.
 
 ### Configuration
 

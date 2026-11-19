@@ -1,8 +1,9 @@
 # Hosting the web app
 
-The web app (`apps/web`) is a Next.js app that shows the feed, projects and usage meters, serves the HTTP memory
-server, and ingests webhooks from GitHub and Vercel. It holds no vendor credentials: it only ever receives events
-and usage numbers that runners and GitHub send it. It deploys to Vercel with a Neon Postgres database.
+The web app (`apps/web`) is a Next.js app that shows the board, the feed, projects and usage meters, serves the HTTP
+memory server and the task API, and ingests webhooks from GitHub and Vercel. Tasks and workers are not in its
+database: it reads and writes them on the team's Vercel Board, as its own deployment (`docs/ARCHITECTURE.md`, "The
+site and the board"). It holds no vendor credentials. It deploys to Vercel with a Neon Postgres database.
 
 ## 1. Vercel project
 
@@ -25,14 +26,43 @@ Or from the CLI: `vercel link` in the repo root, then `vercel --cwd apps/web`.
 4. Locally, leave `DATABASE_URL` unset and the app runs on embedded PGlite. `vercel env pull` fetches the Neon URL
    into `.env.local` if you want to run against production data from your machine; do not commit that file.
 
+## 2b. The team's Vercel Board
+
+Tasks and workers live on the board of a Vercel team (`docs/WORKERS.md`, "The board"), and the site reaches it with
+its deployment's own identity, so there is no board credential to set.
+
+1. **The project must be on the team that owns the board.** A deployment of another team cannot read it, and every
+   page that shows tasks or workers says so in place of the board.
+2. **Grant the site the queues.** A team's projects start with read, post and label on its board. From a machine
+   whose Vercel login manages the board, run `relay setup --board --site-project <the Vercel project's name>`: it
+   grants the project's production deployment everything in `work/`, adds that deployment
+   (`vercel:project:<id>:production`) to the machine's `board.from` so its workers take the tasks the site opens,
+   and prints the `RELAY_BOARD_FROM` line for step 3 (`docs/WORKERS.md`, "A machine becomes a worker"). The same
+   command registers relay's schemas, once per team.
+3. **Tell the site whose blocks to believe.** Set `RELAY_BOARD_FROM` on the project to the worker logins, as
+   comma-separated actor IDs. The site counts a usage or run block only from its own deployment and those logins;
+   without it the feed shows tasks opening, being claimed and closing, and no run outcomes or usage.
+4. **Another board than the team's default** is `RELAY_BOARD_TEAM` and `RELAY_BOARD_NAME`, the same names a worker
+   reads.
+
+The board wakes the deployment at `https://<site>/api/board` for its two watchers, the ledger and the brief; the
+route needs no configuration and no session, since the board verifies its own wake-ups.
+
+Locally the site uses your `vercel login`, or the board at `BOARD_URL` (`npx vb serve` prints it). Nothing wakes a
+local server, so the pages that show the feed sync it themselves, at most every 15 seconds. With `RELAY_DATA=mock`
+the site runs on an in-memory demo board and needs no login.
+
 ## 3. Environment variables
 
-`.env.example` at the repo root lists every name the app reads. Set each one in Vercel → Project → Settings →
+`.env.example` at the repo root and `apps/web/.env.example` list the names the app reads. Set each one in Vercel → Project → Settings →
 Environment Variables (Production and Preview), or with `vercel env add NAME`.
 
 | Name | From | Used by |
 |---|---|---|
 | `DATABASE_URL` | Neon integration (automatic) | everything that touches Postgres |
+| `RELAY_BOARD_FROM` | the worker logins, as comma-separated actor IDs; `relay setup --board --site-project` prints the line | whose `relay-usage@1` and `relay-run@1` blocks the site believes, besides its own (step 2b) |
+| `RELAY_BOARD_TEAM`, `RELAY_BOARD_NAME` | optional: a team ID or slug, a named board | a board other than the default one of the project's own team |
+| `BOARD_URL` | local only: what `npx vb serve` prints | a local board in place of the team's |
 | `AI_GATEWAY_API_KEY` | Vercel → AI Gateway → API keys | embeddings for memory search; the optional overflow lane |
 | `GITHUB_WEBHOOK_SECRET` | you generate it (`openssl rand -hex 32`) | verifies `X-Hub-Signature-256` on the GitHub webhook |
 | `VERCEL_WEBHOOK_SECRET` | shown once when the Vercel webhook is created | verifies `x-vercel-signature` on the Vercel webhook |
@@ -46,16 +76,16 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | a second, public Blob store | `relay asset publish` and `POST /assets/{id}/publish` |
 | `RELAY_ASSET_SIGNING_KEY` | `openssl rand -hex 32` | signs local view/upload URLs and HTML bundle URLs |
 | `CRON_SECRET` | `openssl rand -hex 32` | Vercel sends it as a bearer to `/api/cron/assets-expire` (the daily retention sweep in `apps/web/vercel.json`) |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | opening tasks, asset comments, reopening rejected issues, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | merging a task's pull request on approval and deleting its branch, the comment on a pull request sent back, closing a closed task's pull request and issue, asset comments, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
 | `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
-| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | the fallback when no app is configured: asset comments, reopening rejected issues, opening tasks |
-| `RELAY_ALLOWED_SENDERS` | comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone), and who may open a task for a worker by labelling an issue (else the repo variable; with neither, nobody) |
+| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with contents, pull requests and issues write on the managed repos | the fallback when no app is configured, for the same merges, comments and closes |
+| `RELAY_ALLOWED_SENDERS` | comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone), and whose `agent:<lane>` label on an issue opens a task on the board (else the repo variable; with neither, nobody) |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
 | `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
 | `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
 | `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
-| `RELAY_PLAN_METERS` | optional JSON | a manual override for the header's plan meters, per meter id: `[{"id","label","subscription","percentUsed","resetsAt"}]`. The workers' own readings (Claude Code's 5-hour and weekly rate limits, saved by relay's status line on each machine) are kept by each worker in its message on the board (`docs/WORKERS.md`, "Plan meters"); the site reads them once it moves to the board, and until then this variable is what fills the header's bars. Set `max-week-fable` here to show a third Claude bar; nothing documented reports a per-model meter |
+| `RELAY_PLAN_METERS` | optional JSON | a manual override for the header's plan meters, per meter id: `[{"id","label","subscription","percentUsed","resetsAt"}]`. The workers' own readings (Claude Code's 5-hour and weekly rate limits, saved by relay's status line on each machine) are kept by each worker in its message on the board (`docs/WORKERS.md`, "Plan meters"), and the site reads the freshest one when this variable is unset. Set `max-week-fable` here to show a third Claude bar; nothing documented reports a per-model meter |
 
 Tokens for API clients come from the site's authorization server (`docs/INTEGRATIONS.md`: OAuth with consent for MCP
 clients, the device flow for CLIs and bots approved on `/activate`, invite codes from `relay invite create`) or from
@@ -103,9 +133,11 @@ Routes the proxy leaves public (info, docs, the well-known files, OpenAPI, llms.
 webhooks, the cron, signed asset URLs, and `/api/v1` with a bearer) and the ones that need a session are tabled in
 `docs/SECURITY.md`. Mock mode has no sign-in: it runs as the fake viewer `human:demo`.
 
-## 4b. GitHub App (tasks, comments, the task bus)
+## 4b. GitHub App (merges, comments, issue intake)
 
-The web app acts on GitHub as an App installed once per organization, so no person's token is stored anywhere. Two
+The web app acts on GitHub as an App installed once per organization, so no person's token is stored anywhere. It
+is the credential an approval on the site merges with (a worker and the CLI use the machine's own `gh` login), and
+its deliveries are how an `agent:<lane>` label on an issue opens a task and how a merge on GitHub completes one. Two
 ways to set it up; the environment always wins over a stored app, which is also how you rotate.
 
 **One click (fresh deployment).** Sign in, open `https://<site>/setup/github`, optionally name the organization that
@@ -235,4 +267,5 @@ Releases are staged, not published, by the workflow: pushing a `v<version>` tag 
 - [ ] GitHub org webhook created, recent deliveries return 200
 - [ ] Vercel webhook created for the projects that deploy previews
 - [ ] Custom domain resolves and `RELAY_PUBLIC_URL` matches it
-- [ ] A labelled test issue produces `run.started`, `step.usage`, `pr.opened` rows in the feed
+- [ ] The project is on the team that owns the board; `relay setup --board --site-project <name>` ran on a worker machine and `RELAY_BOARD_FROM` is set; the board page lists the workers
+- [ ] A test task (`relay task create`, or an issue labelled `agent:<lane>` by a login in `RELAY_ALLOWED_SENDERS`) shows on the board, and its run produces `task.created`, `run.started`, `step.usage`, `run.finished` and `pr.opened` rows in the feed

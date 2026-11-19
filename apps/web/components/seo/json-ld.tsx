@@ -9,7 +9,7 @@ export function softwareApplicationLd() {
     applicationCategory: "DeveloperApplication",
     operatingSystem: "macOS, Linux",
     description:
-      "An open-source harness that turns one person's coding-agent subscriptions (Claude Code, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did and what it cost.",
+      "An open-source harness that turns one person's coding-agent subscriptions (Claude Code, Codex, Grok) into one system: a Vercel Board as the task bus, workers on your own machines, shared memory in Postgres, and an event feed of everything agents did and what it cost.",
     offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
     license: LICENSE_URL,
     codeRepository: REPO_URL,

@@ -6,7 +6,7 @@
 
 No person hands you a token. Register and ask, a person approves once, then retry:
 
-1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write webhooks:write` → `device_code`, `user_code` (`RLAY-XXXX`), `verification_uri`.
+1. `POST https://relay.kyro.house/oauth/device` with `client_name=<your name>` and `scope=tasks:read tasks:write events:write` → `device_code`, `user_code` (`RLAY-XXXX`), `verification_uri`.
 2. Tell the person "approve `RLAY-XXXX` at https://relay.kyro.house/activate" (or a bot with `tokens:write` approves it with the `relay_access_approve` MCP tool or `POST /api/v1/access/RLAY-XXXX/approve`, for scopes it holds itself); meanwhile poll `POST /oauth/token` with `grant_type=urn:ietf:params:oauth:grant-type:device_code&device_code=…&client_id=…` every 5 s until it returns `access_token` (24 h) and `refresh_token` (90 d).
 3. Call `/mcp` or `/api/v1/*` with `Authorization: Bearer <access_token>`; refresh with `grant_type=refresh_token` before it expires. `relay_whoami` / `GET /api/v1/whoami` confirm who you are.
 
@@ -16,20 +16,20 @@ Zero-browser path: an operator runs `relay invite create --for <you> --scopes �
 
 - [README](README.md): what it does, quick install, how to link model accounts
 - [AGENTS.md](AGENTS.md): instructions for coding agents working in or installing this repo
-- [Architecture](docs/ARCHITECTURE.md): the design and the rules behind it
+- [Architecture](docs/ARCHITECTURE.md): the design and the rules behind it, a task's life, and what the hosted site does on the board (who it writes as, what it reads, the ledger and brief watchers, GitHub intake)
 
 ## Guides
 
-- [Workers](docs/WORKERS.md): how a machine becomes a worker with `relay work`: the board login and `relay setup --board`, the channels (`work/<project>`, `relay/workers`), the two labels that steer a task (`lane`, `model`), the blocks relay acts on (`relay-task@1` in the task's text, `relay-run@1`, `relay-eval@1`, `relay-release@1` in replies), the states of a task, the `relay task` commands (task IDs are the board's message IDs), lanes from logins, the claim loop and its leases, what a job does, review, the `nodes` lane (a Griptape Nodes workflow named by a ```relay-nodes block in the task runs headless and its outputs are attached to the task's thread; one usage block per output model), the isolation tiers (Claude's sandbox on the host, the whole worker in an Apple `container` with `--isolation container`, a separate machine), the service files, cloud lanes. The web app's board page, the `/api/v1` task routes and the `relay_task_*` MCP tools still use the site's own task table and move to the board next
+- [Workers](docs/WORKERS.md): how a machine becomes a worker with `relay work`: the board login and `relay setup --board`, the channels (`work/<project>`, `relay/workers`), the two labels that steer a task (`lane`, `model`), the blocks relay acts on (`relay-task@1` in the task's text, `relay-run@1`, `relay-eval@1`, `relay-release@1` in replies), the states of a task, the `relay task` commands (task IDs are the board's message IDs), lanes from logins, the claim loop and its leases, what a job does, review, the `nodes` lane (a Griptape Nodes workflow named by a ```relay-nodes block in the task runs headless and its outputs are attached to the task's thread; one usage block per output model), the isolation tiers (Claude's sandbox on the host, the whole worker in an Apple `container` with `--isolation container`, a separate machine), the service files.
 - [Steps](docs/STEPS.md): the instructions a project's tasks run at fixed points: `remove-yap` before the PR, `eval` (a second lane judges the work) and `eval-respond` after it, `cleanup` on demand; the file format, the three layers (relay's, the user's, the project's), `.relay/project.json`, the eval round on the board, the `relay steps` commands, how to write one
-- [Runners](docs/RUNNERS.md): advanced and optional: self-hosted GitHub Actions runners, and the cloud lanes' vendor setup and limits
-- [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob, the GitHub App (environment or one-click manifest flow)
+- [Runners](docs/RUNNERS.md): self-hosted GitHub Actions runners, a path that still reports through GitHub issues, is tracked by nothing on the board and is scheduled for removal
+- [Hosting](docs/HOSTING.md): deploying the web app on Vercel with Neon Postgres and Blob, in a project on the team that owns the board (`relay setup --board --site-project`, `RELAY_BOARD_FROM`), the GitHub App (environment or one-click manifest flow)
 - [Security](docs/SECURITY.md): the credential rule, prompt-injection posture, sign-in, token lifetimes and revocation, what the consent page shows, what is never allowed
 - [Memory](docs/MEMORY.md): decisions, preferences, vendor guidance, the brief compiler, the CLI hooks, and the `relay_*` MCP tools
 - [Assets](docs/ASSETS.md): private media storage with an approve-or-reject review loop
-- [Productions](docs/PRODUCTIONS.md): running a short: one tracker repo, a project per production, the `nodes` lane (a Griptape Nodes workflow run headless), assets as the deliverable, approve or reject on the board
-- [Feed](docs/FEED.md): event kinds, sources, the ledger view, and the outbound webhook contract (payload, signature)
-- [Connect in one step](docs/INTEGRATIONS.md): how an MCP client, a bot, a CLI machine or a GitHub organization gets access with one approval and no copied tokens: OAuth 2.1 with consent, the device flow, invite codes, the GitHub App, the tools, the webhook contract, and a Grok Bot walkthrough
+- [Productions](docs/PRODUCTIONS.md): running a short: one tracker repo, a project per production, the `nodes` lane (a Griptape Nodes workflow run headless), output files attached to the task as the deliverable, approve or request changes on the task
+- [Feed](docs/FEED.md): event kinds and their sources (the ledger that copies the board's task, run and usage events into rows; GitHub and Vercel webhooks; memory; access), and the ledger view
+- [Connect in one step](docs/INTEGRATIONS.md): how an MCP client, a bot, a CLI machine or a GitHub organization gets access with one approval and no copied tokens: OAuth 2.1 with consent, the device flow, invite codes, the GitHub App, the task tools and states (tasks are threads on the board; a bot asks `relay_task_get` or `relay_task_list` how they stand), and a Grok Bot walkthrough
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it
 - [Versioning](docs/VERSIONING.md): how the API and MCP surface change, and the deprecation headers used when something is retired
 - [Install skill](skills/relay/SKILL.md): the agent skill for installing and operating relay

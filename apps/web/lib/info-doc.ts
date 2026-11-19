@@ -11,7 +11,7 @@ export function infoDocument() {
     version: APP_VERSION,
     tagline: TAGLINE,
     description:
-      "An open-source harness that turns one person's coding-agent subscriptions (Claude Code, Codex, Grok) into one system: GitHub issues as the task bus, self-hosted runners on your own machines, shared memory in Postgres, and an event feed of everything agents did and what it cost.",
+      "An open-source harness that turns one person's coding-agent subscriptions (Claude Code, Codex, Grok) into one system: a Vercel Board as the task bus, workers on your own machines, shared memory in Postgres, and an event feed of everything agents did and what it cost.",
     license: "Apache-2.0",
     free: true,
     repository: REPO_URL,
@@ -23,7 +23,7 @@ export function infoDocument() {
       summary: "A coding agent inside a repository, on a machine with the user's logins, links it itself.",
       join: `npx @kyleroche/relay setup --site ${SITE_URL}   # once per machine; prints a code the person approves at ${SITE_URL}/activate, or use --invite <code>`,
       link: "npx @kyleroche/relay link   # in the repository: registers the project, digests, writes relay.md, owned section, agent:<lane> labels (gh login); --no-digest skips the claude digest",
-      work: "npx @kyleroche/relay work --install   # optional: this machine executes the repo's tasks; --yes installs the service",
+      work: "npx @kyleroche/relay work --install   # optional: this machine executes the repo's tasks from the team's Vercel Board (vercel login and relay setup --board first); --yes installs the service",
       docs: `${SITE_URL}/llms.txt`,
     },
     rules: RULES.map((r, i) => ({ n: i + 1, title: r.title, body: r.body })),

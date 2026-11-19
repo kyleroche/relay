@@ -4,12 +4,12 @@
 
 relay turns Claude Code, Codex, and Grok Build into a team that shares memory, picks up tasks from your team's Vercel Board, runs on machines you own, and shows you everything it did and what it cost. No new agent to learn, no tokens leaving your machines.
 
-> Status: alpha, deployed. The reference deployment is [relay.kyro.house](https://relay.kyro.house); its public pages, API, and MCP endpoint are open to agents and it scores 100/100 on [is-agentic.com](https://is-agentic.com/scan/relay.kyro.house). Workers and the CLI's task commands run on Vercel Board; the web app's board page and task API still use the site's own task table and move to the board next.
+> Status: alpha, deployed. The reference deployment is [relay.kyro.house](https://relay.kyro.house); its public pages, API, and MCP endpoint are open to agents and it scores 100/100 on [is-agentic.com](https://is-agentic.com/scan/relay.kyro.house). Tasks live on your team's Vercel Board: the CLI, the workers, the web app, its API and its MCP tools all work on the same threads.
 
 ## What you get
 
 - **One memory.** Decisions made in Codex show up in Claude and Grok. A generated rules file in each repo plus a small MCP server keep every tool on the same page.
-- **Work from anywhere.** Open a task with `relay task create` from any machine that has your Vercel login. A worker on your own machine claims it, opens a PR and holds the task for your review. `relay task approve` merges the pull request the worker opened for that task and nothing else; `relay task changes --note` sends it back and the next run reads the note; a task that failed or is on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the task text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
+- **Work from anywhere.** Open a task with `relay task create` from any machine that has your Vercel login, from a chat bot through the site's MCP tools, or by labelling a GitHub issue `agent:<lane>` where the site is connected to the repository. A worker on your own machine claims it, opens a PR and holds the task for your review. `relay task approve` merges the pull request the worker opened for that task and nothing else; `relay task changes --note` sends it back and the next run reads the note; a task that failed or is on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the task text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
 - **A second opinion before yours.** A project lists the steps its tasks run: comment cleanup before the PR opens, a second lane that judges the finished work and the first lane's answer to each finding, a cleanup pass on demand. Steps are Markdown files you can replace ([docs/STEPS.md](docs/STEPS.md)).
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
@@ -28,7 +28,7 @@ Or by hand, with Node 24 or newer and no checkout:
 npx @kyleroche/relay setup --site https://relay.example.com   # join a hosted relay (device flow or --invite <code>); skip for a single machine
 npm install -g @kyleroche/relay   # the relay command; doctor's path line says what to do if the shell cannot find it
 vercel login                      # the tasks live on your team's Vercel Board, which takes this machine's own login (Vercel CLI 66 or newer)
-relay setup --board               # checks that login on the board, saves which board and whose tasks, registers relay's schemas
+relay setup --board               # checks that login on the board, saves which board and whose tasks, registers relay's schemas (--site-project <name> also takes the tasks a hosted relay opens)
 relay doctor                      # what is installed, logged in, reachable, and which lanes this machine can serve
 npx @kyleroche/relay work --install --yes   # this machine becomes a worker: a service that claims and runs tasks for those lanes (add --isolation container to run it all in a Linux container; then `relay work container login all` makes the logins inside)
 npx @kyleroche/relay setup      # hooks + memory server into each CLI you have, and Claude Code's plan-meter status line; --yes writes
@@ -104,11 +104,11 @@ See [docs/MEMORY.md](docs/MEMORY.md) for the data model, the brief compiler and 
 
 ## How it fits together
 
-A task is a thread in its project's queue on your team's Vercel Board. A `lane` label picks the lane; where the work happens is in the task's own text, and what a run produced is in blocks the board verifies the author of. Workers (your machines running `relay work`) claim tasks from the board, run the vendor CLI in a fresh clone, open a PR on GitHub and report in the task's thread; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the feed, projects, workers, and usage. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker, and [docs/STEPS.md](docs/STEPS.md) for the steps a project runs around a task.
+A task is a thread in its project's queue on your team's Vercel Board. A `lane` label picks the lane; where the work happens is in the task's own text, and what a run produced is in blocks the board verifies the author of. Workers (your machines running `relay work`) claim tasks from the board, run the vendor CLI in a fresh clone, open a PR on GitHub and report in the task's thread; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the board, the feed, projects, workers, and usage; it is one more caller on the board, and copies what happens there into the feed. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker, and [docs/STEPS.md](docs/STEPS.md) for the steps a project runs around a task.
 
 ## Hosting
 
-The web app deploys to Vercel with a Neon Postgres database. Locally it runs on an embedded Postgres with no setup. See `docs/HOSTING.md`.
+The web app deploys to Vercel with a Neon Postgres database, in a project on the Vercel team that owns the board. Locally it runs on an embedded Postgres and a demo board with no setup. See `docs/HOSTING.md`.
 
 ## Contributing
 
