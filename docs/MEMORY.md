@@ -89,7 +89,7 @@ Nothing reads memory inside the model loop. Memory is injected at two edges and 
    `rate_limits.seven_day` as `{used_percentage, resets_at}`, the only documented source of the plan usage the web
    app's header shows (relay's own ledger counts only relay's runs). The script writes them to
    `~/.harness/meters/claude.json` (`{subscription, five_hour, seven_day, captured_at}`, written to a temp file and
-   renamed, mode 0600) and nothing else; `relay work` sends the fresh readings with every heartbeat
+   renamed, mode 0600) and nothing else; `relay work` keeps the fresh readings in its message on the board
    (`docs/WORKERS.md`, "Plan meters"). A status line already configured is kept: setup records it in
    `~/.harness/statusline.prev.json`, relay's script runs it with the same stdin and passes its output through, and
    `relay setup --remove` puts it back. Without one, the script prints `<model> · <cwd> · 5h 42% · 7d 44%`.
@@ -196,8 +196,10 @@ credential before saving (`--yes` saves anyway). `docs/INTEGRATIONS.md` has the 
 
 With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,
 `httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`,
-`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`, `relay task`,
-`relay webhook` and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay link` still
+`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`,
+`relay webhook` and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`.
+`relay task`, `relay steps run` and `relay work` use the team's Vercel Board in either mode, with the machine's own
+`vercel login` (`docs/WORKERS.md`). `relay link` still
 hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
 `step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`; scope `projects:write`).
 `relay doctor` reports `mode`, `auth` (how the machine got its token, its name and expiry), `site`, `whoami` and `mcp`.
@@ -232,8 +234,8 @@ pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]
 pnpm relay prefer <key> <value> --scope lane --id grok
 pnpm relay capture --transcript <path> [--source claude|codex|grok] [--dry-run] [--all]
 pnpm relay memory history [--project <slug>] [--current]         # decisions including superseded ones
-pnpm relay task create --title <t> --lane claude|codex|grok [--priority <p>] [--key <k>]   # open a task (GitHub issue with the lane label)
-pnpm relay task get <owner/repo#n> | relay task ls [--state review]                        # derived state from the feed
+pnpm relay task create --title <t> --lane claude|codex|grok|nodes|any [--model <id>] [--key <k>]   # open a task: a thread in the project's queue on the board (docs/WORKERS.md)
+pnpm relay task get <id> | relay task ls [--state review]                                  # the board's state; <id> is the board's message ID
 pnpm relay webhook add --url <url> --events pr.merged,run.failed [--bearer <k>] | ls | rm <id> | test <id>
 ```
 

@@ -1,7 +1,7 @@
 # Runners (advanced, optional: GitHub Actions runners)
 
-> **The default is a worker, not a runner.** relay schedules its own tasks: the machine that installs relay runs
-> `relay work` and claims queued tasks straight from the relay site, with no GitHub Actions runner, no organization
+> **The default is a worker, not a runner.** The machine that installs relay runs `relay work` and claims ready
+> tasks straight from the team's Vercel Board, with no GitHub Actions runner, no organization
 > and no per-repo execution workflow. Read `docs/WORKERS.md` first; this page remains for two optional paths: the
 > cloud lanes' setup and limits (below), and self-hosted GitHub Actions runners for people who already operate them
 > and want GitHub's Actions UI, runner groups and the `relay-caller.yml` / `relay-review.yml` workflows.

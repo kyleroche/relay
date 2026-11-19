@@ -17,7 +17,11 @@ change to relay would weaken any rule here, it needs a decision in `docs/ARCHITE
   (`packages/core/src/work/job.ts`) unset `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
   `OPENAI_API_KEY` and `XAI_API_KEY` so a stray key can never make a lane run outside the subscription or act as
   someone other than the machine's operator, and `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` so the lane never sees
-  the worker's own site credential or its `~/.harness`.
+  the worker's own site credential or its `~/.harness`. The worker's `cleanEnv` also drops `BOARD_TOKEN`,
+  `BOARD_URL`, `BOARD_PROFILE`, `VERCEL_TOKEN`, `VERCEL_AUTH_TOKEN` and `VERCEL_OIDC_TOKEN`.
+- A worker holds no relay credential. It reaches the team's Vercel Board, where the tasks live, with the machine's
+  own `vercel login` (`BOARD_TOKEN` in CI), and what it may claim and write there is what the board's grants give
+  that login. A lane never talks to the board; the worker does.
 - API keys for pay-per-token overflow lanes (`AI_GATEWAY_API_KEY`) live in Vercel's environment for the web app and
   nowhere else; runners do not have them.
 
@@ -33,8 +37,19 @@ data, never as instructions:
   issue does nothing; labelling it needs triage permission and an allowlisted login. The web app applies the same
   gate when an `agent:<lane>` label arrives by webhook and would become a task for a worker (`senderMayOpenTasks`,
   `apps/web/lib/webhooks/usage.ts`): the label's sender must be in `RELAY_ALLOWED_SENDERS` (the environment, else
-  the repo's Actions variable), and when neither is set nobody may open a task that way. `relay task create` and
-  the API need a `tasks:write` token instead.
+  the repo's Actions variable), and when neither is set nobody may open a task that way. The site's API needs a
+  `tasks:write` token instead. On the board, `relay task create` acts as the caller's own Vercel login, and a
+  worker claims only tasks whose owner is its own login or one named in `board.from` (`relay setup --board --from`):
+  a task's text is instructions for whoever claims it, so that list is who the machine takes instructions from.
+- **What relay acts on, on the board.** Anyone who may label in a channel can set any label, so labels only steer
+  (`lane`, `model`). Where a worker clones and what issue a task answers come from the `relay-task@1` block in the
+  task's own text, which is its owner's: the board holds a task whose root someone else edits. How a run ended, an
+  eval's verdict and a gate release are blocks in replies, whose author the board verifies, and a worker counts them
+  only from its own login, the owners in `board.from` and their profiles. The pull request an approval merges is the
+  one the hold's reason names, which only the claim that held the task could write, and it is merged only if its
+  head is a branch relay pushed for that task (`relay/<lane>-<8 hex of the task ID's hash>`). A worker pushes only
+  its own branch for the task, or, when it answers an eval, the branch the earlier run's `relay-run@1` block names
+  and only when that is also a branch relay pushed for the task; never one a label or a block alone names.
 - **How text reaches the shell.** Issue and PR title and body are passed only through `env:`. No `${{ }}` with
   user-controlled content appears inside a `run:` script, so a title like `"; rm -rf ~` is a string, not a command.
 - **How text reaches the model.** `run-lane.sh` writes the issue into the brief between `<<<ISSUE` and `ISSUE>>>`
@@ -43,9 +58,11 @@ data, never as instructions:
   come first in the brief, the issue after.
 - **What the model can do anyway.** Even a fooled model is boxed by the CLI's permission model: Claude Code runs
   with `--permission-mode acceptEdits`, an allowlist of named commands (`Read, Edit, Write, Glob, Grep`, `Bash(git
-  status|diff|log|add|commit|checkout|restore *)`, `Bash(pnpm install|test|typecheck|build *)`, `Bash(pnpm -r *)`,
-  `Bash(npm test*)`) and a refusal list (`--disallowedTools`) for `git push`, `git -c`, `git config`, `git remote`,
-  `pnpm dlx`, `pnpm exec`, `npm exec`, `npx`, `curl` and `wget` (`CODE_TOOLS` and `CODE_DISALLOWED_TOOLS` in
+  status|diff|log|add|commit|checkout|restore *)`, `Bash(pnpm install|test|typecheck|build|lint *)`, `Bash(pnpm run
+  *)`, `Bash(pnpm -r *)`, `Bash(npm ci|install|test *)`, `Bash(npm run *)`, `Bash(npx tsc|eslint|vitest|next|prettier
+  *)`, `Bash(yarn install|test|build|lint *)`, `Bash(yarn run *)`) and a refusal list (`--disallowedTools`) for
+  `git push`, `git -c`, `git config`, `git remote`, `curl` and `wget`; anything on neither list (`pnpm dlx`, `pnpm
+  exec`, `npm exec`, any other `npx`) is a question, which `-p` mode refuses (`CODE_TOOLS` and `CODE_DISALLOWED_TOOLS` in
   `packages/core/src/work/job.ts`, the same lists in `run-lane.sh`); Codex runs with `--sandbox workspace-write`;
   Grok with `--permission-mode acceptEdits`; fx with `--auto` under its own permission rules. Reviews are read-only
   (`plan` modes, `--sandbox read-only`). Subagents and planners are disabled (`-c agents.enabled=false`,
@@ -59,7 +76,7 @@ data, never as instructions:
   directory. The worktree is deleted after the job. On a worker (`relay work`) the lane runs as the worker's own OS
   user; "Workers" below says what that means and how to set the machine up.
 - **What happens to the output.** The lane cannot merge. The lane itself cannot push (`git push` is on the refusal
-  list); the worker or runner pushes a `relay/<lane>-<issue>` branch with `--force-with-lease` and opens a PR that a
+  list); the worker or runner pushes its own `relay/<lane>-…` branch with `--force-with-lease` and opens a PR that a
   human approves; a second lane on a different model reviews it first. **Branch protection on the default branch is
   required**, not optional: the account that pushes is the operator's own `gh` login, so without protection a fooled
   lane that found another way to run `git push` could land on `main`. Require the review and a passing CI run, and
@@ -70,17 +87,18 @@ else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded fr
 
 ### The gate
 
-Before a worker runs a task, relay grades the task's text (`packages/core/src/tasks/gate.ts`): the issue title and
-body as the lane would see them, plus the latest `task.changes_requested` note, capped at 20 KB. A flagged task is
-**held**: the worker gives its claim back, writes `task.held` with the score and the reasons, and no worker claims it
-again until a person (or a `tokens:write` bot) releases it. **This is a tripwire in front of the sandbox, not a
-boundary.** What contains a fooled lane is the OS sandbox, the tool allowlist and branch protection above; the gate
+Before a worker runs a task, relay grades the task's text (`packages/core/src/tasks/gate.ts`): the title and
+body as the lane would see them, plus the notes in the task's thread, capped at 20 KB. A flagged task is
+**held**: the worker holds it on the board with kind `gate` and the score and the reasons as the hold's reason, and
+no worker claims it again until its owner, or someone who manages its channel, lifts the hold. **This is a tripwire
+in front of the sandbox, not a boundary.** What contains a fooled lane is the OS sandbox, the tool allowlist and branch protection above; the gate
 only keeps the obvious cases from costing a run, and a text that passes it is still treated as data by the brief.
 
 Two graders, in order:
 
-1. **The pre-check**, deterministic, no model call, runs everywhere the text is seen, including on the site when a
-   task is created over MCP or REST (the site has no vendor login, so this is the only part that runs at creation).
+1. **The pre-check**, deterministic, no model call, runs everywhere the text is seen: when `relay task create`
+   opens a task on the board (the task is made out of every worker's reach and a hit is held before any sees it ready), and on the site when
+   a task is created over MCP or REST (the site has no vendor login, so this is the only part that runs at creation).
    It holds when the text matches any of these markers (`GATE_MARKERS`): `ignore previous instructions` (and
    "disregard / forget / override … prior / above / all / your … instructions / rules / guidance / prompt"),
    `curl … | sh` (or `wget`, piped into any shell), `.ssh`, `credentials.json`, `GITHUB_TOKEN` (and `GH_TOKEN`),
@@ -89,14 +107,14 @@ Two graders, in order:
    (`$RELAY_HOME`, `.harness/credentials`). A hit is `grader: precheck`, score 1, one reason per marker. These words
    have honest uses (an issue about relay itself will name `GITHUB_TOKEN`); the cost of a false hold is one click on
    the task page.
-2. **The model grade**, on the worker, after the clone and before `run.started`: one call on the utility lane (Sonnet
+2. **The model grade**, on the worker, after the clone and before the lane runs: one call on the utility lane (Sonnet
    by default; `RELAY_GATE_MODEL=fable|opus|sonnet` overrides) through the Claude adapter with no tools,
    `--setting-sources ""`, MCP servers off, no instruction files or memory, and structured output against the schema
    `{ verdict: "clear" | "hold", score: 0..1, reasons: string[] }`. The prompt names what to look for (exfiltration or
    credential access; changes to CI, hooks, git config, package scripts or dependencies that execute code; contacting
    hosts; "ignore previous instructions"; disabling safety or pushing to a protected branch; anything addressed to the
    model) and puts the text under a `<<<TASK … TASK>>>` fence as data; the only output is the grade. The call is a
-   `step.usage` row on lane `gate`, like every other model call. Measured 2026-10-17 on Sonnet: about 5.1 K context
+   `relay-usage@1` block of kind `gate` in the task's thread, like every other model call of a job. Measured 2026-10-17 on Sonnet: about 5.1 K context
    tokens per grade (the system context, the prompt and the text; cache-written on the first call, 2.2 K of it read
    back on the next), 170 to 200 output tokens, 4 seconds, $0.010 to $0.014 equivalent. A benign dark-mode request
    graded `clear` at 0.03; a body asking for a postinstall that fetches a URL and a committed `.env` graded `hold` at
@@ -106,13 +124,19 @@ A grader that cannot run (no Claude login on a codex-only worker, a timeout) doe
 is `clear` with the error recorded, the worker logs `gate unavailable`, and the job runs under the sandbox as it would
 have without the gate. Set `RELAY_GATE=off` on such a worker to say so on purpose.
 
-Releasing: the task page's Held card ("Release", two clicks), `relay task release <id> [--note]`,
+Releasing, on the board: `relay task release <id>` posts a `relay-release@1` block with the digest of the text as it
+stands (the title, the body, the notes in the thread), then lifts the hold. The board lets only the task's owner, or
+someone with `manage` in its channel, lift a hold, and a worker takes the block only from an author it takes work
+from. The task is `queued` again and that text is not graded a second time; text added to the thread afterwards
+changes the digest and is graded. `relay task requeue` on a held task lifts the hold with no release, so the next
+job grades the same text again.
+
+Releasing, on the site's own task table: the task page's Held card ("Release", two clicks),
 `relay_task_release({id, note?})` or `POST /api/v1/tasks/<owner>/<repo>%23<n>/release`. A signed-in person may release
 anything held; a bot needs `tokens:write` (not `tasks:write`: releasing is vouching for text, the same trust as
 approving another agent's access) and never releases a task it opened itself. `task.released` folds the task back to
-`queued`; the next worker grades it again, so a pre-check hit holds it again unless the issue is edited or that worker
-runs with `RELAY_GATE=off`. Requeue from the Held card does the same without the gate's blessing: it is a release by
-another name, so the same people may do it.
+`queued`. Requeue from the Held card does the same without the gate's blessing: it is a release by another name, so
+the same people may do it.
 
 ## Workers (`relay work`)
 
@@ -126,7 +150,8 @@ State the facts plainly:
   `.claude/settings.json` in the clone can loosen it. Inside it, every Bash command and every child process (git,
   pnpm, a repository's own scripts, a git hook) may write only inside the clone and the pnpm/npm stores, may not read
   `~/.harness`, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.grok`, `~/.fx`, `~/.ssh`, `~/.aws`, `~/.config/gh`,
-  `~/.netrc`, `~/.npmrc` or `~/.gitconfig`, and may reach only the package registries and GitHub download hosts on the
+  `~/.netrc`, `~/.npmrc`, `~/.gitconfig` or the login the worker reaches the board with (the Vercel CLI's auth
+  directories, `~/.vercel`, `~/.config/board`), and may reach only the package registries and GitHub download hosts on the
   network allowlist (`strictAllowlist`; `RELAY_LANE_ALLOWED_DOMAINS` adds hosts) through Claude Code's local proxy.
   `failIfUnavailable` and `allowUnsandboxedCommands: false` mean a machine that cannot sandbox fails the job with a
   message saying what to install; nothing ever falls back to running unsandboxed. Verified on macOS with Claude Code
@@ -139,14 +164,14 @@ State the facts plainly:
   workspace-write` is that vendor's own sandbox; Grok and fx have no OS sandbox, and run under their permission modes
   alone.
 - **The permission allowlist (`CODE_TOOLS`, `CODE_DISALLOWED_TOOLS`) is the second layer.** It limits which tool
-  calls Claude Code accepts without asking (named git and pnpm subcommands; no push, no package runners, no
-  fetchers); the sandbox limits what those commands can reach once they run. Either alone is weaker than both.
+  calls Claude Code accepts without asking (named git, pnpm, npm, yarn and npx subcommands; no push, no git
+  config, no fetchers); the sandbox limits what those commands can reach once they run. Either alone is weaker than both.
 - **`relay work --no-sandbox` is the escape hatch, and it is recorded.** The worker logs a warning on start, says
-  `sandbox OFF` in its banner line, and registers with the label `sandbox:off`, which the workers page shows. Use it only on a machine where
+  `sandbox OFF` in its banner line, and advertises the label `sandbox:off` in its message in `relay/workers`, which `relay work status` shows. Use it only on a machine where
   the Claude lane's Bash may run with the full rights of the worker's OS user.
 - **The lane still runs as the worker's OS user.** The sandbox denies the credential paths above, but any other file
-  that user can read, a fooled lane can read; `cleanEnv` strips the API keys and the worker's `RELAY_TOKEN`,
-  `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is deleted after
+  that user can read, a fooled lane can read; `cleanEnv` strips the API keys, the board's and Vercel's tokens and
+  the worker's `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` from the lane's environment, and the clone under `$RELAY_HOME/work` is deleted after
   the job. The next tier is the container worker below.
 - **`relay work --isolation container` is the recommended setup on a Mac** (docs/WORKERS.md, "Isolation"). The
   whole worker runs in one persistent Linux VM made with Apple's `container` CLI: the vendor and `gh` logins are
@@ -155,7 +180,8 @@ State the facts plainly:
   there (the container is created with the runtime's `/proc` masks off for that reason; verified on `container`
   1.5.0 with Anthropic's sandbox runtime); when it cannot, the lane runs with the allowlist alone and the worker says
   so with the label `sandbox:container`, never `sandbox:off`. The worker registers as `<host>-container` with
-  `isolation:container`, so the workers page shows which machine is a container. What it does not change: the lane
+  `isolation:container`, so `relay work status` shows which machine is a container. The worker inside reaches the board
+  with a Vercel login of its own, made inside the container (`relay work container login vercel`). What it does not change: the lane
   still pushes as the `gh` account inside, so branch protection stays required; the logins inside are real logins,
   destroyed only by deleting the volume (`relay work container rm --volume`); and the container's network is the
   Mac's, limited only by the nested sandbox's allowlist for the Claude lane.
@@ -166,9 +192,11 @@ State the facts plainly:
 - **Linux prerequisites.** `bubblewrap` and `socat` must be on PATH (`sudo apt install bubblewrap socat`, or `dnf`);
   `relay doctor` has a `sandbox` line that says so. macOS needs nothing extra.
 - **Branch protection on the default branch is required.** The worker pushes with the operator's `gh` login; only the
-  repository's rules keep a `relay/<lane>-<issue>` branch from becoming `main` without a review.
-- Set `RELAY_ALLOWED_SENDERS`: it is what keeps a label added by anyone with triage on a linked repo from becoming a
-  job on your machine.
+  repository's rules keep a `relay/<lane>-…` branch from becoming `main` without a review.
+- Keep `board.from` short: a worker runs its own login's tasks and those of the owners that list names, and the
+  board's grants decide who may make a task in a project's queue. `RELAY_ALLOWED_SENDERS` is the same gate for the
+  site's webhook and for Actions runners: it keeps a label added by anyone with triage on a linked repo from
+  becoming a task.
 
 ## Runner isolation
 
@@ -205,7 +233,7 @@ These are refused in code review regardless of who asks or why:
 - Giving the runner OS user sudo, SSH keys, or access to another user's home directory.
 - Sending a transcript, or anything other than the brief, to a model; storing transcripts in memory.
 - Letting the lane merge, force-push to a protected branch, or push anything other than its own
-  `relay/<lane>-<issue>` branch (`--force-with-lease` on that branch only).
+  `relay/<lane>-…` branch (`--force-with-lease` on that branch only).
 - Adding a non-official source domain to the onboarding registry without a user allowlist entry.
 
 ## Reporting

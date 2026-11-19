@@ -5,21 +5,26 @@ bots, runners and lanes all write the same shape: a `kind`, an `actor`, where it
 `project`), optional usage numbers, a one-line `summary`, a `url`, and the raw `payload`. The web app's feed page is
 a time-ordered view over this table; the `ledger` view is the subset with `kind = 'step.usage'`.
 
+> **The site moves next.** A worker (`relay work`) runs on the team's Vercel Board and reports there: its runs, its
+> usage (`relay-usage@1` blocks) and the gate's holds are in the task's thread, and the worker itself is a message in
+> `relay/workers` (`docs/WORKERS.md`). Nothing writes the `worker.*` rows, or a worker's `run.*`, `step.usage` and
+> `task.held` rows, into this table until the site reads the board, which is the next step. The rows that come from
+> GitHub webhooks, memory, assets and the site's own task routes are written as described.
+
 ## Event kinds
 
 | Kind | Source | Actor | Fields set | Summary line |
 |---|---|---|---|---|
 | `issue.opened` | GitHub webhook `issues` (opened) | `human:<login>` or `bot:<login>` | repo, issue, url | issue title |
 | `issue.labeled` | GitHub webhook `issues` (labeled, `agent:*` labels only) | `human:<login>` | repo, issue, lane | `agent:<lane>` |
-| `worker.registered` | `POST /api/v1/workers` the first time a machine runs `relay work` (docs/WORKERS.md) | `runner:<worker name>` | payload.worker (id), host, lanes, labels, version | name and lanes |
-| `worker.online` | `POST /api/v1/workers` when a worker comes back after an offline report | `runner:<worker name>` | payload.worker, host, lanes, labels, version | name and lanes |
-| `worker.offline` | `POST /api/v1/workers/{id}/heartbeat` with `status: offline` (a clean shutdown) | `runner:<worker name>` | payload.worker, host | name |
-| `worker.forgotten` | `DELETE /api/v1/workers/{id}`, `relay work forget <name>`, the Forget button on /workers: a retired worker's row removed (docs/WORKERS.md, "Retiring a worker") | `human:<login>` or `bot:<token name>` (the caller, not the worker) | payload.worker (id), name, host, lanes, labels, version, last_seen | name and last sighting |
-| `run.started` | `POST /api/v1/work/{task}/start` from a worker holding the lease (or GitHub webhook `workflow_job` in_progress on an optional Actions runner) | `runner:<worker name>` | repo, issue, lane, url (issue), payload.worker, branch, labels, claim | lane and worker |
-| `run.finished` | `POST /api/v1/work/{task}/release` with `outcome: finished` (or `workflow_job` completed) | `runner:<worker name>` | repo, issue, pr, lane, url (the PR), duration_ms, payload.conclusion, payload.claim | the lane's first summary line |
-| `run.failed` | `POST /api/v1/work/{task}/release` with `outcome: failed` (the CLI failed, timed out, or changed nothing) | `runner:<worker name>` | repo, issue, lane, duration_ms, payload.error, payload.claim | the error |
+| `worker.registered` | the first time a machine runs `relay work` (docs/WORKERS.md) | `runner:<worker name>` | payload.worker (id), host, lanes, labels, version | name and lanes |
+| `worker.online` | a worker comes back after an offline report | `runner:<worker name>` | payload.worker, host, lanes, labels, version | name and lanes |
+| `worker.offline` | a clean shutdown | `runner:<worker name>` | payload.worker, host | name |
+| `run.started` | a worker holding the lease starts the run (or GitHub webhook `workflow_job` in_progress on an optional Actions runner) | `runner:<worker name>` | repo, issue, lane, url (issue), payload.worker, branch, labels, claim | lane and worker |
+| `run.finished` | a worker's run finished (or `workflow_job` completed) | `runner:<worker name>` | repo, issue, pr, lane, url (the PR), duration_ms, payload.conclusion, payload.claim | the lane's first summary line |
+| `run.failed` | a worker's run failed (the CLI failed, timed out, or changed nothing) | `runner:<worker name>` | repo, issue, lane, duration_ms, payload.error, payload.claim | the error |
 | `run.dispatched` | the site, when a task is opened with a cloud lane (`claude-cloud`, `codex-cloud`): after the mention comment is posted | `bot:<token name>` or `human:<login>` (whoever opened the task) | project, repo, issue, lane (the vendor), url (the comment), payload.lane, mention, comment_id, brief_tokens, routine | `Dispatched #<n> to the <lane> lane (@<vendor>)` |
-| `step.usage` | `POST /api/v1/work/{task}/release` carrying `usage` (one row per worker run); also GitHub webhook `issue_comment` on a PR, parsed from a usage comment (below) that does not say `"source": "relay-work"` | `agent:<lane>` | repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, url, payload.tool, worker, claim | model and tokens |
+| `step.usage` | a worker's run (one row per run); also GitHub webhook `issue_comment` on a PR, parsed from a usage comment (below) that does not say `"source": "relay-work"` | `agent:<lane>` | repo, issue, pr, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, url, payload.tool, worker, claim | model and tokens |
 | `pr.opened` | GitHub webhook `pull_request` (opened) from a `relay/` branch, or from a cloud lane's `claude/` or `codex/` branch (below) | `agent:<lane>` (lane from branch name) | repo, issue (from branch or `Closes #n`), pr, lane, url, payload.cloud for cloud lanes | PR title |
 | `pr.reviewed` | GitHub webhook `issue_comment` carrying a review from a lane, or `pull_request_review` | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged) | `human:<login>` | repo, issue, pr, url | PR title |
@@ -28,10 +33,10 @@ a time-ordered view over this table; the `ledger` view is the subset with `kind 
 | `task.approved` | "Approve and merge" on the task page, `relay_task_approve`, `POST /api/v1/tasks/{id}/approve`, `relay task approve` (`approveTask` in `packages/core/src/tasks/review.ts`) after GitHub merged | `human:<login>` or `bot:<token name>` | project, repo, issue, pr, lane, url (the PR), payload.merged (true), merge_sha, method (`squash`), branch, branch_deleted, pr_title | `Approved and merged #<pr> (<sha>)` |
 | `task.changes_requested` | "Request changes" on the task page, `relay_task_request_changes`, `POST /api/v1/tasks/{id}/request-changes`, `relay task changes`, after the note was posted on the PR | `human:<login>` or `bot:<token name>` | project, repo, issue, pr, lane, url (the PR comment), payload.note, comment_id, comment_url, branch. The task is `queued`; the next run's brief carries the note | `Changes requested on #<pr>: <first line>` |
 | `task.merge_failed` | an approval whose merge GitHub refused (conflicts, required checks, permissions) | who approved | project, repo, issue, pr, lane, url (the PR), payload.error (GitHub's message), status, method, head_sha. The task stays in `review` | `Merge of #<pr> refused: <message>` |
-| `task.requeued` | "Requeue" on the task page, `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue`, `relay task requeue` (`requeueTask` in `packages/core/src/tasks/requeue.ts`), from any state but `done` | `human:<login>` or `bot:<token name>` | project, repo, issue, pr (when it has one), lane (the lane it is queued on), url (the PR or the issue), payload.previous_state, previous_lane, lane, reason, github (`{relabelled, removed, added}` or `{relabelled: false, error}`: the `agent:*` label move is best effort), claim_released (the worker whose lease was released), branch. The task is `queued` and the doorbell rings | `Requeued #<n> on the <lane> lane (was <old lane>), was <state>: <reason>` |
+| `task.requeued` | "Requeue" on the task page, `relay_task_requeue`, `POST /api/v1/tasks/{id}/requeue`, `relay task requeue` (`requeueTask` in `packages/core/src/tasks/requeue.ts`), from any state but `done` | `human:<login>` or `bot:<token name>` | project, repo, issue, pr (when it has one), lane (the lane it is queued on), url (the PR or the issue), payload.previous_state, previous_lane, lane, reason, github (`{relabelled, removed, added}` or `{relabelled: false, error}`: the `agent:*` label move is best effort), claim_released (the worker whose lease was released), branch. The task is `queued` | `Requeued #<n> on the <lane> lane (was <old lane>), was <state>: <reason>` |
 | `task.closed` | "Close" on the board card or the task page, `relay_task_close`, `POST /api/v1/tasks/{id}/close`, `relay task close` (`closeTask` in `packages/core/src/tasks/close.ts`), from any state but `done` | `human:<login>` or `bot:<token name>` | project, repo, issue, pr (when it has one), lane, url (the issue), payload.previous_state, reason, github (`closed`, `comment_url`, `pr_closed`, or `error`), claim_released, branch. The task is `done`; the issue is closed on GitHub as not planned | `Closed #<issue> without a merge (was <state>): <reason>` |
-| `task.held` | `POST /api/v1/work/{task}/release` with `outcome: held` (the worker's injection gate, `packages/core/src/tasks/gate.ts`), or `openTask` when the site's pre-check hits at creation | `runner:<worker name>`, or `bot:relay` at creation | project, repo, issue, lane, url (the issue), payload.score (0..1), reasons (one line each), grader (`precheck` or `model`), model, worker, claim (or opened_by at creation). The task is `held`: no worker claims it until a release. The gate's own model call is a `step.usage` row on lane `gate` (actor `agent:gate`, payload.mode `gate`, verdict) | `Held #<n> at the gate (<grader>, <score>): <first reason>` |
-| `task.released` | "Release" on the task page, `relay_task_release`, `POST /api/v1/tasks/{id}/release`, `relay task release` (`releaseTask` in `packages/core/src/tasks/gate.ts`), only from `held` | `human:<login>` or `bot:<token name>` (tokens:write, never the opener) | project, repo, issue, lane, url (the issue), payload.note, held (the hold it lifted: score, reasons, grader, by, at), previous_state. The task is `queued` and the doorbell rings | `Released #<n> from the gate: <note>` |
+| `task.held` | the worker's injection gate (`packages/core/src/tasks/gate.ts`), or `openTask` when the site's pre-check hits at creation | `runner:<worker name>`, or `bot:relay` at creation | project, repo, issue, lane, url (the issue), payload.score (0..1), reasons (one line each), grader (`precheck` or `model`), model, worker, claim (or opened_by at creation). The task is `held`: no worker claims it until a release. The gate's own model call is a `step.usage` row on lane `gate` (actor `agent:gate`, payload.mode `gate`, verdict) | `Held #<n> at the gate (<grader>, <score>): <first reason>` |
+| `task.released` | "Release" on the task page, `relay_task_release`, `POST /api/v1/tasks/{id}/release`, `relay task release` (`releaseTask` in `packages/core/src/tasks/gate.ts`), only from `held` | `human:<login>` or `bot:<token name>` (tokens:write, never the opener) | project, repo, issue, lane, url (the issue), payload.note, held (the hold it lifted: score, reasons, grader, by, at), previous_state. The task is `queued` | `Released #<n> from the gate: <note>` |
 | `decision.captured` | session-end hook (`relay capture`), `relay decide`, the `relay_decide` tool, or the post-merge job | `agent:<cli>` or `human:<login>` | project, payload.decision_id, payload.source, payload.superseded | the decision text |
 | `preference.set` | `relay prefer` or the `relay_prefer` tool | `human:<login>` or `agent:<cli>` | project (project scope only), payload.key/value/scope/scope_id | `key = value (scope: id)` |
 | `project.linked` | `relay link` | `human:<login>` | project, repo, payload.path | repo and path |
@@ -88,8 +93,8 @@ contributed.
 
 ## The usage comment
 
-A worker (`relay work`, `packages/core/src/work/job.ts`) and the optional `scripts/runner/run-lane.sh` post exactly
-one comment per run on the PR. It ends with a marker and a fenced JSON block:
+The optional `scripts/runner/run-lane.sh` (an Actions runner) posts exactly one comment per run on the PR. It ends
+with a marker and a fenced JSON block:
 
 ````markdown
 ## Summary from the claude lane
@@ -98,13 +103,13 @@ one comment per run on the PR. It ends with a marker and a fenced JSON block:
 
 <!-- relay:usage -->
 ```json
-{"relay":"step.usage","lane":"claude","mode":"code","tool":"claude","model":"claude-opus-5","issue":42,"tokens_in":18234,"tokens_out":2210,"cache_read":91200,"cache_write":4100,"duration_ms":412000,"source":"relay-work","claim":"01J..."}
+{"relay":"step.usage","lane":"claude","mode":"code","tool":"claude","model":"claude-opus-5","issue":42,"tokens_in":18234,"tokens_out":2210,"cache_read":91200,"cache_write":4100,"duration_ms":412000}
 ```
 ````
 
-A worker's block carries `"source": "relay-work"`: the worker already reported the same numbers through
-`POST /api/v1/work/{task}/release`, which wrote the `step.usage` row, so the webhook keeps the comment for humans and
-writes no second row. Blocks without that field (an Actions runner's) are ingested as below.
+A worker's comment on the PR is the lane's summary alone: its usage is a `relay-usage@1` block in the task's thread
+on the board. A block that carries `"source": "relay-work"` is kept for humans and writes no row; blocks without
+that field (an Actions runner's) are ingested as below.
 
 How the GitHub webhook handler parses it, on `issue_comment` (created or edited) where the issue is a pull request:
 
