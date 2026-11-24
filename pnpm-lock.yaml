@@ -229,6 +229,9 @@ importers:
       '@vercel/board':
         specifier: ^0.52.0
         version: 0.52.0
+      '@vercel/oidc':
+        specifier: ^4.0.9
+        version: 4.0.9
       '@vercel/sandbox':
         specifier: ^4.1.0
         version: 4.1.0

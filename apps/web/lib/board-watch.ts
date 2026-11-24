@@ -1,11 +1,13 @@
 /**
  * What the board wakes this deployment for (served at /api/board, docs/ARCHITECTURE.md "The site and the board").
- * Two watchers, both on every project's queue (`work/`):
+ * Watchers on every project's queue (`work/`):
  *
  *   ledger   any event brings relay's feed up to the board (`syncLedger`). The feed is the durable copy the feed and
  *            usage pages read; the board is where it happened.
  *   brief    a new task gets relay's memory for it posted in its thread as `brief.md`, so a worker needs nothing
  *            from the site but the board.
+ *   lead     only where `RELAY_LEAD_URL` names relay's lead: a task that failed, was held or reached review wakes it
+ *            (lib/lead.ts).
  *
  * Where no watcher runs (local dev, a board at `BOARD_URL`), page loads call the same sync through `syncFeedAfter`.
  * The sync reads from a cursor kept in the database and writes each row once, so any number of callers may overlap.
@@ -17,6 +19,7 @@ import { board, compileBrief, type Db } from "@relay/core";
 import type { BoardEventView, Watcher } from "@vercel/board";
 import { after } from "next/server";
 import { getDb } from "./db.ts";
+import { leadUrl, wakeLeadFor } from "./lead.ts";
 import { dataMode } from "./mode.ts";
 
 /**
@@ -52,6 +55,7 @@ export function siteWatchers(session: () => Promise<board.BoardSession>): Record
   return {
     ledger: { tail: board.WORK_SUBTREE, run: async () => void (await board.syncLedger(await getDb(), await session())) },
     [board.BRIEF_PROFILE]: { tail: board.WORK_SUBTREE, run: async ({ event, board: as }) => void (await briefNewTask(await getDb(), as, event)) },
+    ...(leadUrl() ? { lead: { tail: board.WORK_SUBTREE, run: async ({ event }) => void (await wakeLeadFor(event, (await session()).from)) } satisfies Watcher } : {}),
   };
 }
 
