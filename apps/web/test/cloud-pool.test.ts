@@ -48,9 +48,9 @@ async function open(over: Partial<board.OpenTaskInput> = {}): Promise<string> {
   return (await board.openFor(desk(), { project: "demo", repo: "acme/demo", title: "Add dark mode", body: "Toggle in the header.", lane: "claude", ...over })).task.id;
 }
 /** What the approve action does: the grant as the site's own profile, then the label that says where to look. */
+/** A grant marks the task for the pool itself (`grantTask`), wherever it is made. */
 async function approve(id: string, capUsd = 2): Promise<void> {
   await board.grantFor(desk(), id, { cloudCapUsd: capUsd });
-  await b.label(id, { set: { [CLOUD_LABEL]: CLOUD_APPROVED } });
 }
 const marks = async (id: string) => cloudMarksOf(await b.thread(id), session.from);
 const label = async (id: string) => (await b.thread(id)).message.labels?.[CLOUD_LABEL];
@@ -146,9 +146,12 @@ describe("what is started", () => {
     expect(launched).toEqual([]);
   });
 
-  it("finds a grant made outside the site on its wider look, and only then", async () => {
+  it("finds a grant whose mark is gone on its wider look, and only then, and puts the mark back", async () => {
     const id = await open();
-    await board.grantFor(desk(), id, { cloudCapUsd: 2 });
+    await approve(id);
+    expect(await label(id)).toBe(CLOUD_APPROVED);
+    // anyone who may label in the queue can take the hint off; the grant in the thread is what counts
+    await b.label(id, { unset: [CLOUD_LABEL] });
     expect(await runApproved(deps())).toEqual({ started: [], failed: [] });
     expect(await runApproved(deps({ wide: true }))).toEqual({ started: [id], failed: [] });
     expect(await label(id)).toBe(CLOUD_APPROVED);
