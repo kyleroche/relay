@@ -4,8 +4,8 @@
  * `<!-- relay:end -->`; everything else in the file is the user's. Hashes of what relay last wrote are kept in
  * `.relay/rules.json` so a local edit inside the markers is detected and never clobbered without `force`.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sha256 } from "../util.ts";
 
 export const BEGIN = "<!-- relay:begin -->";
@@ -76,13 +76,7 @@ export function readRulesState(root: string): RulesState {
   return parseRulesState(existsSync(p) ? readFileSync(p, "utf8") : undefined);
 }
 
-export function writeRulesState(root: string, state: RulesState): void {
-  const p = join(root, STATE_FILE);
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, rulesStateText(state));
-}
-
-export type SectionAction = "created" | "appended" | "updated" | "unchanged" | "skipped-include" | "refused-local-edit" | "removed" | "absent";
+export type SectionAction = "created" | "appended" | "updated" | "unchanged" | "skipped-include" | "refused-local-edit" | "absent";
 
 export interface SectionResult {
   file: OwnedFile;
@@ -180,56 +174,4 @@ export function planOwnedSection(read: (file: OwnedFile) => string | undefined, 
   }
   const stateText = rulesStateText(state);
   return { results, files, state, stateText, stateChanged: stateText !== rulesStateText(prior) };
-}
-
-/** Install or update the owned section in AGENTS.md and CLAUDE.md under `root` (`planOwnedSection`, then the writes). */
-export function installOwnedSection(root: string, opts: InstallOptions = {}): SectionResult[] {
-  const plan = planOwnedSection((file) => (existsSync(join(root, file)) ? readFileSync(join(root, file), "utf8") : undefined), readRulesState(root), opts);
-  for (const f of plan.files) writeFileSync(join(root, f.file), f.content);
-  writeRulesState(root, plan.state);
-  return plan.results;
-}
-
-/** Remove the owned section (markers included) from both files and forget the hashes. Files are never deleted. */
-export function removeOwnedSection(root: string, opts: { files?: readonly OwnedFile[] } = {}): SectionResult[] {
-  const state = readRulesState(root);
-  const results: SectionResult[] = [];
-  for (const file of opts.files ?? OWNED_FILES) {
-    const path = join(root, file);
-    if (!existsSync(path)) {
-      results.push({ file, action: "absent" });
-      continue;
-    }
-    const text = readFileSync(path, "utf8");
-    const split = findOwnedSection(text);
-    if (!split) {
-      results.push({ file, action: "absent" });
-      delete state.sections[file];
-      continue;
-    }
-    const before = split.before.replace(/\n{2,}$/, "\n\n");
-    const after = split.after.replace(/^\n+/, "");
-    const out = (before + after).replace(/\n{3,}/g, "\n\n").replace(/\n+$/, "\n");
-    writeFileSync(path, out.trim() ? out : "");
-    delete state.sections[file];
-    results.push({ file, action: "removed" });
-  }
-  writeRulesState(root, state);
-  return results;
-}
-
-/** Report the state of each file: present/absent markers, and whether the body matches what relay wrote. */
-export function checkOwnedSection(root: string): Array<SectionResult & { localEdit: boolean }> {
-  const state = readRulesState(root);
-  return OWNED_FILES.map((file) => {
-    const path = join(root, file);
-    if (!existsSync(path)) return { file, action: "absent" as const, localEdit: false };
-    const text = readFileSync(path, "utf8");
-    if (file === "CLAUDE.md" && isIncludeOnly(text)) return { file, action: "skipped-include" as const, localEdit: false };
-    const split = findOwnedSection(text);
-    if (!split) return { file, action: "absent" as const, localEdit: false, detail: "markers missing; relay will not write here" };
-    const recorded = state.sections[file]?.hash;
-    const localEdit = !!recorded && recorded !== sha256(split.inner);
-    return { file, action: localEdit ? ("refused-local-edit" as const) : ("unchanged" as const), localEdit };
-  });
 }
