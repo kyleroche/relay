@@ -148,7 +148,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         tags: ["tasks"],
         summary: "Approve a task in review",
         description:
-          "With a pull request: squash-merges it through GitHub, deletes the head branch and completes the task. The pull request is the one the runner's hold names, and it is merged only when its head is a branch relay pushed for this task. With outputs instead (the nodes lane): completes the task. A signed-in person may approve anything in review; a bot's token must hold `tasks:write`, and a bot never approves a task it opened (403). Before anything merges the site checks that its deployment can settle the task on the board (403 when it neither opened the task nor manages the queue). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success. When GitHub refuses the merge (conflicts, required checks, permissions) the refusal is a line in the task's thread and the answer is 502; the task stays in review.",
+          "With a pull request: squash-merges it through GitHub, deletes the head branch and completes the task. The pull request is the one the runner's hold names, and it is merged only when its head is a branch relay pushed for this task. With outputs instead (the nodes lane): completes the task. With a proposed plan (a planning task, held `awaiting_plan`): opens the plan's tasks as the approver, each waiting for the ones it needs, completes the planning task and answers their IDs in `opened`; nothing of a plan is opened before that. With a report (a review hold whose reason is `report`): completes the task as read. A signed-in person may approve anything in review; a bot's token must hold `tasks:write`, and a bot never approves a task it opened (403). Before anything merges the site checks that its deployment can settle the task on the board (403 when it neither opened the task nor manages the queue). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success. When GitHub refuses the merge (conflicts, required checks, permissions) the refusal is a line in the task's thread and the answer is 502; the task stays in review.",
         security: [{ bearer: ["tasks:write"] }],
         parameters: [taskIdParam],
         responses: {
@@ -536,7 +536,7 @@ export const integrationSchemas: Record<string, unknown> = {
     ],
   },
   TaskApproved: {
-    allOf: [{ $ref: "#/components/schemas/Task" }, { type: "object", properties: { pr_url: nullable("string", { format: "uri" }), merge_sha: nullable("string"), branch_deleted: { type: "boolean" } } }],
+    allOf: [{ $ref: "#/components/schemas/Task" }, { type: "object", properties: { pr_url: nullable("string", { format: "uri" }), merge_sha: nullable("string"), branch_deleted: { type: "boolean" }, opened: { type: "array", items: { type: "string" }, description: "The tasks an approved plan opened, in the order they were opened; absent for any other approval." } } }],
   },
   TaskClosed: {
     allOf: [

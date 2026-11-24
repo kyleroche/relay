@@ -9,6 +9,9 @@
  *
  * Where no watcher runs (local dev, a board at `BOARD_URL`), page loads call the same sync through `syncFeedAfter`.
  * The sync reads from a cursor kept in the database and writes each row once, so any number of callers may overlap.
+ *
+ * The same throttled moment is when the site looks for paid sandbox runs a person approved and that are not started
+ * (lib/cloud/pool.ts), so a start that did not come up is tried again.
  */
 import { board, compileBrief, type Db } from "@relay/core";
 import type { BoardEventView, Watcher } from "@vercel/board";
@@ -67,8 +70,9 @@ export function syncDue(now: number = Date.now()): boolean {
 }
 
 /**
- * Sync the feed after this response, when one is due. Called from the pages that show the feed or what is derived
- * from it, so it is current even where the board wakes nothing. A failure is logged and the next load tries again.
+ * Sync the feed after this response, when one is due, then start what is approved and not started. Called from the
+ * pages that show the feed or what is derived from it, so it is current even where the board wakes nothing. A failure
+ * is logged and the next load tries again.
  */
 export function syncFeedAfter(session: () => Promise<board.BoardSession>): void {
   if (dataMode() !== "db" || !syncDue()) return;
@@ -78,5 +82,7 @@ export function syncFeedAfter(session: () => Promise<board.BoardSession>): void 
     } catch (e) {
       console.error(`[relay] ledger sync: ${board.describeBoardError(e)}`);
     }
+    // loaded here, not at the top: the pool reads the board through lib/board.ts, which loads this file for its watchers
+    await (await import("./cloud/pool.ts")).runApprovedQuietly();
   });
 }

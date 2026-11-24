@@ -2,13 +2,15 @@ import { ArrowUpRight, Cpu } from "lucide-react";
 import Link from "next/link";
 import { board } from "@relay/core";
 import { CloseAction } from "@/components/tasks/close-action";
+import { CloudOffer } from "@/components/tasks/cloud-offer";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { BUILTIN_LANES, workerOfClaim } from "@/lib/board-read";
-import { claimProfile, COLUMNS, columnOf, decisionsFor, evalWait, taskPagePath, TONE_TEXT } from "@/lib/tasks";
+import type { CloudView } from "@/lib/cloud/view";
+import { claimProfile, COLUMNS, columnOf, decisionsFor, evalWait, reviewKind, taskPagePath, TONE_TEXT } from "@/lib/tasks";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,7 +19,9 @@ import { cn } from "@/lib/utils";
  * wherever it was made). The cards are the tasks of the team's Vercel Board, read as they are (lib/board-read.ts);
  * `columnOf` (lib/tasks.ts) puts each of relay's nine states in one of six columns. Held and Failed appear only when
  * they hold something, Held first because a person should read those before anything else; Queue, Running, Review and
- * Done are always there so an empty board still says what the steps are. Each column shows its newest `cap` cards;
+ * Done are always there so an empty board still says what the steps are. A queued card nobody's machine can take
+ * carries the offer of a paid sandbox run (`cloud`, lib/cloud/view.ts), which starts only if a person approves the
+ * spend. Each column shows its newest `cap` cards;
  * "Show N more" (`?all=<column>`) opens the whole column in place, keeping the project filter. Done ends in a link to
  * the history, where every task is. DESIGN.md, "Board".
  */
@@ -56,11 +60,16 @@ function Why({ t }: { t: Task }) {
   if (t.state === "blocked") return <p className="mt-1.5 line-clamp-3 text-xs text-warn">Held{t.hold?.kind ? ` (${t.hold.kind})` : ""}{t.hold?.reason ? `: ${t.hold.reason}` : "."}</p>;
   if (t.state === "failed" && t.reason) return <p className="mt-1.5 line-clamp-2 text-xs text-bad">{t.reason}</p>;
   if (t.state === "closed" && t.reason) return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">Closed: {t.reason}</p>;
-  if (t.state === "review" && !t.pr) return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{t.hold?.reason || "Outputs attached"}: look at them on the task&apos;s page.</p>;
+  if (t.state === "review" && !t.pr) {
+    const kind = reviewKind(t);
+    if (kind === "plan") return <p className="mt-1.5 line-clamp-3 text-xs text-muted-foreground">Proposes a plan: read it on the task&apos;s page. Approving opens its tasks; nothing was opened yet.</p>;
+    if (kind === "report") return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">A report to read on the task&apos;s page. There is no pull request.</p>;
+    return <p className="mt-1.5 line-clamp-2 text-xs text-muted-foreground">{t.hold?.reason || "Outputs attached"}: look at them on the task&apos;s page.</p>;
+  }
   return null;
 }
 
-function Card({ t, now, workers, canWrite, servedLanes }: { t: Task; now: number; workers: readonly board.WorkerView[]; canWrite: boolean; servedLanes: readonly string[] }) {
+function Card({ t, now, workers, canWrite, servedLanes, cloud }: { t: Task; now: number; workers: readonly board.WorkerView[]; canWrite: boolean; servedLanes: readonly string[]; cloud?: CloudView }) {
   const can = decisionsFor(t.state);
   const worker = workerOfClaim(workers, t.claim);
   return (
@@ -91,6 +100,7 @@ function Card({ t, now, workers, canWrite, servedLanes }: { t: Task; now: number
         </p>
       )}
       <Why t={t} />
+      {cloud && <CloudOffer taskId={t.id} view={cloud} canWrite={canWrite} size="sm" className="mt-1.5" />}
       {t.pr && (
         <p className="mt-1.5 text-xs">
           <a href={t.pr.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-0.5 font-mono text-muted-foreground hover:text-primary">
@@ -100,7 +110,7 @@ function Card({ t, now, workers, canWrite, servedLanes }: { t: Task; now: number
       )}
       {(can.review || can.release || can.requeue || can.close) && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t pt-2.5">
-          {can.review && <ReviewActions taskId={t.id} pr={t.pr?.number ?? null} canWrite={canWrite} size="sm" />}
+          {can.review && <ReviewActions taskId={t.id} pr={t.pr?.number ?? null} kind={reviewKind(t)} canWrite={canWrite} size="sm" />}
           {can.release && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
           {can.requeue && <RequeueAction taskId={t.id} lane={t.lane} model={t.model} state={t.state} builtinLanes={BUILTIN_LANES} servedLanes={servedLanes} canWrite={canWrite} size="sm" />}
           {can.close && <CloseAction taskId={t.id} state={t.state} pr={t.pr?.number ?? null} canWrite={canWrite} size="sm" />}
@@ -110,7 +120,7 @@ function Card({ t, now, workers, canWrite, servedLanes }: { t: Task; now: number
   );
 }
 
-export function Board({ tasks, workers, now, canWrite, all, project }: { tasks: Task[]; workers: readonly board.WorkerView[]; now: number; canWrite: boolean; all?: string; project?: string }) {
+export function Board({ tasks, workers, now, canWrite, all, project, cloud }: { tasks: Task[]; workers: readonly board.WorkerView[]; now: number; canWrite: boolean; all?: string; project?: string; cloud?: ReadonlyMap<string, CloudView> }) {
   const servedLanes = board.servedLanes([...workers]);
   const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => columnOf(t) === c.key) })).filter((c) => c.always || c.list.length > 0);
   const href = (column?: string) => {
@@ -136,7 +146,7 @@ export function Board({ tasks, workers, now, canWrite, all, project }: { tasks: 
             ) : (
               <ul className="flex flex-col gap-2 px-2 pb-2">
                 {shown.map((t) => (
-                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} servedLanes={servedLanes} />
+                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} servedLanes={servedLanes} cloud={cloud?.get(t.id)} />
                 ))}
               </ul>
             )}

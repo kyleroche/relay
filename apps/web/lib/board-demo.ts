@@ -2,9 +2,11 @@
  * The demo board: what mock mode shows where a deployment shows the team's Vercel Board. An in-memory board with
  * relay's schemas, seeded through the same core functions a real one is written with (a person opens a task, a
  * worker's lane claims it, reports its run and usage and holds it for review, someone approves, sends back or closes
- * it), so every state has a card and every surface reads real threads. Three workers, one of them offline.
+ * it), so every state has a card and every surface reads real threads. Three workers, one of them offline. One
+ * project (atlas-site) has a profile with capability sets (lib/mock.ts), so its tasks' pages have something to grant,
+ * and one of its tasks is a plan waiting for approval.
  */
-import { board, type MeterReading } from "@relay/core";
+import { board, sha256, type MeterReading } from "@relay/core";
 import { MOCK_PROJECTS } from "./mock.ts";
 
 const MIN = 60_000;
@@ -80,6 +82,20 @@ async function seedTasks(s: Seed): Promise<void> {
   }
   await nodes.as.reply(cut.id, { text: [board.runText({ outcome: "review", lane: "nodes", worker: "studio" }), board.usageText(usage({ kind: "media", lane: "video", worker: "studio", tool: "griptape-nodes", model: "bytedance/seedance-2.0", subscription: "gateway", billing: "gateway", tokens_in: 0, tokens_out: 0, cache_read: 0, cost_equiv: 2.4, duration_ms: 6 * MIN, outcome: "review" }))].join("\n\n"), ...relay("usage") });
   await nodes.claim.block("2 outputs attached", { kind: board.HOLD.review });
+
+  // review of a plan: a planning task proposes tasks, posted as plan.json; approving it is what opens them
+  const planned = await open(s.person, { project: "atlas-site", title: "Plan the move of the docs to MDX", body: "Propose the tasks, in order. Do not change anything yet.", lane: "claude", step: "plan" });
+  const planner = await start(s, planned.id, "studio", "claude");
+  const plan: board.Plan = {
+    tasks: [
+      { key: "loader", title: "Add the MDX loader and one converted page", body: "Add @next/mdx, convert docs/install.md to MDX and render it at /docs/install. Out of scope: the other pages. Done when the page builds and reads the same.", lane: "claude" },
+      { key: "pages", title: "Convert the remaining docs pages", body: "Convert every page under docs/ to MDX with the loader from the first task. Out of scope: rewriting copy. Done when no .md page is left and the build passes.", lane: "codex", needs: ["loader"] },
+    ],
+  };
+  const json = JSON.stringify(plan, null, 2);
+  const proposal = await planner.as.reply(planned.id, { text: board.planSummary(plan), attachments: [await planner.as.upload({ data: new TextEncoder().encode(json), name: board.PLAN_FILE, type: "application/json" })], ...relay("result") });
+  await planner.as.reply(planned.id, { text: [board.runText({ outcome: "review", lane: "claude", worker: "studio" }), board.usageText(usage({ kind: "step", step: "plan", lane: "claude", worker: "studio", outcome: "review", tokens_in: 22_400, tokens_out: 1_900, cost_equiv: 0.31, duration_ms: 3 * MIN }))].join("\n\n"), ...relay("usage") });
+  await planner.claim.block(board.planHoldReason({ message: proposal.id, sha256: sha256(json), tasks: plan.tasks.length }), { kind: board.HOLD.plan });
 
   // blocked: the pull request is up and an eval step on another lane looks at it before a person is asked
   const judged = await open(s.person, { project: "relay", title: "Retry a board read once on a 429", body: "Honor `Retry-After`; give up after the second refusal.", lane: "claude" });

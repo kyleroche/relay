@@ -4,11 +4,13 @@
  * one of core's `RelayState` words (packages/core/src/board/mapping.ts). Pure, no I/O.
  */
 import type { board } from "@relay/core";
-import { HOLD, parseEvalHold } from "@relay/core/board/mapping.ts";
+import { HOLD, parseEvalHold, REPORT_REASON } from "@relay/core/board/mapping.ts";
 import type { StatusTone } from "@/components/ui/status-badge";
+import type { ReviewKind } from "./review.ts";
 import { SITE_URL } from "./site.ts";
 
 export { taskPagePath } from "./task-path.ts";
+export type { ReviewKind } from "./review.ts";
 
 export type RelayState = board.RelayState;
 type Task = board.BoardTask;
@@ -17,7 +19,7 @@ export const STATE_HINT: Record<RelayState, string> = {
   waiting: "A task it needs has not completed; it joins the queue by itself when that one does.",
   queued: "Ready for a worker that serves its lane (new, sent back with a note, or requeued).",
   running: "A worker holds it and the lane is working in a fresh clone; the claim is a lease the job keeps renewing.",
-  review: "The pull request (or the outputs) is there. Look at it, then approve, or send it back with a note.",
+  review: "The pull request (or the outputs, a report, a proposed plan) is there. Look at it, then approve, or send it back with a note.",
   held: "The injection gate flagged the text as instructions aimed at the agent; no worker runs it until someone reads it and releases it.",
   blocked: "Held for another reason: a step (an eval) is looking at the work, or the board holds a task whose text someone else edited.",
   done: "Merged (by an approval here or on GitHub), or its outputs were approved.",
@@ -105,6 +107,32 @@ export interface TaskDecisions {
   requeue: boolean;
   /** Finish without a merge: anything not finished. */
   close: boolean;
+}
+
+/**
+ * What a task in review asks a person to approve, as core's `approveTask` reads the hold: a pull request to merge, a
+ * plan whose tasks an approval opens, a report to read, or outputs attached to the thread.
+ */
+export function reviewKind(t: Pick<Task, "pr" | "hold">): ReviewKind {
+  if (t.hold?.kind === HOLD.plan) return "plan";
+  if (t.pr) return "pr";
+  return t.hold?.kind === HOLD.review && t.hold.reason === REPORT_REASON ? "report" : "outputs";
+}
+
+/**
+ * The tasks an approved plan opened, from the line core leaves in the planning task's thread ("Plan approved by …
+ * Opened 2 tasks: api (790.812), ui (790.813)."). `by` is who the board says wrote the reply, as the feed names
+ * actors: the line counts only from a person or a bot, the two an approval can come from, so an agent's own profile
+ * posting the same words makes no links. Links only: nothing is decided from this.
+ */
+export function planOpened(replies: ReadonlyArray<{ text: string; by: string; log: boolean }>): Array<{ key: string; id: string }> {
+  for (const r of [...replies].reverse()) {
+    if (!r.log || !/^(human|bot):/.test(r.by)) continue;
+    const m = /^Plan approved(?: by [^\n]*?)?\. Opened \d+ tasks?: (.+)\.$/.exec(r.text.trim());
+    if (!m) continue;
+    return [...m[1]!.matchAll(/([a-z0-9][a-z0-9-]{0,39}) \(([^\s()]+)\)/g)].map((x) => ({ key: x[1]!, id: x[2]! }));
+  }
+  return [];
 }
 
 /** Which decisions a task's state allows, as core's task functions accept them (packages/core/src/board/tasks.ts). */

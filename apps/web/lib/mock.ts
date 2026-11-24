@@ -84,6 +84,22 @@ export const MOCK_PROJECTS: MockProject[] = [
   },
 ];
 
+/**
+ * The demo's project profiles, as each `.relay/project.json` would read (lib/profile.ts parses them like a real one).
+ * One project defines capability sets, so a task page of it shows the Grants panel with something to grant.
+ */
+export const MOCK_PROFILES: Record<string, unknown> = {
+  "atlas-site": {
+    setup: ["pnpm install --frozen-lockfile"],
+    verify: ["pnpm lint", "pnpm build"],
+    sets: {
+      preview: { env: ["PREVIEW_PROJECT", "PREVIEW_BYPASS_SECRET"], hosts: ["*.vercel.app"] },
+      cms: { env: ["CMS_READ_TOKEN"], hosts: ["cdn.example-cms.com", "api.example-cms.com"] },
+    },
+    cloud: "ask",
+  },
+};
+
 const LANE_MODEL: Record<WorkerLane, { model: string; subscription: Subscription }> = {
   claude: { model: "anthropic/claude-fable-5-1", subscription: "max" },
   codex: { model: "openai/gpt-5.5", subscription: "codex" },

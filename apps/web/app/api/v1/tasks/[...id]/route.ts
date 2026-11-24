@@ -59,7 +59,7 @@ export const POST = api<Ctx>(
       const asker = { actor, scopes: grant?.scopes ?? [] };
       if (action === "approve") {
         const r = await approveFor(session, await siteGitHub(), asker, id);
-        return json({ ...r.task, pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted });
+        return json({ ...r.task, pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted, ...(r.opened ? { opened: r.opened } : {}) });
       }
       if (action === "requeue") {
         const lane = str(body.lane);

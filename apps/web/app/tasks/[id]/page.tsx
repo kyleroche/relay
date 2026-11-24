@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
-import { ArrowUpRight, Paperclip, ShieldAlert } from "lucide-react";
+import { ArrowUpRight, Hourglass, Paperclip, ShieldAlert } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { cache } from "react";
-import { board } from "@relay/core";
+import { board, cloudGrantOf } from "@relay/core";
 import { Alert } from "@/components/alert";
 import { ActorChip } from "@/components/feed/actor-chip";
 import { CloseAction } from "@/components/tasks/close-action";
+import { CloudOffer } from "@/components/tasks/cloud-offer";
+import { GrantSetAction } from "@/components/tasks/grant-set-action";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
@@ -18,23 +20,40 @@ import { SectionHeading } from "@/components/ui/section-heading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
 import { BUILTIN_LANES, workerOfClaim } from "@/lib/board-read";
+import { cloudProblem } from "@/lib/cloud/config";
+import { cloudView, type CloudView } from "@/lib/cloud/view";
 import { dataMode } from "@/lib/data";
 import { fmtCost, fmtDuration, fmtInt, fmtTokens } from "@/lib/format";
+import { projectProfile, type ProfileRead } from "@/lib/profile";
 import { requireSession } from "@/lib/session";
-import { claimProfile, decisionsFor, evalWait, taskPagePath } from "@/lib/tasks";
+import { claimProfile, decisionsFor, evalWait, planOpened, reviewKind, taskPagePath } from "@/lib/tasks";
 
 type Props = { params: Promise<{ id: string }> };
 
 export const dynamic = "force-dynamic";
 
-type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[]; site: string } | { problem: string } | null;
+/** What the page reads beside the thread: the project's profile, what trusted people granted this task, and a paid run's offer or standing. */
+interface Access {
+  profile: ProfileRead;
+  /** The capability sets granted to this task, as a worker would read them. */
+  sets: string[];
+  /** The cap of the paid run approved for it, or null. Read more strictly than a set: never from a worker's profile. */
+  cloudCapUsd: number | null;
+  cloud: CloudView | undefined;
+}
+
+type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[]; site: string; access: Access } | { problem: string } | null;
 
 /** The task's thread from the board, once per request (the metadata and the page both ask); null when there is none. */
 const load = cache(async (id: string): Promise<Loaded> => {
   try {
     const session = await siteBoard();
     const [detail, workers] = await Promise.all([board.getTask(session.board, id, { trusted: session.from }), siteWorkers().catch(() => [])]);
-    return { detail, workers, site: session.me.principal };
+    const now = Date.now();
+    // only a queued task can be offered a run, or have one coming up; the Grants panel says what was approved for any other
+    const [profile, cloud] = await Promise.all([projectProfile(detail.task.repo), cloudView(detail.task, { session, workers, now, thread: detail.thread }).catch(() => undefined)]);
+    // grants count only from the authors the site believes, for the task's text as it stands
+    return { detail, workers, site: session.me.principal, access: { profile, sets: board.grantsOf(detail.thread, session.from).sets, cloudCapUsd: cloudGrantOf(detail.thread, session.from)?.capUsd ?? null, cloud } };
   } catch (e) {
     if (e instanceof board.TaskError && e.status === 404) return null;
     return { problem: boardProblem(e) };
@@ -57,8 +76,10 @@ const RELAY_KIND: Record<string, string> = { log: "log", result: "result", brief
 /**
  * One task, top to bottom: what it is (title, state, lane, model, project, repository), the gate's hold while it is
  * held, the decisions its state allows, the facts the board keeps (the pull request its hold names, the hold, what it
- * needs, who holds the claim and until when), its own text, the outputs attached to its thread, what its runs cost
- * and the thread in order. Everything is read from the team's Vercel Board as it stands; the actions are the same
+ * needs, who holds the claim and until when), its own text, what it was granted (the capability sets of its project's
+ * profile, a paid sandbox run), the outputs attached to its thread, what its runs cost and the thread in order. A
+ * queued task nobody's machine can take is offered a paid run above the decisions; it starts only if a person
+ * approves the spend. Everything is read from the team's Vercel Board as it stands; the actions are the same
  * core functions the API and the MCP tools call (lib/task-ops.ts).
  */
 export default async function TaskPage({ params }: Props) {
@@ -87,6 +108,14 @@ export default async function TaskPage({ params }: Props) {
   const words = replies.map((m) => ({ m, text: board.withoutBlocks(m.text), kind: m.labels?.[board.LABEL.relay] })).filter((r) => r.text);
   const total = usage.reduce((s, u) => ({ ctx: s.ctx + u.tokens_in + u.cache_read, out: s.out + u.tokens_out, cost: s.cost + u.cost_equiv }), { ctx: 0, out: 0, cost: 0 });
   const pr = t.pr?.number ?? null;
+  const kind = reviewKind(t);
+  const finished = t.state === "done" || t.state === "closed";
+  const { profile, cloud, cloudCapUsd } = l.access;
+  const granted = l.access.sets;
+  const sets = Object.entries(profile.profile?.sets ?? {});
+  // a grant for a set the profile no longer defines is still shown: it was given, and it adds nothing to a job
+  const strays = granted.filter((name) => !profile.profile?.sets[name]);
+  const opened = t.step === "plan" && t.state === "done" ? planOpened(replies.map((m) => ({ text: board.withoutBlocks(m.text), by: board.feedActor(m.by, m.author?.handle, l.site), log: m.labels?.[board.LABEL.relay] === board.RELAY_MESSAGE.log }))) : [];
   const requeue = <RequeueAction taskId={t.id} lane={t.lane} model={t.model} state={t.state} builtinLanes={BUILTIN_LANES} servedLanes={servedLanes} canWrite={canWrite} />;
   const close = <CloseAction taskId={t.id} state={t.state} pr={pr} canWrite={canWrite} />;
 
@@ -149,14 +178,34 @@ export default async function TaskPage({ params }: Props) {
           </section>
         )}
 
+        {cloud && (
+          <section aria-labelledby="cloud-h" className="rounded-lg border bg-card p-4">
+            <SectionHeading id="cloud-h">
+              <span className="inline-flex items-center gap-1.5">
+                <Hourglass className="size-4 text-muted-foreground" aria-hidden="true" /> {cloud.offer ? "Waiting for a worker" : "Paid sandbox run"}
+              </span>
+            </SectionHeading>
+            <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
+              {cloud.offer
+                ? "Tasks run on your own machines' subscriptions, and waiting for one costs nothing. A paid run in a sandbox is offered when no machine can take the task; it starts only if you approve the spend."
+                : "A paid run in a sandbox starts only after a signed-in person approves its cap, for the task's text as it stands."}
+            </p>
+            <CloudOffer taskId={t.id} view={cloud} canWrite={canWrite} />
+          </section>
+        )}
+
         {t.state !== "held" && (can.review || can.requeue || can.close) && (
           <section aria-labelledby="decide-h" className="rounded-lg border bg-card p-4">
             <SectionHeading id="decide-h">Decide</SectionHeading>
             <p className="mt-0.5 mb-3 text-xs text-muted-foreground">
               {t.state === "review"
-                ? t.pr
-                  ? `Approve squash-merges PR #${t.pr.number} and completes the task; Request changes sends your note to the next run.`
-                  : "The deliverable is the outputs below: Approve accepts them and completes the task; Request changes sends your note to the next run."
+                ? kind === "pr"
+                  ? `Approve squash-merges PR #${t.pr!.number} and completes the task; Request changes sends your note to the next run.`
+                  : kind === "plan"
+                    ? "This task proposes a plan: its summary and plan.json are in the thread below. Approve plan opens the plan's tasks, each waiting for what it needs; nothing was opened yet. Request changes sends it back with your note to be planned again."
+                    : kind === "report"
+                      ? "The deliverable is the report in the thread below; there is no pull request. Mark as read completes the task; Request changes sends your note to the next run."
+                      : "The deliverable is the outputs below: Approve accepts them and completes the task; Request changes sends your note to the next run."
                 : waits
                   ? `The ${waits.step} step on the ${waits.lane} lane is looking at the work; it comes to review when that ends. Requeue lifts the hold and starts over; Close finishes it without a merge.`
                   : t.state === "blocked"
@@ -168,7 +217,7 @@ export default async function TaskPage({ params }: Props) {
                         : "Requeue moves it to another lane or model; Close finishes it without a merge."}
             </p>
             <div className="flex flex-wrap items-center gap-2">
-              {can.review && <ReviewActions taskId={t.id} pr={pr} canWrite={canWrite} />}
+              {can.review && <ReviewActions taskId={t.id} pr={pr} kind={kind} canWrite={canWrite} />}
               {can.requeue && requeue}
               {can.close && close}
             </div>
@@ -183,7 +232,31 @@ export default async function TaskPage({ params }: Props) {
                 {t.pr.repo}#{t.pr.number} <ArrowUpRight className="size-3.5" aria-hidden="true" />
               </a>
             ) : (
-              <p className="mt-1 text-sm text-muted-foreground">{t.state === "done" || t.state === "closed" ? "None waiting: the task is finished." : outputs.length ? "None: the deliverable is the outputs below." : "None yet. A task in review names the pull request it waits on."}</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {finished
+                  ? "None waiting: the task is finished."
+                  : t.state === "review" && kind === "plan"
+                    ? "None: this task proposes a plan, and approving it opens the plan's tasks."
+                    : t.state === "review" && kind === "report"
+                      ? "None: the deliverable is the report in the thread."
+                      : outputs.length
+                        ? "None: the deliverable is the outputs below."
+                        : "None yet. A task in review names the pull request it waits on."}
+              </p>
+            )}
+            {opened.length > 0 && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Opened by this plan:{" "}
+                {opened.map((o, i) => (
+                  <span key={o.id}>
+                    {i > 0 && ", "}
+                    {o.key}{" "}
+                    <Link href={taskPagePath(o.id)} className="font-mono hover:text-primary">
+                      {o.id}
+                    </Link>
+                  </span>
+                ))}
+              </p>
             )}
             {t.result && <p className="mt-1 text-xs text-ok">{t.result}</p>}
             {t.reason && <p className={t.state === "failed" ? "mt-1 text-xs text-bad" : "mt-1 text-xs text-muted-foreground"}>{t.reason}</p>}
@@ -253,6 +326,57 @@ export default async function TaskPage({ params }: Props) {
             <p className="mt-1 whitespace-pre-wrap break-words text-sm leading-6">{t.body}</p>
           </section>
         )}
+
+        <section aria-labelledby="grants-h" className="rounded-lg border bg-card p-4">
+          <SectionHeading id="grants-h" count={sets.length || null}>
+            Grants
+          </SectionHeading>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            A task reaches nothing beyond its clone and spends nothing by default. A capability set of the project&apos;s profile (<span className="font-mono">.relay/project.json</span>) names environment variables and hosts; granting one lets this task&apos;s runs use them. A grant covers the task&apos;s text as it stands, so an edit of the task voids it. Names only: no value is ever shown or kept here.
+          </p>
+          {profile.why && <p className="mt-2 text-xs text-muted-foreground">{profile.why}</p>}
+          {sets.length > 0 && (
+            <ul className="mt-2 divide-y">
+              {sets.map(([name, set]) => (
+                <li key={name} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 py-2 text-sm">
+                  <span className="font-mono text-xs font-medium">{name}</span>
+                  {granted.includes(name) ? (
+                    <Pill tone="ok" size="sm">
+                      granted
+                    </Pill>
+                  ) : (
+                    !finished && <GrantSetAction taskId={t.id} set={name} canWrite={canWrite} />
+                  )}
+                  <dl className="grid basis-full grid-cols-[auto_1fr] gap-x-4 gap-y-0.5 text-xs">
+                    <dt className="text-muted-foreground">Variables</dt>
+                    <dd className="min-w-0 break-words font-mono">{set.env.length ? set.env.join(", ") : <span className="font-sans text-muted-foreground">none</span>}</dd>
+                    <dt className="text-muted-foreground">Hosts</dt>
+                    <dd className="min-w-0 break-words font-mono">{set.hosts.length ? set.hosts.join(", ") : <span className="font-sans text-muted-foreground">none</span>}</dd>
+                  </dl>
+                </li>
+              ))}
+            </ul>
+          )}
+          {strays.length > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Also granted, and no longer defined by the profile, so they add nothing: <span className="font-mono">{strays.join(", ")}</span>.
+            </p>
+          )}
+          <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">
+            Paid sandbox run:{" "}
+            {cloudCapUsd !== null ? (
+              <>
+                approved up to <span className="font-mono text-foreground">${cloudCapUsd.toFixed(2)}</span>, once.
+              </>
+            ) : finished ? (
+              "none was approved."
+            ) : profile.profile?.cloud === "never" ? (
+              "never for this project (its profile says cloud: never)."
+            ) : (
+              (cloudProblem() ?? "none approved. It is offered here when the task waits in the queue and no worker of yours can take it.")
+            )}
+          </p>
+        </section>
 
         {outputs.length > 0 && (
           <section aria-labelledby="outputs-h" className="rounded-lg border bg-card p-4">

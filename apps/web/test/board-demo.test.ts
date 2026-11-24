@@ -6,7 +6,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { board } from "@relay/core";
 import { siteBoard } from "../lib/board.ts";
 import { fleet, openTasks, planMeters, recentTasks, waitingOnYou, workerOfClaim } from "../lib/board-read.ts";
-import { COLUMNS, columnOf, decisionsFor, evalWait } from "../lib/tasks.ts";
+import { projectProfile } from "../lib/profile.ts";
+import { COLUMNS, columnOf, decisionsFor, evalWait, reviewKind } from "../lib/tasks.ts";
 
 const saved = { data: process.env.RELAY_DATA, url: process.env.DATABASE_URL };
 
@@ -43,12 +44,14 @@ describe("the demo board", () => {
     expect(await openTasks("no-queue-yet")).toEqual([]);
   });
 
-  it("holds what each state is for: a pull request in review, outputs, an eval, the gate, a dependency", async () => {
+  it("holds what each state is for: a pull request in review, outputs, a plan, an eval, the gate, a dependency", async () => {
     const { board: b } = await siteBoard();
     const tasks = [...(await openTasks()), ...(await recentTasks({ limit: 200 })).tasks];
     const review = tasks.filter((t) => t.state === "review");
     expect(review.find((t) => t.pr)?.pr).toMatchObject({ repo: "acme/ledger-api", number: 88, url: "https://github.com/acme/ledger-api/pull/88" });
-    const outputs = review.find((t) => !t.pr)!;
+    // every task is in the list twice (open, and by latest activity), so each kind is counted by its tasks
+    expect([...new Map(review.map((t) => [t.id, reviewKind(t)])).values()].sort()).toEqual(["outputs", "plan", "pr"]);
+    const outputs = review.find((t) => reviewKind(t) === "outputs")!;
     const detail = await board.getTask(b, outputs.id);
     expect(detail.thread.replies.flatMap((m) => board.blocksOf<board.AssetBlock>(m, board.ASSET_SCHEMA)).map((a) => a.mime)).toEqual(["video/mp4", "image/png"]);
     expect(detail.usage.map((u) => u.kind)).toEqual(["media"]);
@@ -64,7 +67,15 @@ describe("the demo board", () => {
     expect(tasks.find((t) => t.state === "done")?.result).toMatch(/^merged acme\/relay#212/);
     expect(tasks.find((t) => t.state === "closed")?.reason).toMatch(/pricing/);
     expect(tasks.find((t) => t.state === "failed")?.reason).toMatch(/exited 1/);
-    expect(await waitingOnYou()).toEqual({ review: 2, held: 1 });
+    expect(await waitingOnYou()).toEqual({ review: 3, held: 1 });
+
+    // the plan in review is the file on the reply its hold names, with that file's digest: what an approval opens
+    const planned = review.find((t) => reviewKind(t) === "plan")!;
+    expect(planned).toMatchObject({ project: "atlas-site", step: "plan", pr: null });
+    const at = board.parsePlanHold(planned.hold?.reason)!;
+    const proposal = (await board.getTask(b, planned.id)).thread.replies.find((m) => m.id === at.message)!;
+    expect(proposal.attachments.map((f) => f.name)).toEqual([board.PLAN_FILE]);
+    expect(proposal.text).toMatch(/^Proposed plan: 2 tasks\. Approving it opens them/);
 
     // a person's note and relay's own lines are both in a thread, and only the note is a note
     const withNote = await board.getTask(b, review.find((t) => t.pr)!.id);
@@ -84,6 +95,20 @@ describe("the demo board", () => {
 
     const meters = await planMeters();
     expect(meters.slice(0, 2).map((m) => [m.id, m.source, m.percentUsed, m.worker])).toEqual([["max-5h", "demo", 38, "studio"], ["max-week", "demo", 61, "studio"]]);
+  });
+});
+
+describe("the demo's profiles", () => {
+  it("give one project capability sets to grant, and the others none", async () => {
+    const atlas = await projectProfile("acme/atlas-site");
+    expect(Object.keys(atlas.profile!.sets)).toEqual(["preview", "cms"]);
+    expect(atlas.profile!.sets.cms).toEqual({ env: ["CMS_READ_TOKEN"], hosts: ["cdn.example-cms.com", "api.example-cms.com"] });
+    expect(atlas.profile).toMatchObject({ cloud: "ask", problems: [] });
+    expect(atlas.why).toBeUndefined();
+    const relay = await projectProfile("acme/relay");
+    expect(relay.profile).toMatchObject({ sets: {}, cloud: "ask" });
+    expect(relay.why).toMatch(/no \.relay\/project\.json/);
+    expect((await projectProfile(null)).profile).toBeUndefined();
   });
 });
 

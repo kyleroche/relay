@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
 import { newestFinished, openTasks } from "@/lib/board-read";
 import { syncFeedAfter } from "@/lib/board-watch";
+import { cloudViews } from "@/lib/cloud/view";
 import { dataMode, getAssets, getProjects } from "@/lib/data";
 import { REVIEW_AGENT_PROMPT } from "@/lib/tasks";
 
@@ -31,8 +32,15 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
   syncFeedAfter(siteBoard);
   const [read, pending, projects] = await Promise.all([
     Promise.all([openTasks(project), newestFinished(DONE_SHOWN, project), siteWorkers(), siteBoard()]).then(
-      ([open, finished, workers, session]) => ({ tasks: [...open, ...finished], workers, problem: null, decides: board.mayIn(session.me.can, board.workChannel("any"), "manage") }),
-      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true }),
+      async ([open, finished, workers, session]) => ({
+        tasks: [...open, ...finished],
+        workers,
+        problem: null,
+        decides: board.mayIn(session.me.can, board.workChannel("any"), "manage"),
+        // the offer of a paid run on a queued card: read from the board as it is now, and nothing is written to make it
+        cloud: await cloudViews(open, { session, workers, now: Date.now() }).catch(() => new Map()),
+      }),
+      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true, cloud: new Map() }),
     ),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
@@ -56,7 +64,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
             <h1 className="sr-only">Board</h1>
             <HomeTabs active="board" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-              Every task is a thread in its project&apos;s queue on the team&apos;s Vercel Board; the column is its state there. Decide on the card: approve merges the pull request or accepts the outputs, request changes sends it back with your note, release lifts the gate&apos;s hold, close finishes it without a merge. Done keeps the newest ten; History has the rest. The board refreshes itself.
+              Every task is a thread in its project&apos;s queue on the team&apos;s Vercel Board; the column is its state there. Decide on the card: approve merges the pull request, accepts the outputs or opens a proposed plan&apos;s tasks, request changes sends it back with your note, release lifts the gate&apos;s hold, close finishes it without a merge. Done keeps the newest ten; History has the rest. The board refreshes itself.
             </p>
             <ProjectFilter projects={projects} current={project} className="mt-2" />
           </div>
@@ -114,7 +122,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
           {known ? "This project's queue is empty. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} />
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} cloud={read.cloud} />
     </>
   );
 }
