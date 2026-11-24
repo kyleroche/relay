@@ -1,0 +1,16 @@
+{
+  "must_remove": [
+    "/function\\s+legacyRound\\b/"
+  ],
+  "must_keep": [
+    "/export function withTax\\(net\\)/",
+    "/export function total\\(lines\\)/",
+    "/const TAX_RATE = 0\\.2;/"
+  ],
+  "unchanged": [
+    "test/price.test.js",
+    "src/index.js",
+    "package.json"
+  ],
+  "rubric": "legacyRound in src/price.js, which nothing calls and nothing exports, is deleted. Nothing a caller of total or withTax could observe changed: the same exports, the same results, the same rounding. The summary says how it was shown to be dead (a search of the repository) and that the tests were run before and after."
+}

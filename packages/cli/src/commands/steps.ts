@@ -7,9 +7,11 @@
 import type { Command } from "commander";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { board, diskFiles, PROFILE_PATH, projectSteps, relayHome, runtimePaths, STEPS_DIR, type ProjectSteps, type Step } from "@relay/core";
-import { log, resolveProject } from "./_common.ts";
+import { board, defaultLaneRunner, diskFiles, isCodeLane, otherLane, PROFILE_PATH, projectSteps, recordLane, relayHome, runtimePaths, STEPS_DIR, type LaneRunner, type ProjectSteps, type Step } from "@relay/core";
+import { DEFAULT_CHECK_REPEAT, loadCheckCases, runCheckCase, type CaseResult } from "@relay/core";
+import { log, openReady, resolveProject } from "./_common.ts";
 import { act, openBoard, repoOf } from "./_board.ts";
+import { detectLanes } from "./probes.ts";
 
 const userDir = (): string => join(relayHome(), "steps");
 
@@ -35,7 +37,25 @@ function writeList(root: string, change: (list: string[]) => string[]): string[]
 
 const row = (s: Step): string => `${s.name.padEnd(16)} ${s.when.padEnd(10)} ${s.lane.padEnd(7)} ${s.mode.padEnd(10)} ${s.source.padEnd(8)} ${s.description}`;
 
-export function registerSteps(program: Command): void {
+export interface StepsDeps {
+  /** The lane runner `steps check` runs a step and its judge through (default: the worker's own, sandbox on). Tests script it. */
+  laneRun?: LaneRunner;
+  /** The code lanes this machine is logged in to (default: the same probes as `relay doctor`). */
+  lanes?: () => Promise<string[]>;
+}
+
+/** One line per run, then the case's verdict. */
+function printCase(r: CaseResult, repeat: number): void {
+  const name = `${r.step}/${r.case}`;
+  for (const run of r.runs) {
+    console.log(`${name}  run ${run.n}/${repeat}  ${run.pass ? "pass" : "FAIL"}  (${Math.round(run.durationMs / 1000)}s, $${run.costEquiv.toFixed(2)} equiv)${run.pass && run.judge ? `  ${r.judge}: ${run.judge.reason}` : ""}`);
+    for (const f of run.failures) console.log(`  ${f}`);
+    if (!run.pass && run.text) console.log(`  the ${r.lane} lane's last words: ${run.text.replace(/\s+/g, " ").slice(0, 300)}`);
+  }
+  console.log(`${name}  ${r.pass ? `pass (${r.runs.length} of ${repeat} runs)` : `FAIL${r.notRun ? ` (${r.notRun} more run${r.notRun === 1 ? "" : "s"} not made: a case passes only when every run does)` : ""}`}`);
+}
+
+export function registerSteps(program: Command, deps: StepsDeps = {}): void {
   const steps = program.command("steps").description("The steps this project runs around a task: comment cleanup before the PR, a second lane's eval after it, cleanup passes on demand (docs/STEPS.md)");
 
   steps
@@ -108,6 +128,59 @@ export function registerSteps(program: Command): void {
       const { root } = resolveProject(o.cwd ? { cwd: o.cwd } : {});
       const list = writeList(root, (l) => l.filter((x) => x !== name));
       log(`${PROFILE_PATH} now lists: ${list.join(", ") || "no steps"}`);
+    });
+
+  steps
+    .command("check")
+    .argument("<name>", "a step that has checks: remove-yap, cleanup, eval")
+    .option("--lane <lane>", "the code lane that runs the step (default: the step's own when it names one, else the first this machine is logged in to)")
+    .option("--judge <lane>", "the code lane that grades each run against the case's rubric (default: a logged-in code lane other than the one that ran)")
+    .option("--repeat <n>", "runs per case; a case passes when every run passes", String(DEFAULT_CHECK_REPEAT))
+    .option("--case <case>", "one case instead of all of the step's")
+    .option("--keep", "leave each case's last repository under ~/.harness/work/checks, to look at")
+    .option("--cwd <path>")
+    .option("--json")
+    .description("Run a step for real against its checks: a small repository per case, the step on a lane, fixed expectations, then a second lane's grade. Spends this machine's logins; exits 1 on a failure")
+    .action(async (name: string, o: { lane?: string; judge?: string; repeat: string; case?: string; keep?: boolean; cwd?: string; json?: boolean }) => {
+      const s = need(load(resolveProject(o.cwd ? { cwd: o.cwd } : {}).root), name);
+      const checksDir = join(runtimePaths().stepsDir, "checks");
+      const found = loadCheckCases(checksDir, name);
+      if (found.problems.length) throw new Error(`the checks of '${name}' cannot be read: ${found.problems.join("; ")}`);
+      const cases = o.case ? found.cases.filter((c) => c.name === o.case) : found.cases;
+      if (!cases.length) throw new Error(o.case && found.cases.length ? `'${name}' has no case '${o.case}'; it has ${found.cases.map((c) => c.name).join(", ")}` : `no checks for '${name}' under ${checksDir}`);
+      const repeat = Number(o.repeat);
+      if (!Number.isInteger(repeat) || repeat < 1 || repeat > 20) throw new Error("--repeat is a whole number from 1 to 20");
+      for (const [flag, lane] of [["--lane", o.lane], ["--judge", o.judge]] as const) if (lane !== undefined && !isCodeLane(lane)) throw new Error(`${flag}: '${lane}' is not a code lane (claude, codex, grok)`);
+
+      // the probes start the vendor CLIs, so they run only when a lane is left to choose
+      const served = o.lane && o.judge ? [] : await (deps.lanes ?? (async () => (await detectLanes()).lanes.filter(isCodeLane)))();
+      const lane = o.lane ?? (isCodeLane(s.lane) ? s.lane : served[0]);
+      if (!lane) throw new Error("no code lane is logged in on this machine (relay doctor says which); --lane names one anyway");
+      const judge = o.judge ?? otherLane(lane, served);
+      log(`${name} (${s.source}: ${s.path}): ${cases.length} case${cases.length === 1 ? "" : "s"}, up to ${repeat} run${repeat === 1 ? "" : "s"} each on the ${lane} lane, graded by the ${judge} lane${judge === lane ? " (no other code lane is logged in here, so it grades its own runs)" : ""}: at most ${cases.length * repeat * 2} model calls on this machine's logins`);
+
+      // every call is a step.usage row in this machine's ledger, in site mode too: a check belongs to no project a site knows
+      const h = await openReady({ local: true });
+      const run = deps.laneRun ?? defaultLaneRunner;
+      const laneRun: LaneRunner = async (req, on, opts) => {
+        const r = await run(req, on, opts);
+        await recordLane(h.ledger, req, r, on === "claude" ? "anthropic" : on);
+        return r;
+      };
+      const results: CaseResult[] = [];
+      try {
+        for (const c of cases) {
+          const r = await runCheckCase(c, { step: s, lane, judge, laneRun, workDir: join(relayHome(), "work", "checks"), repeat, ...(o.keep ? { keep: true } : {}), log });
+          results.push(r);
+          if (!o.json) printCase(r, repeat);
+        }
+      } finally {
+        await h.close();
+      }
+      const failed = results.filter((r) => !r.pass);
+      if (o.json) console.log(JSON.stringify({ step: name, lane, judge, repeat, pass: !failed.length, cases: results }, null, 2));
+      else log(failed.length ? `${failed.length} of ${results.length} case${results.length === 1 ? "" : "s"} failed: ${failed.map((r) => r.case).join(", ")}` : `all ${results.length} case${results.length === 1 ? "" : "s"} passed`);
+      if (failed.length) process.exitCode = 1;
     });
 
   steps
