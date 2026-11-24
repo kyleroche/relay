@@ -17,7 +17,6 @@
     "@relay/core": "workspace:*",
     "@relay/mcp": "workspace:*",
     "@vercel/board": "^0.52.0",
-    "@vercel/oidc": "^4.0.9",
     "@vercel/sandbox": "^4.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
