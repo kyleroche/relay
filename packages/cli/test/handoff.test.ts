@@ -72,6 +72,17 @@ describe("pushing work in progress", () => {
     expect(sh(repo, ["for-each-ref", "--format=%(refname)", "refs/remotes"]).split("\n")).toEqual(["refs/remotes/origin/main", `refs/remotes/origin/${sent.branch}`]);
   });
 
+  it("pushes nothing when the uncommitted work holds what looks like a secret, and names the file", () => {
+    // an untracked file nobody meant to share: git add -A would take it along
+    writeFileSync(join(repo, "notes.txt"), "the deploy key is ghp_" + "a".repeat(36) + "\n");
+    try {
+      expect(() => pushWorkInProgress(repo, "Finish the answer")).toThrow(/not pushed: the uncommitted work holds what looks like a secret in notes\.txt \(/);
+      expect(sh(bare, ["for-each-ref", "--format=%(refname)", "refs/heads/relay"])).toBe("");
+    } finally {
+      rmSync(join(repo, "notes.txt"));
+    }
+  });
+
   it("sends the uncommitted change as one commit on top of HEAD: edits, a deletion and an untracked file", () => {
     const sent = pushWorkInProgress(repo, "Finish the answer");
     expect(sh(bare, ["rev-parse", sent.branch])).toBe(sent.sha);

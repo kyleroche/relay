@@ -9,18 +9,21 @@
  * index and the current branch are never written.
  */
 import type { Command } from "commander";
-import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { board, isLaneName, laneNameProblem } from "@relay/core";
+import { board, findSecrets, isLaneName, laneNameProblem } from "@relay/core";
 import { gitRemoteRepo, log, resolveProject } from "./_common.ts";
 import { act, openBoard, repoOf } from "./_board.ts";
+import { git as gitIn } from "./_tree.ts";
 
 export const BODY_HELP =
   "a handoff needs a brief: the worker that takes it has a clone and this text, and none of the conversation. Write, in --body-file (or - for stdin): " +
   "the goal (what is true when this is done); the files that matter (where the work is, what to read first); what is out of scope (what not to touch); " +
   "and the command that proves it is done (the test or check to run, and what it should show)";
+
+/** A file larger than this is not read for secrets: it is data, not a config someone typed a key into. */
+const SCAN_MAX = 1024 * 1024;
 
 export interface WorkInProgress {
   /** `relay/handoff/<8 hex of the commit>`, on origin. */
@@ -32,14 +35,7 @@ export interface WorkInProgress {
   files: string[];
 }
 
-function git(root: string, args: string[], env?: NodeJS.ProcessEnv): string {
-  try {
-    return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, GIT_TERMINAL_PROMPT: "0", ...env }, maxBuffer: 64 * 1024 * 1024 }).trim();
-  } catch (e) {
-    const err = e as { stderr?: string; message: string };
-    throw new Error(`git ${args[0]} failed: ${(err.stderr || err.message).trim().split("\n").slice(-3).join(" ").slice(0, 400)}`);
-  }
-}
+const git = (root: string, args: string[], env?: NodeJS.ProcessEnv): string => gitIn(root, args, env ? { env } : {}).trim();
 
 /** Files that differ from `HEAD` in the working tree, new files included and ignored ones not: what a handoff without `--push` leaves behind. */
 export function uncommitted(root: string): string[] {
@@ -72,6 +68,19 @@ export function pushWorkInProgress(root: string, title: string): WorkInProgress 
   const toplevel = git(root, ["rev-parse", "--show-toplevel"]);
   const at = git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const made = commitWorkInProgress(toplevel, `relay handoff: ${title}\n\nWork in progress from ${at === "HEAD" ? "a detached HEAD" : at}, handed to a worker by relay handoff.`);
+  // everything git does not ignore goes along, a file nobody meant to share included: name them, and stop at a secret
+  const secrets = made.files.flatMap((file) => {
+    let text: string;
+    try {
+      text = git(toplevel, ["show", `${made.sha}:${file}`]);
+    } catch {
+      return []; // deleted in the work in progress
+    }
+    const kinds = text.length <= SCAN_MAX && !text.includes("\u0000") ? findSecrets(text) : [];
+    return kinds.length ? [`${file} (${kinds.join(", ")})`] : [];
+  });
+  if (secrets.length) throw new Error(`not pushed: the uncommitted work holds what looks like a secret in ${secrets.join("; ")}. Take it out or add the file to .gitignore, then run this again`);
+  if (made.files.length) log(`sending ${made.files.length} uncommitted file${made.files.length === 1 ? "" : "s"} to ${gitRemoteRepo(toplevel) ?? "origin"}: ${made.files.slice(0, 40).join(", ")}${made.files.length > 40 ? `, and ${made.files.length - 40} more` : ""}`);
   // under its own prefix, so it never reads as a worker's `relay/<lane>-<8 hex>` branch of a lane called handoff
   const branch = `relay/handoff/${made.sha.slice(0, 8)}`;
   git(toplevel, ["push", "--quiet", "origin", `${made.sha}:refs/heads/${branch}`]);
