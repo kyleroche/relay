@@ -60,7 +60,7 @@ The lead is its own Vercel project on the same team as the relay site.
 1. Create a project from this repository with **Root Directory** `apps/lead`, no framework preset, build command `pnpm build` (which runs `eve build`), and Node 24 or newer. On Vercel, `eve build` writes the deployment under `.vercel/output`.
 2. Set the environment variables above for Production.
 3. Deploy. Check it answers: `curl https://<lead>/eve/v1/health`.
-4. Tell the site where the lead is. The site wakes it with `wakeLead({ url, token, project, task, event })` from `@relay/core`, where `token` is the site deployment's own Vercel OIDC token. That wiring lives in the site, not here.
+4. Tell the site where the lead is: set `RELAY_LEAD_URL` on the site's project to the lead's origin and redeploy it. The site then wakes the lead from its `lead` board watcher (`apps/web/lib/lead.ts`) with `wakeLead({ url, token, project, task, event })` from `@relay/core`, where `token` is the site deployment's own Vercel OIDC token. A site the board does not wake (local dev, a board at `BOARD_URL`) wakes no lead.
 
 `eve link` and `eve deploy` from `apps/lead` do the same from the CLI (`node_modules/eve/docs/guides/deployment/vercel.mdx`). This app depends on the workspace package `@relay/core`, so the deployment must be built from the repository, not from a copy of this directory alone.
 

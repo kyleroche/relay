@@ -143,7 +143,7 @@ scopes: a bot never invites to a scope it does not hold, and never to `tokens:wr
 relay merges approved pull requests, comments on them, and receives a repository's issues, labels and pull requests
 as a GitHub App installed on the organization, instead of someone's personal token. On a fresh deployment, `<site>/setup/github` (signed in) creates the
 app in one click: it posts a manifest with relay's permissions (Actions read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues
-write, Metadata read, Pull requests write) and events (issues, issue_comment, pull_request, pull_request_review,
+write, Metadata read, Pull requests write) and events (issues, pull_request, pull_request_review,
 workflow_run, deployment_status) to GitHub, GitHub asks you to confirm and sends the credentials back to
 `/setup/github/callback`, and relay stores the id, private key and webhook secret sealed in its database. Then install
 the app on the repositories relay manages. Installation tokens are minted per repository and last an hour; nothing
@@ -183,7 +183,7 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 | Tool | REST | Scope | Does |
 |---|---|---|---|
 | `relay_whoami()` | `GET /api/v1/whoami` | public | the connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
-| `relay_task_create(project, title, body?, lane?, model?, needs?, base?, plan?, idempotency_key?)` | `POST /api/v1/tasks` (`lane` required) | `tasks:write` | opens a task: a thread in the project's queue on the board, labelled with its lane (and model), in the repository the project is registered with. A lane that is neither built in nor listed by an online worker is refused, naming the lanes that have one. With `plan: true` (the MCP tool) it is a planning task: a lane reads the repository and proposes tasks, and none of them is opened until the plan is approved ("Plans and reports" below). Returns `task_id` and the task's state |
+| `relay_task_create(project, title, body?, lane?, model?, needs?, base?, plan?, idempotency_key?)` | `POST /api/v1/tasks` (`lane` required) | `tasks:write` | opens a task: a thread in the project's queue on the board, labelled with its lane (and model), in the repository the project is registered with. A lane that is neither built in nor listed by an online worker is refused, naming the lanes that have one. With `plan: true` (the MCP tool, or `"plan": true` in the REST body) it is a planning task: a lane reads the repository and proposes tasks, and none of them is opened until the plan is approved, like any task in review ("Plans and reports" below). Returns `task_id` and the task's state |
 | `relay_task_get(task_id)` | `GET /api/v1/tasks/{id}` | `tasks:read` | the task with its state, lane, model, pull request (`pr_url`), hold and its reason, who holds the claim, result or reason, the usage rows relay's own authors wrote in its thread, and the latest notes there |
 | `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&lane=&limit=` | `tasks:read` | tasks oldest first, the order a queue is worked in. Default `state: "open"`: everything not done or closed, failed included. `state: "review"` is what waits for a decision |
 | `relay_task_approve(id)` | `POST /api/v1/tasks/{id}/approve` | `tasks:write` | approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task; a task whose deliverable is its attached outputs or a report is completed with no merge, and approving a task held for a plan opens the plan's tasks as the approver and completes it. Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review. A bot never approves a task it opened (403). The deployment must be able to settle the task on the board, which is checked before anything merges (403 without the `--site-project` grant). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success |
@@ -256,11 +256,11 @@ ask the person to approve it on the task's page, or have a second bot the person
 
 ### Plans and reports
 
-An ask that needs breaking down is opened as a planning task: `relay_task_create` with `plan: true`, or
-`relay task create --plan` on a machine. A worker runs the `plan` step read-only over the repository and ends with a
-plan of at most 20 tasks, each with a key, a title, a body, a lane and the keys of the tasks it needs. The worker
-posts it in the thread as `plan.json` with a summary and holds the task with kind `awaiting_plan`; the task shows as
-`review`. Nothing is opened yet.
+An ask that needs breaking down is opened as a planning task: `relay_task_create` with `plan: true`, `POST
+/api/v1/tasks` with `"plan": true`, or `relay task create --plan` on a machine. A worker runs the `plan` step
+read-only over the repository and ends with a plan of at most 20 tasks, each with a key, a title, a body, a lane and
+the keys of the tasks it needs. The worker posts it in the thread as `plan.json` with a summary and holds the task
+with kind `awaiting_plan`; the task shows as `review`. Nothing is opened yet.
 
 Approving the planning task opens the plan's tasks as whoever approved, each once (the idempotency key is
 `plan:<the planning task's ID>:<key>`), with `needs` pointing at the opened tasks, and completes the planning task.
@@ -275,10 +275,13 @@ for review with the reason `report`. Approving it completes the task as read (`d
 
 A project's profile (`.relay/project.json`, `docs/PROFILE.md`) defines capability sets: names of environment
 variables and hosts a task may be allowed to use. A task has none until a person grants it one, for the task's text
-as it stands. A person also grants the cap for a paid sandbox run. There is no MCP tool for a grant, and the site
-refuses a grant asked with a token (403): a token never decides what a task may reach or what it may spend. On a
-machine, `relay task grant <id> --set <name>` or `--cloud <usd>` grants as that machine's own Vercel login. A bot
-that opens a task whose tools need a set tells the person which set to grant.
+as it stands. A person also grants the cap for a paid sandbox run. There is no MCP tool and no REST route for a
+grant, and core's desk refuses one asked with a token (403): a token never decides what a task may reach or what it
+may spend. A signed-in person grants on the task's page (`<site>/tasks/<id>`): the Grants panel lists the profile's
+sets with a Grant button each, and a queued task that none of the person's workers can take shows "Run in cloud",
+which opens a sheet with the cap to approve (`docs/PROFILE.md`, "Paid sandbox runs"). On a machine,
+`relay task grant <id> --set <name>` or `--cloud <usd>` grants as that machine's own Vercel login. A bot that opens
+a task whose tools need a set tells the person which set to grant. A bot cannot start a paid run.
 
 ### A task on the wrong lane, failed or held: requeue
 
@@ -300,6 +303,10 @@ close tool. Its model calls are billed per token through Vercel AI Gateway, and 
 `external.lead.usage` rows. Its token is an operator token minted by hand, since it keeps the token in an
 environment variable and cannot store a rotated one. `apps/lead/README.md` has the environment, the token and the
 deployment.
+
+The lead is the one bot the site tells when something happened. With `RELAY_LEAD_URL` set on the site, a task that
+failed, was held at the gate or reached review makes the site post to the lead's `/relay/wake`, signed with the
+site deployment's Vercel OIDC token (`docs/HOSTING.md`, "The lead"). Every other bot asks.
 
 ## Grok Bot walkthrough
 

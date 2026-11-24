@@ -15,7 +15,7 @@ relay exists because one person using several coding-agent subscriptions wastes 
 | Piece | What | Where it runs |
 |---|---|---|
 | Front end | Any chat agent that can call the site's MCP tools or API, or a terminal with `relay task`. Grok Bot is the reference. | wherever the user talks |
-| Task bus | Channels on the team's Vercel Board: `work/<project>` is a project's queue (every thread in it is a task), `relay/workers` has one message per worker machine. The only labels on a task are `lane` and `model` (`packages/core/src/board/mapping.ts`). Where the work happens is a `relay-task@1` block in the task's own text (`repo`, `base`, `issue`); how a run ended, an eval's verdict, a gate release and a grant are `relay-run@1`, `relay-eval@1`, `relay-release@1` and `relay-grant@1` blocks in replies, counted only from an author the worker takes work from (`packages/core/src/board/schemas.ts`). A task's ID is the board's message ID | Vercel Board |
+| Task bus | Channels on the team's Vercel Board: `work/<project>` is a project's queue (every thread in it is a task), `relay/workers` has one message per worker machine. The labels on a task are `lane` and `model`, which steer it, and `cloud`, a hint that a paid run was granted for it (`packages/core/src/board/mapping.ts`). Where the work happens is a `relay-task@1` block in the task's own text (`repo`, `base`, `issue`); how a run ended, an eval's verdict, a gate release and a grant are `relay-run@1`, `relay-eval@1`, `relay-release@1` and `relay-grant@1` blocks in replies, counted only from an author the worker takes work from, and a release or a grant only from who may decide: a trusted principal itself or the site's `relay-site`, never a worker's profile (`packages/core/src/board/schemas.ts`). A task's ID is the board's message ID | Vercel Board |
 | Workers | Machines running `relay work`: they show their lanes from their logins in `relay/workers`, claim ready tasks from the board with the machine's own `vercel login`, run `claude -p`, `codex exec`/`fx`, or `grok -p` in a fresh clone, open a PR and report in the task's thread (`docs/WORKERS.md`). | the user's machines |
 | Scheduler | The board's own tasks: a claim gives the oldest ready task under `work/` whose `lane` label and owner match to exactly one claimer, under a lease of at most 5 minutes that the job renews; a worker with nothing to take waits on the board instead of polling (`packages/core/src/work/worker.ts`) | Vercel Board |
 | Steps | Named instructions a lane runs at a fixed point of a task: comment cleanup before the PR, a second lane's eval after it, a cleanup pass, a plan or a retro on demand. Markdown files in three layers (relay's, the user's, the project's), listed per project in `.relay/project.json` (`docs/STEPS.md`) | the worker, from the repo's default branch |
@@ -43,8 +43,10 @@ user owns that runs `relay work`.
 | `lane=nodes` | a worker with the Griptape Nodes engine, the workflow the task's manifest names | the vendor keys in the worker's environment | none | outputs attached to the task's thread, no PR | yes, one block per output model |
 
 The vendors' hosted tiers are not lanes on the board. One task can run on paid credits instead of a subscription:
-`relay work --task <id> --billing gateway --cap <usd>` runs it on the Claude lane through a model gateway, after a
-person granted that task a cap (`docs/WORKERS.md`, "One task on paid credits").
+a hosted relay offers a queued task that none of the owner's workers can take a run in a Vercel Sandbox, and starts
+one only after a person approved a cap for that task. The sandbox runs
+`relay work --task <id> --billing gateway --cap <usd>` on the Claude lane through a model gateway, and the job runs
+on paid credits only under that grant, within one cap ("Paid sandbox runs" below; `docs/PROFILE.md`).
 
 ## A task's life
 
@@ -126,7 +128,9 @@ both as `bot-grok-bot`), so the board shows who opened, approved or closed a tas
 `relay-`, and relay believes data only from a trusted principal itself or from relay's own `relay-…` profiles of it,
 so nothing in a caller's words is data, whatever carried it (`docs/SECURITY.md`, "Who relay believes"). What the
 site itself says as data, a gate release or an eval that could not run, goes out as its own profile `relay-site`,
-after the site has checked who asked. A team's projects start with read, post and label on its board; lifting a
+after the site has checked who asked. A grant and a gate release are decisions, and a worker believes one only from
+a trusted principal itself or from `relay-site`, never from a worker's profile (`isDecidingActor`). A team's projects
+start with read, post and label on its board; lifting a
 hold or calling off a task someone else opened takes everything in `work/`, which is the grant
 `relay setup --board --site-project <name>` makes (`docs/WORKERS.md`, "A machine becomes a worker"). The board page
 shows a warning when the deployment does not manage `work/`.
@@ -157,7 +161,41 @@ read by everyone who can read the board, so it holds the preferences and decisio
 the owner's own, wider ones out (`shared` in `packages/core/src/brief/index.ts`). A worker with memory of its own
 compiles its brief from that instead, with the owner's preferences in it.
 
-**What the board wakes it for.** Two watchers on every project's queue (`work/`), served at `/api/board`
+**The task page.** `/tasks/<id>` names an approval for what it does (`reviewKind` in `apps/web/lib/tasks.ts`):
+"Approve and merge" for a pull request, "Approve plan" for a proposed plan (the second click opens its tasks, and
+the page then lists them), "Mark as read" for a report, "Approve outputs" for a nodes task. Its Grants panel shows
+the capability sets of the project's profile, read from the repository's default branch through the site's GitHub
+client and kept five minutes (`apps/web/lib/profile.ts`), each with its variables and hosts and a Grant button, and
+whether a paid run was approved. What is granted is read from the blocks in the thread, never from a label.
+
+**Paid sandbox runs.** The rules are pure functions in `packages/core/src/cloud/`; the site computes, asks and turns
+a plan into calls on `@vercel/sandbox` (`apps/web/lib/cloud/`).
+
+- *The offer* (`cloudOffer`, `apps/web/lib/cloud/view.ts`) is computed at render for a queued task and writes
+  nothing: the task is on `claude` or `any`, no worker on a person's own subscriptions that is online or idle serves
+  its lane, it has waited `RELAY_CLOUD_AFTER_MINUTES`, the project's profile could be read and does not say
+  `cloud: never`, and the deployment has the gateway's key. A card and the task page show "Waiting for a worker"
+  with "Run in cloud" (a sheet with an estimate from the project's past runs and a cap to edit) and "Keep waiting".
+- *The approval* is the desk's `grantFor`: a `relay-grant@1` block with the cap, a signed-in person only, and the
+  label `cloud=approved` as a hint.
+- *The pool* (`runApproved` in `apps/web/lib/cloud/pool.ts`) is the only thing that starts a sandbox. It runs after
+  an approval and with the throttled feed sync of a page load. It starts one for each queued task that carries a
+  grant for its text as it stands, from who may decide, within the deployment's limit, and whose profile still
+  allows it. A start is marked in the thread as `relay-site` before the sandbox is made, so two instances start one;
+  a start that did not come up is tried again, 3 times at most; a start that may have run is never followed by
+  another.
+- *The sandbox* (`cloudRunPlan`, `apps/web/lib/cloud/launch.ts`) gets no credential. The board (as the deployment,
+  under the worker's profile, narrowed to the queues and the workers channel), an installation token of the site's
+  GitHub App for the one repository and the gateway's key are set on its requests by its firewall; the environment
+  inside holds placeholders. Every other host is blocked except the npm registry and the hosts of the capability
+  sets granted to the task. The worker inside is `cloud-<ref>` and does not count as a worker that could take the
+  next task.
+- *The job* decides once more (`paidRun`): no grant in the thread, or `cloud: never`, and the task is handed back.
+
+None of it has been run against a real sandbox or a real gateway yet, and the sandbox installs the version of
+`@kyleroche/relay` in `packages/cli/package.json`, which must be published first.
+
+**What the board wakes it for.** Watchers on every project's queue (`work/`), served at `/api/board`
 (`apps/web/lib/board-watch.ts`); the board verifies its own wake-ups, so the route needs no session.
 
 - `ledger` brings the feed up to the board (`syncLedger`). It reads the queues' events from a cursor kept in the
@@ -191,6 +229,10 @@ compiles its brief from that instead, with the owner's preferences in it.
   (the CLI); for a task the site opened it is the same author posting the same message, which changes nothing. A
   step's own task gets none. A worker hands the file to its lane when the site's deployment is in that worker's
   `board.from`, and only a brief from an author it believes is used.
+- `lead` exists only where `RELAY_LEAD_URL` names relay's lead. For a task that failed, was held at the gate or
+  reached review (`leadWakeOf`; a step's own task and anything an untrusted principal did wake nobody), the site
+  posts what happened to the lead's `/relay/wake`, signed with the deployment's own Vercel OIDC token
+  (`apps/web/lib/lead.ts`). A wake-up that fails is logged and dropped; the task is on the board either way.
 
 **GitHub.** Two deliveries act on the board (`apps/web/lib/webhooks/board.ts`). An issue opened with, or given, an
 `agent:<lane>` label by an allowed sender (`RELAY_ALLOWED_SENDERS`) opens a task in the queue of the project
@@ -222,11 +264,12 @@ planning task, so a worker that has read the repository proposes the pieces and 
 | What it costs | its model calls go through Vercel AI Gateway and are billed per token to the Vercel team that owns its project. It is the one part of relay that is not a subscription. After each turn it writes one `external.lead.usage` row to the feed |
 | What shows on the board | what it does shows under its token's name, and the desk's rules for a bot apply to it |
 
-`packages/core/src/lead/client.ts` also defines the request that wakes the lead about a task that failed, was held
-at the gate or reached review: `wakeLead` sends it, the lead's route `POST /relay/wake` validates it with
-`parseLeadWake` and checks the caller's Vercel OIDC token against the site's team and project
-(`apps/lead/README.md`, "Environment"), and `leadWakeOf` in `packages/core/src/board/site.ts` says which board events
-are such a wake-up.
+A site wakes the lead about a task that failed, was held at the gate or reached review, when `RELAY_LEAD_URL` is
+set on the site ("What the board wakes it for" above). `packages/core/src/lead/client.ts` is the wire both ends
+share: `wakeLead` sends the request with the site deployment's Vercel OIDC token, and the lead's route
+`POST /relay/wake` validates it with `parseLeadWake` and checks that token against the site's team and project
+(`apps/lead/README.md`, "Environment"). `leadWakeOf` in `packages/core/src/board/site.ts` says which board events are
+such a wake-up. There is one session per relay project, and a redelivered event starts no second turn.
 
 The lead's behavior evals (`apps/lead/evals`) are written and have not been run against a model.
 

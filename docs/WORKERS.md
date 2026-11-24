@@ -90,6 +90,7 @@ clones, what it pushes or what gets merged is a label.
 |---|---|---|
 | `lane` | a task | who may run it: `claude`, `codex`, `grok`, `nodes`, a lane another worker lists, or `any` (whichever code lane is free). It is the claim's filter |
 | `model` | a task | the model the lane is asked to use; the lane's default without it |
+| `cloud` | a task | `approved` once a paid sandbox run was granted for it. A hint that tells a hosted relay which threads to read; what counts is the grant in the thread ("One task on paid credits" below) |
 | `relay=<kind>` | a reply relay wrote | `log` (a line about the run), `result` (the lane's summary and the pull request), `usage` (the run and usage blocks), `brief` (a compiled brief, attached as `brief.md`), `note` (a reviewer's note, a step's findings), `asset` (one output of the nodes lane) |
 
 A reply without the `relay` label is a person's, or another agent's, words. The next run reads those and the notes
@@ -109,8 +110,15 @@ principal is someone a site wrote for (`human-…`, `bot-…`), and what it says
 | `relay-task@1` | the task's own text | `repo` (`owner/name`, where the work happens; a task without it fails, since there is nothing to clone), `base` (the branch to start from instead of the default one), `issue` (`owner/name#n`, the GitHub issue it answers); on a step's task also `step`, `evaluates` (the task whose work it looks at) and `branch` (that work's branch) |
 | `relay-run@1` | the runner's usage reply | how a run ended: `outcome`, `lane`, `worker`, the `branch` and the `pr` it produced, the `eval_task` it opened |
 | `relay-eval@1` | the work's thread, after an eval's findings | `step`, `task` (the step's own task), `lane`, `verdict`, and `ran` (false when the step could not run) |
-| `relay-release@1` | the thread, at a gate release | `digest`: the text a person released, so text added later is graded again |
-| `relay-grant@1` | the thread, at a grant | `set` (a capability set of the project's profile) or `cloud_cap_usd` (the most a paid sandbox run may cost), and `digest`: the task's title and body as they stood, so a grant covers that text and no later edit (`docs/PROFILE.md`) |
+| `relay-release@1` | the thread, at a gate release | `digest`: the text a person released, so text added later is graded again. Believed only from who may decide (below) |
+| `relay-grant@1` | the thread, at a grant | `set` (a capability set of the project's profile) or `cloud_cap_usd` (the most a paid sandbox run may cost), and `digest`: the task's title and body as they stood, so a grant covers that text and no later edit (`docs/PROFILE.md`). Believed only from who may decide (below) |
+
+**A decision is believed from fewer authors than a report.** A grant and a gate release say what a task may reach or
+spend, or that a person read its text. They count only from a trusted principal itself or from the site's own
+profile of one, `relay-site`, which the site writes after a signed-in person asked (`isDecidingActor` in
+`packages/core/src/board/schemas.ts`). A worker's profile, `relay-<worker>-<lane>`, reports what a run did and never
+decides, so a lane that got hold of its worker's board credential cannot grant its own task a set or release its own
+text.
 | `relay-usage@1` | the runner's usage reply | one model call's tokens and cost ("What a job does on the machine" below) |
 | `relay-worker@1` | a worker's message in `relay/workers` | `name`, `host`, `lanes`, `labels`, `version`, `meters` |
 | `relay-asset@1` | a reply with one output of the nodes lane attached | `node`, `parameter`, `index`, `version`, `workflow`, `mime`, `bytes`, the attachment |
@@ -270,8 +278,9 @@ handle that:
    a person released, as a `relay-release@1` block with its digest says, is not graded again.
 5. **Access.** For each capability set the task was granted, the worker looks up the values of the set's variables
    by name, in its own environment and then in the Vercel project the profile names, and posts one line in the
-   thread: the sets, how many hosts, which names it did not find. A task with no grant gets nothing
-   (`docs/PROFILE.md`, "Capability sets and grants").
+   thread: the sets, how many hosts, which names it did not find. A task with no grant gets nothing. On any lane but
+   `claude` the values go to the project's own commands and are withheld from the lane's process, and the line says
+   so (`docs/PROFILE.md`, "Capability sets and grants").
 6. **The branch** is `relay/<lane>-<ref>` from the tip of the base branch (the block's `base`, else the
    repository's default). A re-run starts over, never from an older attempt; the one exception is the answer to an
    eval, which continues the branch of the run that asked for it (`docs/STEPS.md`).
@@ -290,8 +299,8 @@ handle that:
    notes quoted the same way, what the profile says about the project (the setup that ran, the checks the worker
    will run, the tools and whether this task was granted what each needs, the skill files), the memory, and the
    deliverable.
-10. **The lane runs** with the task's `model` label, the granted values in its environment, and a per-run time limit
-    (`--max-minutes`, default 60).
+10. **The lane runs** with the task's `model` label, the granted values in its environment when the lane is `claude`,
+    and a per-run time limit (`--max-minutes`, default 60).
 11. **The project's `before-pr` steps** go over the change in the same clone (`docs/STEPS.md`).
 12. Whatever the lane left uncommitted is **committed** as the machine's GitHub login, with `relay-agent` as
     co-author. A lane that changed nothing is a failed run, with what it said.
@@ -359,10 +368,13 @@ own log, result, usage, brief or asset message. There is no relay permission lay
 the caller's own Vercel login, and the board lets only a task's owner, or someone with `manage` in its channel, lift
 a hold, reopen or cancel it.
 
-The same two decisions are on the task's page on a hosted relay (`/tasks/<id>`), in its API and in its MCP tools,
-made as the profile of whoever asked, behind the site's own rules for bots (`docs/ARCHITECTURE.md`, "The site and
-the board"). A pull request merged on GitHub itself completes the task too, when the site receives the delivery,
-whether the task was in review or still held for an eval.
+The same two decisions are on the task's page on a hosted relay (`/tasks/<id>`), in its API and in its MCP tools, made
+as the profile of whoever asked, behind the site's own rules for bots (`docs/ARCHITECTURE.md`, "The site and the
+board"). The page names the approval for what it does: "Approve and merge" for a pull request, "Approve plan" for a
+plan (the second click opens its tasks, and the page then lists them), "Mark as read" for a report, "Approve outputs"
+for a nodes task. Its Grants panel lists the capability sets of the project's profile, each with a Grant button, and
+says whether a paid sandbox run was approved. A pull request merged on GitHub itself completes the task too, when the
+site receives the delivery, whether the task was in review or still held for an eval.
 
 ### The nodes lane
 
@@ -461,7 +473,7 @@ reason). It gets there two ways: the deterministic pre-check when the task is op
 worker sees it ready, or the worker's grade before the lane runs. Release it with `relay task release <id>` once you
 have read the text: relay posts a `relay-release@1` block with the digest of the text as it stands (the title, the
 body, the notes in the thread), then lifts the hold. The board lets only the task's owner, or someone with `manage`
-in its channel, lift a hold, and a worker takes the block only from an author relay believes ("The board" above;
+in its channel, lift a hold, and a worker takes the block only from who may decide ("The board" above;
 a hosted relay posts it as `relay-site`, with who asked beside it). The task is
 `queued` again and that text is not graded a second time; text added to the thread afterwards changes the digest and
 is graded. `relay task requeue` on a held task lifts the hold without a release, so the next job grades the text
@@ -517,8 +529,9 @@ runs every dependency's install script. Each one runs under Anthropic's sandbox 
 the clone and the package caches, the same denied paths, the same default hosts plus the granted ones. With
 `--no-sandbox`, or in the container tier when the nested sandbox cannot start, they run directly with `sh -c`. A
 worker that should sandbox and cannot find the runtime does not run the command: it fails with exit 127 and the
-reason, and never falls back to running it unguarded. The values of a granted capability set are in the environment
-of these commands and of the lane, and nowhere else (`docs/PROFILE.md`).
+reason, and never falls back to running it unguarded. The runtime is a dependency of relay, installed with it, and
+`relay doctor`'s `sandbox` line warns when it is missing. The values of a granted capability set are in the
+environment of these commands, and of the lane when the lane is `claude`, and nowhere else (`docs/PROFILE.md`).
 
 The allowlist is a permission policy, the second layer: it decides which tool calls the CLI accepts, the sandbox
 decides what the accepted commands can reach. `pnpm test` still runs whatever the repository's `package.json` says,
@@ -715,7 +728,7 @@ the command refuses to open a task without a brief in `--body-file` (`-` reads s
 matter, what is out of scope, and the command that proves it is done.
 
 With `--push` the uncommitted work goes along. The working tree is made a commit on top of `HEAD` in a temporary
-index and pushed to origin as the branch `relay/handoff-<8 hex of the commit>`, and the task starts from that branch
+index and pushed to origin as the branch `relay/handoff/<8 hex of the commit>`, and the task starts from that branch
 (its `base`), so the worker's pull request is against it. The working tree, the index and the current branch stay as
 they are. New files git does not ignore are included. `--push` is refused when the checkout's origin is not the
 project's repository, since the worker clones the project's repository, and a lane no worker serves is refused
@@ -731,12 +744,20 @@ Every lane runs on a subscription login by default. One run can instead be paid 
 relay work --task <id> --billing gateway --cap <usd>
 ```
 
+The flags only say how the worker was started. Whether the task runs on paid credits is decided in the job, from the
+task's thread (`paidRun` in `packages/core/src/work/job.ts`):
+
 | Rule | |
 |---|---|
 | `--billing gateway` needs `--task <id>` | it runs one named task and exits |
-| `--billing gateway` needs `--cap <usd>` | a number above 0; it is passed to Claude Code as `--max-budget-usd` |
+| `--billing gateway` needs `--cap <usd>` | a number above 0 |
 | the gateway's address and credential | `RELAY_GATEWAY_URL` and `RELAY_GATEWAY_TOKEN` in the environment of whoever starts the worker; there is no flag for them |
 | the lane | `claude` only: a task on `claude` or `any` runs on it, and a task on another lane is refused, since no other lane has a gateway adapter |
+| a person's grant | the thread must hold a `relay-grant@1` block with `cloud_cap_usd` for the task's text as it stands, from who may decide ("The board" above). Without one the worker hands the task back untouched |
+| the project's profile | `cloud: never` refuses the run, and the task is handed back the same way |
+| the cap | one for the whole job: the smaller of `--cap` and the grant. Each model call may spend what is left, and what it cost comes off before the next. With less than 0.02 US dollars left, no further call is made |
+| the injection gate | its model call goes through the gateway too, within the same cap and at most 0.25 US dollars |
+| steps | `before-pr` steps run within the cap. An `after-pr` step is not run: the work goes straight to review, and the thread says so |
 | the brief | the thread's `brief.md`; a gateway run does not compile one from the machine's memory |
 | usage | each `relay-usage@1` block of the run says `billing: gateway` |
 
@@ -744,11 +765,15 @@ Both variables are among those no child of a job inherits (`JOB_ENV_STRIPPED`). 
 as its API endpoint and credential for that run only. Without `--billing gateway` the Claude lane hands Claude Code
 no endpoint and no API credential from the environment, so a stray key never replaces the subscription login.
 
-This is the command a sandbox started for an approved task runs. A person approves the spend for one task with
-`relay task grant <id> --cloud <usd>` (`docs/PROFILE.md`, "Paid sandbox runs").
+**Where the command runs.** A hosted relay starts it in a Vercel Sandbox for a queued task that none of your workers
+can take, after a person approved a cap for that task on its page or with `relay task grant <id> --cloud <usd>`.
+The site offers the run and never starts one unasked. The three credentials the sandbox needs (the board, GitHub for
+the one repository, the model gateway) are put on its requests by the sandbox's firewall and are not readable
+inside, and the worker there registers as `cloud-<ref>`. `docs/PROFILE.md`, "Paid sandbox runs", has when a run is
+offered, what the sandbox is and when it starts; `docs/HOSTING.md` has what the deployment needs.
 
-> Not documented yet: what starts that sandbox, how it reads the grant's cap and the profile's `cloud` policy, and
-> the sandbox pool. That code is still being written.
+None of this has been run against a real sandbox or a real gateway yet. The sandbox installs the version of
+`@kyleroche/relay` in `packages/cli/package.json`, which must be on npm with `--task` and `--billing` in it first.
 
 ## No cloud lanes
 
@@ -790,6 +815,10 @@ Claude Code cloud sessions) are not lanes: nothing on the board or the site hand
   thread. `relay task requeue <id>` retries it, `--lane` on another lane.
 - A task is `failed` with *sandbox unavailable*: Claude Code could not set up its OS sandbox on that worker. On Linux
   install `bubblewrap` and `socat`; `relay doctor` shows the `sandbox` line. The job was not run unsandboxed.
+- A task is `failed` with *setup failed* and *exited 127*: the sandbox runtime the project's commands run under was
+  not found beside relay. `relay doctor`'s `sandbox` line says so; reinstall relay. The command was not run unguarded.
+- A paid run ends at once and the task is `queued` again: the worker found no grant for the task's text as it stands,
+  or the project's profile says `cloud: never`, and handed the task back. Its log says which.
 - A task is `failed` with *the task's text names no repository*: it was made without a `relay-task@1` block. Open
   it with `relay task create`, which writes one (`--repo owner/name`, or the project's registered repository).
 - `relay task approve` says the PR *is not a branch relay pushed for* the task: the hold names a pull request whose

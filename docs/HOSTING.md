@@ -82,7 +82,12 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | merging a task's pull request on approval and deleting its branch, the comment on a pull request sent back, closing a closed task's pull request and issue, asset comments, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
 | `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
 | `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with contents, pull requests and issues write on the managed repos | the fallback when no app is configured, for the same merges, comments and closes |
-| `RELAY_ALLOWED_SENDERS` | comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone), and whose `agent:<lane>` label on an issue opens a task on the board (else the repo variable; with neither, nobody) |
+| `RELAY_ALLOWED_SENDERS` | comma-separated logins | whose `agent:<lane>` label on an issue opens a task on the board (else the repository's Actions variable of the same name; with neither, nobody) |
+| `RELAY_GATEWAY_TOKEN` | optional: the model gateway's key (Vercel AI Gateway → API keys) | paid sandbox runs (step 8c). Without it no run is offered or started. The sandbox's firewall adds it to requests; it never enters the sandbox |
+| `RELAY_GATEWAY_URL` | optional: an https URL | the gateway endpoint Claude Code is pointed at in a paid run; unset means Vercel AI Gateway's Claude Code endpoint |
+| `RELAY_CLOUD_AFTER_MINUTES` | optional: a positive number | how long a task waits in the queue before a paid run is offered; unset means 15 |
+| `RELAY_CLOUD_MAX_CAP_USD` | optional: a positive number | the most a person may approve for one paid run, in US dollars; unset means 10, and never above 1000 |
+| `RELAY_LEAD_URL` | optional: the origin of relay's lead (step 8b) | when set, the site wakes the lead about a task that failed, was held at the gate or reached review; unset means no lead |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
 | `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
@@ -145,7 +150,7 @@ ways to set it up; the environment always wins over a stored app, which is also 
 
 **One click (fresh deployment).** Sign in, open `https://<site>/setup/github`, optionally name the organization that
 should own the app, and press Create. The page posts a GitHub App manifest (name `relay-<host>`, permissions Actions
-read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues write, Metadata read, Pull requests write; events issues, issue_comment,
+read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues write, Metadata read, Pull requests write; events issues,
 pull_request, pull_request_review, workflow_run, deployment_status; webhook `https://<site>/api/webhooks/github`) to
 `https://github.com/settings/apps/new` (or the organization's page). GitHub asks you to confirm and redirects to
 `/setup/github/callback`, which exchanges the one-time code (`POST /app-manifests/{code}/conversions`) and stores the
@@ -184,7 +189,7 @@ arrived and when the last one did). Organization → Settings → Webhooks → A
 - Payload URL: `https://<RELAY_PUBLIC_URL>/api/webhooks/github`
 - Content type: `application/json`
 - Secret: the value of `GITHUB_WEBHOOK_SECRET`
-- Events: *Let me select individual events* → Issues, Issue comments, Pull requests, Pull request reviews,
+- Events: *Let me select individual events* → Issues, Pull requests, Pull request reviews,
   Workflow jobs, Workflow runs, Pushes.
 
 `docs/FEED.md` lists which event becomes which feed row. The handler is idempotent on the `X-GitHub-Delivery`
@@ -267,7 +272,37 @@ and deployment steps: `apps/lead/README.md`. It reaches this site only through `
 the Access page (`tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read`, `events:write`). Its model
 calls are billed per token through Vercel AI Gateway to the team that owns its project. The site runs without it.
 
+To have the site wake the lead, set `RELAY_LEAD_URL` on the site's project to the lead's origin (https) and deploy.
+The site then posts to the lead's `/relay/wake` when a task failed, was held at the gate or reached review, signed
+with the site deployment's own Vercel OIDC token; no secret is shared between the two. On the lead's project, set
+`RELAY_SITE_TEAM` and `RELAY_SITE_PROJECT` so it accepts that token and no other project's. The `lead` watcher
+exists only where the variable is set, and only the board wakes it: a site the board does not wake (local
+development, a board at `BOARD_URL`) wakes no lead.
+
+## 8c. Paid sandbox runs (optional)
+
+A queued task that none of your workers can take can be offered a run in a Vercel Sandbox on paid credits. Nothing
+starts or spends until a signed-in person approves a cap for that one task (`docs/PROFILE.md`, "Paid sandbox runs").
+The deployment needs:
+
+| Need | Why |
+|---|---|
+| `RELAY_GATEWAY_TOKEN` | the model gateway's key; without it the offer is never shown |
+| the site's GitHub App (step 4b), installed on the task's repository | the site mints an installation token for that one repository for each start; `GITHUB_TOKEN` alone is not enough |
+| nothing for the board | the sandbox reaches it as the site's deployment, under the worker's profile, with its rights narrowed to the queues and the workers channel |
+| nothing for the sandbox itself on Vercel | it is created with the deployment's own OIDC token; locally, `vercel env pull` provides one |
+
+`RELAY_CLOUD_AFTER_MINUTES` and `RELAY_CLOUD_MAX_CAP_USD` set when a run is offered and the most a person may
+approve. A project opts out with `"cloud": "never"` in its profile.
+
+The sandbox installs `@kyleroche/relay` from npm at the version in `packages/cli/package.json` the site was built
+with. That version must be published (section 8), with `relay work --task` and `--billing` in it, before a paid run
+can work. Nothing here has been run against a real sandbox or a real gateway yet.
+
 ## 9. Checklist
+
+- [ ] Optional: `RELAY_GATEWAY_TOKEN` set and the deployed CLI version published, if paid sandbox runs are wanted;
+      `RELAY_LEAD_URL` set, if the lead is deployed
 
 - [ ] Project imported with root directory `apps/web`
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview

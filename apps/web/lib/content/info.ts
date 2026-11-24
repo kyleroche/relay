@@ -51,7 +51,7 @@ export const INSTALL_AGENT_PROMPT = `Set up relay from ${REPO_URL} following its
 
 export const INSTALL_SHELL = `npx @kyleroche/relay doctor     # what is installed, logged in, and reachable (Node 24+)
 npx @kyleroche/relay setup      # hooks + memory server into each CLI you have; --yes writes
-cd ~/code/some-repo && npx @kyleroche/relay link`;
+cd ~/code/some-repo && npx @kyleroche/relay link   # one command, then one pull request to merge`;
 
 export const ACCOUNTS: Array<{ tool: string; login: string; plan: string }> = [
   { tool: "Claude Code", login: "claude then /login", plan: "Pro or Max" },
@@ -78,10 +78,10 @@ export const CONNECT_AGENT_PROMPT = `Connect to relay at ${SITE_URL} without ask
 export const LINK_REPO_INTRO = "Inside a repository on a machine with the user's coding-agent logins? Link it yourself; the person approves once at most:";
 export const LINK_REPO_STEPS: string[] = [
   `If this machine has not joined the relay yet: npx @kyleroche/relay setup --site ${SITE_URL}. It prints a code; show it to the person, who approves it at ${SITE_URL}/activate (or they give you an invite code for --invite). Needs Node 24.`,
-  "In the repository: npx @kyleroche/relay link. It registers the project on the relay, digests the files and writes relay.md, adds the owned section to AGENTS.md or CLAUDE.md, and creates the agent:<lane> labels on GitHub (gh must be logged in). The digest uses the claude login; --no-digest skips it. Re-running is safe.",
+  "In the repository: npx @kyleroche/relay link. Adding a repository is this one command and one pull request to merge. It registers the project on the relay, digests the files, adopts what Claude Code knows about the repository on this machine, and proposes every file relay needs (the owned section of AGENTS.md or CLAUDE.md, relay.md, the adopted notes under docs/context, a drafted .relay/project.json when the repository has none) as one pull request against the default branch, on the branch relay/link. The checkout is not written. It also creates the agent:<lane> labels on GitHub (gh must be logged in). It ends with a left: line for each thing only the person can do; give them those lines: the pull request to merge, and the GitHub App to install when it is not. Do not merge the pull request for them unless they ask. The digest uses the claude login; --no-digest skips it. Re-running is safe and updates the same pull request.",
   "Optional, so this machine executes the repo's tasks: vercel login and npx @kyleroche/relay setup --board (the tasks live on the team's Vercel Board, which takes the machine's own login), then npx @kyleroche/relay work --install (prints the service it would write; --yes installs it).",
 ];
-export const LINK_REPO_PROMPT = `Link this repository to relay at ${SITE_URL}: run \`npx @kyleroche/relay setup --site ${SITE_URL}\` if this machine has not joined yet and show me the code it prints, then \`npx @kyleroche/relay link\` here. Follow ${SITE_URL}/llms.txt ("Link a repository") if anything is unclear.`;
+export const LINK_REPO_PROMPT = `Link this repository to relay at ${SITE_URL}: run \`npx @kyleroche/relay setup --site ${SITE_URL}\` if this machine has not joined yet and show me the code it prints, then \`npx @kyleroche/relay link\` here. It opens one pull request with relay's files: give me its link and the other \`left:\` lines it prints, and do not merge it yourself. Follow ${SITE_URL}/llms.txt ("Link a repository") if anything is unclear.`;
 
 export const ACCESS_ALTERNATIVES = `Zero-browser path: the operator runs relay invite create --for <you> --scopes … and you redeem the code at POST ${SITE_URL}/oauth/token with grant_type=urn:relay:invite and invite=<code>. Clients with a browser use POST ${SITE_URL}/oauth/register then GET ${SITE_URL}/oauth/authorize (PKCE S256). Metadata: ${SITE_URL}/.well-known/oauth-authorization-server. ${SITE_URL}/access is the operator's Access page: approve requests, revoke, invite; minting a token by hand is its fallback.`;
 

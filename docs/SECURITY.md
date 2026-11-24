@@ -36,7 +36,7 @@ data, never as instructions:
 
 - **Who can start a lane.** Opening an issue does nothing; labelling it needs triage permission and an allowlisted
   login. The web app applies that gate when an `agent:<lane>` label arrives by webhook and would open a task on the
-  board (`senderMayOpenTasks`, `apps/web/lib/webhooks/usage.ts`): the label's sender must be in
+  board (`senderMayOpenTasks`, `apps/web/lib/webhooks/senders.ts`): the label's sender must be in
   `RELAY_ALLOWED_SENDERS` (the environment, else the repo's Actions variable), and when neither is set nobody may
   open a task that way. The site's API and MCP
   tools need a `tasks:write` token instead, and the site writes the task as a profile named for the caller. On the
@@ -44,16 +44,17 @@ data, never as instructions:
   worker claims only tasks whose owner is its own login or one named in `board.from` (`relay setup --board --from`):
   a task's text is instructions for whoever claims it, so that list is who the machine takes instructions from.
 - **What relay acts on, on the board.** Anyone who may label in a channel can set any label, so labels only steer
-  (`lane`, `model`). Where a worker clones and what issue a task answers come from the `relay-task@1` block in the
-  task's own text, which is its owner's: the board holds a task whose root someone else edits. How a run ended, an
-  eval's verdict and a gate release are blocks in replies, whose author the board verifies. The pull request an
-  approval merges is the one the hold's reason names, which only the claim that held the task could write, and it is
-  merged only if its head is a branch relay pushed for that task (`relay/<lane>-<8 hex of the task ID's hash>`). A
-  worker pushes only its own branch for the task, or, when it answers an eval, the branch the earlier run's
-  `relay-run@1` block names and only when that is also a branch relay pushed for the task; never one a label or a
-  block alone names. A `base` and a `branch` must be branch names and a `model` a model id before they reach git or a
-  CLI: checked when a task is opened and requeued, and the worker checks all three again, since a task can be made by
-  hand on the board and its `model` label set by anyone who may label there.
+  (`lane`, `model`, and `cloud`, a hint for the site that a paid run was granted). Where a worker clones and what
+  issue a task answers come from the `relay-task@1` block in the task's own text, which is its owner's: the board
+  holds a task whose root someone else edits. How a run ended, an eval's verdict and a gate release are blocks in
+  replies, whose author the board verifies. The pull request an approval merges is the one the hold's reason names,
+  which only the claim that held the task could write, and it is merged only if its head is a branch relay pushed for
+  that task (`relay/<lane>-<8 hex of the task ID's hash>`). A worker pushes only its own branch for the task, or, when
+  it answers an eval, the branch the earlier run's `relay-run@1` block names and only when that is also a branch relay
+  pushed for the task; never one a label or a block alone names. A `base` and a `branch` must be branch names and a
+  `model` a model id before they reach git or a CLI: checked when a task is opened and requeued, and the worker checks
+  all three again, since a task can be made by hand on the board and its `model` label set by anyone who may label
+  there.
 - **Who relay believes.** Data counts only from a trusted principal itself (the worker's own login, an owner in
   `board.from`: a person at the CLI) or from relay's own profiles of it, the ones whose name starts `relay-`: a
   worker's `relay-<worker>-<lane>`, the site's `relay-site`, its brief's `relay-brief` (`isTrustedActor` in
@@ -63,6 +64,13 @@ data, never as instructions:
   just text to every worker and to the ledger. What the site itself says as data (a gate release, an eval that
   could not run) goes out as `relay-site`, after the site has checked who asked, with `Released by <actor>.` beside
   a release's block.
+- **Who may decide.** A grant (what a task may reach or spend) and a gate release (that a person read its text) are
+  believed from fewer authors than a report: a trusted principal itself, or the site's own profile of one,
+  `relay-site` (`isDecidingActor` in `packages/core/src/board/schemas.ts`). A worker's profile reports what a run did
+  and never decides. The reason is the paid sandbox: its firewall signs every request to the board as the worker's
+  profile, so whatever a fooled lane posts there arrives as one of relay's own profiles. Under this rule it still
+  cannot grant its own task a capability set, raise its own cap or release its own text. An entry of `board.from`
+  that is itself a profile never decides either.
 - **The text filter is the second layer.** Words that are not relay's own (a lane's summary, an eval's findings, a
   review note, a task's body) are posted with any fence that would be a block turned into a plain `json` fence
   (`prose`). It follows the board's own parser: a line that opens a fence with backticks or tildes, any whitespace,
@@ -102,9 +110,6 @@ data, never as instructions:
   required**, not optional: the account that pushes is the operator's own `gh` login, so without protection a fooled
   lane that found another way to run `git push` could land on `main`. Require the review and a passing CI run, and
   forbid force pushes.
-
-A usage comment on a pull request is parsed only when the comment author is in `RELAY_ALLOWED_SENDERS`; anyone
-else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded from the ledger (`docs/FEED.md`).
 
 ### The gate
 
@@ -148,10 +153,10 @@ have without the gate. Set `RELAY_GATE=off` on such a worker to say so on purpos
 
 Releasing, on the board: `relay task release <id>` posts a `relay-release@1` block with the digest of the text as it
 stands (the title, the body, the notes in the thread), then lifts the hold. The board lets only the task's owner, or
-someone with `manage` in its channel, lift a hold, and a worker takes the block only from an author it believes
-("Who relay believes" above). The task is `queued` again and that text is not graded a second time; text added to
-the thread afterwards changes the digest and is graded. `relay task requeue` on a held task lifts the hold with no
-release, so the next job grades the same text again.
+someone with `manage` in its channel, lift a hold, and a worker takes the block only from who may decide: a trusted
+principal itself or the site's `relay-site`, never a worker's profile ("Who may decide" above). The task is `queued`
+again and that text is not graded a second time; text added to the thread afterwards changes the digest and is graded.
+`relay task requeue` on a held task lifts the hold with no release, so the next job grades the same text again.
 
 Releasing through the site (the task page's Held card, `relay_task_release({id})`, `POST /api/v1/tasks/{id}/release`)
 goes through the desk (`packages/core/src/board/desk.ts`), the one layer the site's API, its pages and the MCP server
@@ -231,8 +236,9 @@ granted (`docs/PROFILE.md`). What keeps that safe:
   working tree or its base branch. Widening a set, adding a command or dropping a check takes a merged pull request.
 - **Names, never values.** A set lists names of environment variables and hosts. No value is in the repository, the
   task's thread, a prompt or the log. A set may not name a credential no job may carry (`JOB_ENV_STRIPPED`).
-- **Nothing by default.** A task gets a set only through a `relay-grant@1` block from an author the worker believes
-  ("Who relay believes" above). The block names the SHA-256 of the task's title and body, so a grant covers the text
+- **Nothing by default.** A task gets a set only through a `relay-grant@1` block from an author who may decide ("Who
+  may decide" above): a person at their own machine, or the site writing for a signed-in person, never a worker's
+  profile. The block names the SHA-256 of the task's title and body, so a grant covers the text
   the person read: after an edit it counts for nothing.
 - **A person grants.** On a site only a signed-in person may grant a set or a paid run; a token is refused with 403
   and there is no MCP tool for it (`grantFor` in `packages/core/src/board/desk.ts`). `relay task grant` on a machine
@@ -240,28 +246,55 @@ granted (`docs/PROFILE.md`). What keeps that safe:
 - **Where the values come from.** The worker's own environment, then the development environment of the Vercel
   project the profile names, read with the worker's own `vercel login` into a scratch directory outside the clone
   that is deleted before the lane starts. Only the granted names are taken. Nothing is copied between machines.
-- **Where the values go.** Into the environment of that run's lane and of the profile's commands, and nowhere else.
-  The lane is told the names and never to print a value or write one to a file. That is an instruction, not a
-  boundary: a fooled lane holds the values it was granted, which is why a set is granted per task, by a person who
-  read the task, with only the hosts the set names added to the network allowlist.
+- **Where the values go.** Into the environment of the profile's commands, and of that run's lane only when the lane
+  is `claude`: the Claude lane is the one relay can hold to the hosts the set names. On any other lane the values are
+  withheld from the lane's process, and the thread and the prompt say so. The Claude lane is told the names and
+  never to print a value or write one to a file. That is an instruction, not a boundary: a fooled lane holds the
+  values it was granted, which is why a set is granted per task, by a person who read the task, with only the hosts
+  the set names added to the network allowlist.
 - **The commands are sandboxed.** `setup` and `verify` commands run without a model, and `npm ci` runs every
   dependency's install script. Each runs under Anthropic's sandbox runtime with the Claude lane's limits: writes
-  inside the clone and the package caches, the credential paths unreadable, the network allowlist. A worker that
-  should sandbox and cannot find the runtime fails the command and never runs it unguarded. With `--no-sandbox`, or
+  inside the clone and the package caches, the credential paths unreadable, the network allowlist. The runtime is a
+  dependency of relay, and `relay doctor`'s `sandbox` line warns when it is missing. A worker that should sandbox
+  and cannot find it fails the command and never runs it unguarded. With `--no-sandbox`, or
   in a container whose nested sandbox cannot start, they run directly (`packages/core/src/work/exec.ts`).
 
 ### Grants and paid runs
 
-One task can run on paid credits instead of a subscription: `relay work --task <id> --billing gateway --cap <usd>`
-(`docs/WORKERS.md`, "One task on paid credits"). The gateway's address and credential are read from the environment
-of whoever starts that worker (`RELAY_GATEWAY_URL`, `RELAY_GATEWAY_TOKEN`), never from a flag, a task or the board.
-No child of the job inherits them by name; the Claude Code process gets them as its endpoint and credential for
-that run. Only the Claude lane runs this way, and the cap is passed to Claude Code as its budget limit. A person
-approves the spend for one task with a `relay-grant@1` block that carries the cap, under the same rules as a
-capability set: for the text as it stands, from a trusted author, and on a site from a signed-in person only.
+One task can run on paid credits instead of a subscription, in a Vercel Sandbox a hosted relay starts
+(`docs/PROFILE.md`, "Paid sandbox runs"; `docs/WORKERS.md`, "One task on paid credits"). The owner's rule is that
+nothing spends money without the owner saying yes first, and waiting for one of their own machines is the default
+and needs no action. What holds that:
 
-> Not documented yet: what starts a paid sandbox, how it checks the grant and the profile's `cloud` policy, and what
-> the sandbox can reach. That code is still being written.
+- **An offer is only a question.** The site computes it when it renders a queued task and writes nothing. It is
+  never shown for a project whose profile says `cloud: never`, or on a deployment without the gateway's key.
+- **The yes is a grant.** A `relay-grant@1` block with the cap, for the task's text as it stands, from who may
+  decide. On the site only a signed-in person can give it, and the cap cannot exceed the deployment's limit
+  (`RELAY_CLOUD_MAX_CAP_USD`). The label `cloud=approved` on the task only tells the site where to look; anyone who
+  may label could set it, and it starts nothing.
+- **One grant, one run.** The site marks a start in the thread as `relay-site` before the sandbox exists, under a
+  key made from the task, the grant and the try, so two instances start one sandbox. Only a start that is known not
+  to have come up is tried again, 3 times at most. A start that may have run is never followed by another.
+- **No credential enters the sandbox.** The board's credential, an installation token of the site's GitHub App for
+  the task's one repository and the gateway's key are set on requests by the sandbox's firewall. The environment
+  inside holds placeholders, and the launcher refuses to start when a credential would be readable there. The
+  network is deny by default: the board, the gateway's coding endpoint, GitHub for that repository, the npm
+  registry, and the hosts of the capability sets granted to the task. A failure's text has the credentials removed
+  before it is written to the thread or the log.
+- **The sandbox is held on the board.** It writes as the worker's profile only, and its rights there are narrowed
+  to the queues and the workers channel. What it posts counts as a report and never as a decision.
+- **The job checks again.** `relay work --task <id> --billing gateway --cap <usd>` runs on paid credits only when
+  the thread holds that grant and the profile does not say `cloud: never`; otherwise it hands the task back. The
+  cap is one for the whole job, the smaller of the grant and the flag, across the lane, its steps and the gate's
+  grade. Only the Claude lane runs this way.
+- **The gateway's address and credential** come from the environment of whoever starts the worker
+  (`RELAY_GATEWAY_URL`, `RELAY_GATEWAY_TOKEN`), never from a flag, a task or the board. No child of the job inherits
+  them by name; the Claude Code process gets them as its endpoint and credential for that run. In a sandbox the
+  credential's variable holds a placeholder.
+- **Inside the sandbox the lane runs without Claude Code's OS sandbox.** The microVM and its network policy are the
+  boundary there. The values of a granted capability set are not in it; only the set's hosts are allowed.
+
+None of this has been run against a real sandbox or a real gateway yet.
 
 ## The lead
 
@@ -275,6 +308,9 @@ with a scoped token, and the desk's rules for a bot apply to it (`docs/ARCHITECT
 - What a worker wrote about a task reaches it as data (a wake-up's reason), never as instructions.
 - Its routes that can start a turn take no anonymous caller: its conversation API takes Vercel OIDC tokens of its own
   project, and its wake route checks the caller's Vercel OIDC token against the site's team and project.
+- The site wakes it only when `RELAY_LEAD_URL` is set on the site, for a task that failed, was held at the gate or
+  reached review, and signs the call with the deployment's own Vercel OIDC token. No relay token is sent. The URL
+  must be https, and a redirect is refused, since it would carry the token to another origin.
 - Its model calls are billed per token through Vercel AI Gateway to the Vercel team that owns its project. A budget
   on that project in AI Gateway is the limit to rely on (`apps/lead/README.md`).
 
@@ -500,7 +536,7 @@ then approve devices and mint invites. Every request and decision is a feed row 
 
 The web app's GitHub credential is an App (`GITHUB_APP_ID` + `GITHUB_APP_PRIVATE_KEY`, or the sealed settings the
 manifest flow on `/setup/github` wrote; the environment wins). It needs Actions read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read,
-Issues write, Metadata read, Pull requests write, and the events issues, issue_comment, pull_request,
+Issues write, Metadata read, Pull requests write, and the events issues, pull_request,
 pull_request_review, workflow_run, deployment_status. Installation tokens are minted per repository with a nine-minute
 RS256 app JWT, cached in memory for their one-hour life and refreshed a minute early. The app's webhook deliveries are
 verified with the same HMAC as an organization webhook. `installation` events write `project.github_connected` /

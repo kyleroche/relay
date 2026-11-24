@@ -21,7 +21,7 @@ row here.
 | `run.started` | the ledger: a worker's lane profile (`relay-<worker>-<lane>`) claimed the task | `runner:<worker>-<lane>` | project, lane, payload.task, title, until (the lease) | `<lane> took <title>` |
 | `run.finished` | the ledger: a `relay-run@1` block from an author the site believes whose outcome is not `failed` (`review`, `eval`, `done`, `held`) | `runner:<worker>` | project, lane, repo, pr and url (the pull request, when the run opened one), payload.task, conclusion (the outcome), branch, eval_task | `<lane>: <outcome> <owner/name#pr>` |
 | `run.failed` | the ledger: a `relay-run@1` block whose outcome is `failed` | `runner:<worker>` | project, lane, payload.task, conclusion | `<lane>: failed` |
-| `step.usage` | the ledger: one row per `relay-usage@1` block from an author the site believes (a lane's run, the gate's grade, a step's call, one media output of the nodes lane). Also GitHub webhook `issue_comment` on a PR, parsed from a usage comment (below) | `runner:<worker>` from the board, `agent:<lane>` from a comment | project, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, payload.task, kind (`run`, `gate`, `step`, `media`), billing, step, outcome | the lane, or `step <name>`, and the model |
+| `step.usage` | the ledger: one row per `relay-usage@1` block from an author the site believes (a lane's run, the gate's grade, a step's call, one media output of the nodes lane) | `runner:<worker>` | project, lane, model, subscription, tokens_in, tokens_out, cache_read, cache_write, cost_equiv, duration_ms, payload.task, kind (`run`, `gate`, `step`, `media`), billing, step, outcome | the lane, or `step <name>`, and the model |
 | `task.held` | the ledger: the task was held with kind `gate` (the pre-check when it was opened, or a worker's grade before the lane ran) | whoever held it | project, lane, payload.task, title, reason | `<title>: <reason>` |
 | `task.approved` | the ledger: the task was completed: its pull request was merged (by an approval or on GitHub), its outputs were approved, its report was read, or its plan was approved (the tasks the plan opened are `task.created` rows of their own). A step's own task (an eval) completing writes no row; its run row says how it went | who completed it | project, lane, payload.task, title, result | `<title>: <result>` |
 | `task.released` | the ledger: a `relay-release@1` block from an author the site believes (`relay task release`, `relay_task_release`, `…/release`, Release on the site) | who asked: the name in the `Released by <actor>.` line the site wrote beside the block, else the author | project, payload.task | `Released from the gate for the text as it stands` |
@@ -30,12 +30,12 @@ row here.
 | `task.requeued` | the ledger: a failed task was reopened by a requeue | who requeued it | project, lane, payload.task, title | the task's title |
 | `ledger.skipped` | the ledger: the database refused the rows of one board event. Those rows are dropped, this row takes their place and the events after it go on | `bot:relay` | project, payload.task, cursor (the board event) | `A <event type> on the board could not be recorded: <error>` |
 | `board.delivery_failed` | the GitHub webhook route: a delivery could not do its part on the board (a labelled issue's task was not opened, for instance because nobody serves the lane, or a merged pull request did not complete its task) | `bot:github` | repo, issue or pr | what did not happen, and why |
-| `pr.opened` | GitHub webhook `pull_request` (opened, reopened, ready for review) | the sender, or `agent:<lane>` for a vendor cloud agent's pull request (below) | repo, pr, issue (from `Closes #n` in the body), lane (from an `agent:<lane>` label on the pull request, a cloud agent's `claude/` or `codex/` branch, or an Actions runner's `relay/<lane>-<issue>` branch; a worker's `relay/<lane>-<ref>` branch is not read for it), url, payload.branch, payload.cloud for a cloud agent's | PR title |
-| `pr.review` | GitHub webhook `pull_request_review`, or a usage comment in review mode | `agent:<lane>` or `human:<login>` | repo, pr, lane | first line of the review |
+| `pr.opened` | GitHub webhook `pull_request` (opened, reopened, ready for review) | the sender: `human:<login>` or `bot:<login>` | repo, pr, issue (from `Closes #n` in the body), lane (from a worker's `relay/<lane>-<8 hex>` branch, else from an `agent:<lane>` label on the pull request), url, payload.branch | PR title |
+| `pr.review` | GitHub webhook `pull_request_review` (submitted) | `human:<login>` or `bot:<login>` | repo, pr, issue (from `Closes #n` in the pull request's body) | first line of the review |
 | `pr.merged` | GitHub webhook `pull_request` (closed, merged). The same delivery completes the task in review that waits on that pull request | `human:<login>` | repo, pr, url | `Merged #<n> into <base>` |
 | `pr.closed` | GitHub webhook `pull_request` (closed, not merged) | `human:<login>` | repo, pr, url | `Closed #<n> without merge` |
 | `issue.closed` | GitHub webhook `issues` (closed) | `human:<login>` or `bot:<login>` | repo, issue, url | `Closed #<n>: <title>` |
-| `workflow.run` | GitHub webhook `workflow_run` (completed) | `bot:<login>` | repo, url | the workflow and its conclusion |
+| `workflow.run` | GitHub webhook `workflow_run` (completed) | `bot:github-actions` | repo, pr, duration_ms, url | the workflow, its conclusion and the branch |
 | `preview.ready` | Vercel webhook `deployment.succeeded` / `deployment.ready`, or GitHub webhook `deployment_status` (success) | `bot:vercel` (or `bot:<deployer>`) | repo, pr (Vercel's `githubPrId`), url (the preview URL), payload.ref (the branch), commit / sha | project and branch |
 | `preview.failed` | Vercel webhook `deployment.error` / `deployment.failed`, or `deployment_status` failure | `bot:vercel` | repo, pr, url (the build), payload.ref | project and branch |
 | `decision.captured` | session-end hook (`relay capture`), `relay decide`, the `relay_decide` tool, or the post-merge job | `agent:<cli>` or `human:<login>` | project, payload.decision_id, payload.source, payload.superseded | the decision text |
@@ -69,74 +69,16 @@ reads from a cursor kept in the settings table, so a wake-up and a page load can
 cursor and takes the board's own summary of its last 100 events, which leaves out a hold that was since lifted;
 every sync after reads from the cursor, which is every event. Rows are not rewritten later: usage from a login that
 was not yet in `RELAY_BOARD_FROM` is not counted and is not backfilled when the login is added. Every webhook write sets
-`dedupe_key` to the GitHub delivery id (or the Vercel webhook id), and a usage comment's row adds the comment id, so
-redeliveries never double-count.
+`dedupe_key` to the GitHub delivery id (or the Vercel webhook id), so redeliveries never double-count.
 
 Kinds nothing writes now stay in the catalog (`apps/web/lib/events.ts`) so rows already in a feed keep their label:
 `worker.registered`, `worker.online`, `worker.offline`, `run.dispatched` and `task.merge_failed`. A refused merge
 is a line in the task's thread now, and a worker's state is its message on the board.
 
-## Pull requests from a vendor's cloud agent
-
-relay hands nothing to the vendors' hosted tiers, but a pull request one of them opens on a connected repository
-still arrives through the GitHub webhook. The normalizer (`cloudLaneOf` in `apps/web/lib/webhooks/github.ts`)
-attributes a `pr.opened` (then `pr.merged` / `pr.closed`) to a cloud agent when:
-
-- the head branch starts with `claude/` → `lane = claude`, `payload.cloud = "claude-cloud"`;
-- the head branch starts with `codex/` → `lane = codex`, `payload.cloud = "codex-cloud"`;
-- otherwise the PR author (or the delivery's sender) is `claude[bot]` or `chatgpt-codex-connector[bot]`.
-
-For these rows the `actor` is `agent:<lane>` even when GitHub reports the user's own login as the author, and
-`payload.author` keeps that login. There is no `step.usage` row for such a run: its spend is on the vendor's usage
-page.
-
-## The usage comment
-
-A comment on a pull request that ends with a marker and a fenced JSON block is read as usage. relay's workers do
-not post one: a worker's usage is in the task's thread on the board. The format is for a run outside the board that
-reports on its pull request:
-
-````markdown
-## Summary from the claude lane
-
-...the lane's own final message...
-
-<!-- relay:usage -->
-```json
-{"relay":"step.usage","lane":"claude","mode":"code","tool":"claude","model":"claude-opus-5","issue":42,"tokens_in":18234,"tokens_out":2210,"cache_read":91200,"cache_write":4100,"duration_ms":412000}
-```
-````
-
-A worker's comment on the PR is the lane's summary alone: its usage is a `relay-usage@1` block in the task's thread
-on the board, which the ledger copies. A comment block that carries `"source": "relay-work"` writes no row; blocks
-without that field are ingested as below.
-
-How the GitHub webhook handler parses it, on `issue_comment` (created or edited) where the issue is a pull request:
-
-1. Require the comment to contain `<!-- relay:usage -->`; otherwise ignore the comment for usage purposes.
-2. Take the first fenced block after the marker whose info string is `json`, trim it, and `JSON.parse` it. The
-   block is a single line, but a multi-line object is accepted.
-3. Require `relay === "step.usage"`; otherwise ignore.
-4. Required fields: `lane` (`claude|codex|grok|gateway`), `tokens_in`, `tokens_out`, `cache_read`, `cache_write`,
-   `duration_ms` (all non-negative integers), `model` (string, may be `"default"` when the CLI did not report one).
-   Optional: `mode` (`code|review`, default `code`), `tool` (`claude|fx|codex|grok`), `issue` (integer). Anything
-   else is kept in `payload` but not interpreted.
-5. Write one `events` row: `kind = 'step.usage'`, `actor = 'agent:<lane>'`, `repo`, `pr` and `url` from the
-   comment, `issue` from the field or from the PR's `relay/<lane>-<issue>` branch name, `lane`, `model`,
-   `subscription` derived from the lane, usage columns copied, `cost_equiv` computed, `summary` =
-   `"<model>: <tokens_in>+<cache_read> in, <tokens_out> out"`, `dedupe_key = 'gh-comment:<comment id>'`.
-6. In review mode (`"mode":"review"`), also write a `pr.review` row with the text above the marker as the summary.
-
-Only comments by logins in the repo's `RELAY_ALLOWED_SENDERS` variable are
-trusted for usage; the handler reads that variable through the GitHub API (with `GITHUB_TOKEN`) once per hour and
-caches it, or takes the comma-separated `RELAY_ALLOWED_SENDERS` environment variable when set. With neither configured
-every sender is trusted for usage; the opposite holds for an `agent:<lane>` label that opens a task on the board: only
-an allowlisted sender may, and with no allowlist nobody may (`senderMayOpenTasks`). A usage block posted by anyone
-else is recorded as `payload.untrusted = true` with its usage columns zeroed (the reported numbers stay in
-`payload.reported`), so the `ledger` view, which is a plain `kind = 'step.usage'` filter, never counts it.
-
-The parser lives in `apps/web/lib/webhooks/usage.ts`; the handler for every GitHub delivery is
-`githubEvents` in `apps/web/lib/webhooks/github.ts`, which returns zero, one or two rows per delivery.
+What writes no row of its own: a grant (a capability set or a paid run's cap) and the marks of a paid sandbox's
+start are replies in the task's thread, and a wake-up of the lead is a request to another deployment. A paid run
+shows in the feed through its ordinary rows: `run.started` and `run.finished` by its worker `cloud-<ref>`, and
+`step.usage` rows whose `billing` is `gateway`. The lead's own turns are the `external.lead.*` rows it logs.
 
 ## Reading the feed
 

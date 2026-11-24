@@ -282,6 +282,9 @@ task's title only for a `before-pr` step.
 - A `before-pr` step that does not finish does not fail the job: the pull request comment and the thread say
   `Steps: <name>: did not finish (…)`.
 - Steps are for the code lanes. A `nodes` task runs none, and a step's own task runs none on itself.
+- A run on paid credits (`docs/WORKERS.md`, "One task on paid credits") runs no `after-pr` step: its sandbox cannot
+  open a task another worker takes. The work goes straight to review, and the pull request comment and the thread
+  say `<step> not run`.
 - `relay steps run` takes `task` steps only; `relay steps add` takes `before-pr` and `after-pr` steps only.
 - A plan holds at most 20 tasks. A plan that fails a check fails the task; it is not repaired.
 - `relay steps check` runs the cases relay ships. `plan`, `retro` and `eval-respond` have none.
