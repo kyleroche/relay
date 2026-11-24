@@ -629,6 +629,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         model: z.string().min(1).max(100).optional().describe("the model the lane should use; the lane's default without it"),
         needs: z.array(z.string().min(1)).max(20).optional().describe("task IDs that must complete first; the task waits for them"),
         base: z.string().min(1).max(200).optional().describe("start from this branch instead of the repository's default one"),
+        plan: z.boolean().optional().describe("open it as a planning task: a lane reads the repository and proposes tasks, and nothing is opened until a person approves the plan. Use it for an ask that needs breaking down."),
         idempotency_key: z.string().min(1).max(200).optional().describe("repeat calls with the same key return the same task and open nothing"),
       },
     },
@@ -648,9 +649,10 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
             ...(args.model ? { model: args.model } : {}),
             ...(args.needs?.length ? { needs: args.needs } : {}),
             ...(args.base ? { base: args.base } : {}),
+            ...(args.plan ? { step: "plan" } : {}),
             ...(args.idempotency_key ? { idempotencyKey: args.idempotency_key } : {}),
           },
-          opts.board!.asActor ? { brief: async (task) => (await compileBrief(db, { project: project.slug, intent: "implement the task", maxTokens: BRIEF_TOKENS, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } })).text } : {},
+          opts.board!.asActor ? { brief: async (task) => (await compileBrief(db, { project: project.slug, intent: "implement the task", maxTokens: BRIEF_TOKENS, shared: true, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } })).text } : {},
         );
         return json({ ...taskView(t), created });
       }),

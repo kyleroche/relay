@@ -43,6 +43,12 @@ export interface CompileBriefOptions {
   embed?: (text: string) => Promise<number[] | null>;
   /** How many decisions / guidance chunks to retrieve before fitting. */
   k?: number;
+  /**
+   * True for a brief that is posted where others can read it (a task's thread on the team's board): only what is
+   * scoped to this project goes in. The owner's own preferences and decisions, the ones that hold everywhere, stay
+   * in memory, where a worker with access to it reads them privately.
+   */
+  shared?: boolean;
 }
 
 export interface BriefSection {
@@ -167,7 +173,8 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
       rendered.set(name, { text, tokens: t });
       remaining -= t;
     } else if (name === "preferences") {
-      const prefs = await mergedPreferences(db, { project: opts.project, ...(opts.lane ? { lane: opts.lane } : {}), ...(opts.model ? { model: opts.model } : {}) });
+      const merged = await mergedPreferences(db, { project: opts.project, ...(opts.lane ? { lane: opts.lane } : {}), ...(opts.model ? { model: opts.model } : {}) });
+      const prefs = opts.shared ? merged.filter((p) => p.scope === "project") : merged;
       if (prefs.length) text = heading("Preferences (hard rules)") + prefs.map(renderPreference).join("\n") + "\n";
       const t = approxTokens(text);
       if (!text || t > remaining) {
@@ -179,7 +186,8 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
     } else if (name === "decisions") {
       const head = heading("Current decisions");
       const headT = approxTokens(head);
-      const items = await matchingDecisions(db, opts.project, query, { embed: opts.embed, ...(opts.k ? { k: opts.k } : {}) });
+      const matched = await matchingDecisions(db, opts.project, query, { embed: opts.embed, ...(opts.k ? { k: opts.k } : {}) });
+      const items = opts.shared ? matched.filter((d) => d.project === opts.project) : matched;
       const fit = fitItems(items, renderDecision, remaining - headT);
       if (!fit.lines.length) {
         omitted.push(name);

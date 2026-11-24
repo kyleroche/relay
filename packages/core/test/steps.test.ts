@@ -46,7 +46,9 @@ describe("the steps relay ships", () => {
       ["cleanup", "task", "any", "edit"],
       ["eval", "after-pr", "other", "read-only"],
       ["eval-respond", "respond", "same", "edit"],
+      ["plan", "task", "any", "read-only"],
       ["remove-yap", "before-pr", "same", "edit"],
+      ["retro", "task", "any", "read-only"],
     ]);
     for (const s of lib.steps.values()) expect(s.description.length).toBeGreaterThan(20);
   });

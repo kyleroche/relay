@@ -22,7 +22,7 @@ export class TaskRefusal extends board.TaskError {
 const text = (v: unknown): string | undefined => (typeof v === "string" && v.trim() ? v.trim() : undefined);
 
 /**
- * Open a task from a request body: `{ project, title, body?, lane, model?, needs?, base?, idempotency_key? }`. The
+ * Open a task from a request body: `{ project, title, body?, lane, model?, needs?, base?, plan?, idempotency_key? }`. The
  * repository is the project's registration, never the caller's word. `created` is false when the same caller's
  * idempotency key already made the task. The task's brief is in its thread before a worker can claim it.
  */
@@ -54,6 +54,7 @@ export async function openTaskFor(db: Db, session: board.BoardSession, asker: As
       ...(model ? { model } : {}),
       ...(needs.length ? { needs: needs.map((n) => String(n).trim()) } : {}),
       ...(base ? { base } : {}),
+      ...(body.plan === true ? { step: "plan" } : {}),
       ...(key ? { idempotencyKey: key } : {}),
     },
     { brief: (task) => taskBrief(db, task) },

@@ -51,6 +51,16 @@ describe("compileBrief", () => {
     expect(b.sections.reduce((a, s) => a + s.tokens, 0)).toBeGreaterThanOrEqual(b.tokens - 8);
   });
 
+  it("leaves out what the owner holds everywhere when the brief is one others will read", async () => {
+    const own = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000 });
+    const shared = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000, shared: true });
+    expect(own.text).toContain("Globally we keep pull requests small");
+    expect(shared.text).not.toContain("Globally we keep pull requests small");
+    // what is the project's own is in both
+    expect(shared.text).toContain("## Project: demo");
+    expect(shared.text).toContain("test_runner = vitest");
+  });
+
   it("respects a hard cap and never truncates a section mid-way", async () => {
     for (const cap of [40, 120, 300, 800, 1200]) {
       const b = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: cap });

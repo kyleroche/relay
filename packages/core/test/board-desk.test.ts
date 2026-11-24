@@ -5,11 +5,11 @@
 import { describe, expect, it } from "vitest";
 import type { Board } from "@vercel/board";
 import { connectBoard } from "../src/board/client.ts";
-import { approveFor, closeFor, deskFor, openFor, releaseFor, requestChangesFor, type Asker } from "../src/board/desk.ts";
+import { approveFor, closeFor, deskFor, grantFor, openFor, releaseFor, requestChangesFor, type Asker } from "../src/board/desk.ts";
 import { branchFor, HOLD } from "../src/board/mapping.ts";
 import { RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, type ReleaseBlock, type RunBlock } from "../src/board/schemas.ts";
 import { actorProfile, BRIEF_PROFILE, SITE_PROFILE } from "../src/board/site.ts";
-import { getTask, TaskError, type OpenTaskInput } from "../src/board/tasks.ts";
+import { getTask, grantsOf, TaskError, type OpenTaskInput } from "../src/board/tasks.ts";
 import { registerWorker } from "../src/board/workers.ts";
 import { threadBrief } from "../src/work/job.ts";
 import { fakeGitHub, relayBoard } from "./helpers/board.ts";
@@ -102,6 +102,24 @@ describe("two rules for a bot", () => {
     const opened = await openFor(s.desk(grok), input({ title: "The bot's own task" }));
     await s.hold(opened.task.id, HOLD.gate, "held");
     expect(await refusal(releaseFor(s.desk(grok), opened.task.id))).toMatchObject({ status: 403 });
+  });
+});
+
+describe("grants", () => {
+  it("are a signed-in person's to give, go out as the site's own profile, and are never a token's", async () => {
+    const s = await site();
+    const { task } = await openFor(s.desk(grok), input());
+    for (const bot of [grok, chief]) expect(await refusal(grantFor(s.desk(bot), task.id, { set: "store-build" }))).toMatchObject({ status: 403, message: expect.stringMatching(/a signed-in person's to give/) });
+    expect(grantsOf(await s.b.thread(task.id), [s.me])).toEqual({ sets: [], cloudCapUsd: null });
+
+    await grantFor(s.desk(person), task.id, { set: "store-build" });
+    await grantFor(s.desk(person), task.id, { cloudCapUsd: 5 });
+    const thread = await s.b.thread(task.id);
+    expect(grantsOf(thread, [s.me])).toEqual({ sets: ["store-build"], cloudCapUsd: 5 });
+    const grant = thread.replies.find((m) => m.text.startsWith("Granted by human:kyleroche: the capability set store-build"))!;
+    expect(grant.by.actor).toBe(`board:client:${SITE_PROFILE}`);
+    // someone who does not trust this site's principal sees no grant
+    expect(grantsOf(thread, ["vercel:user:someone-else"])).toEqual({ sets: [], cloudCapUsd: null });
   });
 });
 

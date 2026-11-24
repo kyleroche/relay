@@ -16,10 +16,14 @@ import { after } from "next/server";
 import { getDb } from "./db.ts";
 import { dataMode } from "./mode.ts";
 
-/** What relay's memory holds for a task: its project, lane and text. Undefined when that is nothing. */
+/**
+ * What relay's memory holds for a task, as it is posted in the task's thread: its project's summary, decisions and
+ * preferences. Everyone who can read the board can read it, so what the owner holds everywhere is left out; a worker
+ * with memory of its own compiles its brief privately and uses that first. Undefined when memory has nothing.
+ */
 export async function taskBrief(db: Db, task: board.BoardTask): Promise<string | undefined> {
   if (!task.project) return undefined;
-  const brief = await compileBrief(db, { project: task.project, intent: "implement the task", maxTokens: 2500, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } });
+  const brief = await compileBrief(db, { project: task.project, intent: "implement the task", maxTokens: 2500, shared: true, ...(task.lane ? { lane: task.lane } : {}), issue: { title: task.title, body: task.body } });
   return brief.text.trim() ? brief.text : undefined;
 }
 

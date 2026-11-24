@@ -11,6 +11,8 @@
  *   two rules    a bot, which is a token rather than a signed-in person, never approves a task it opened and never
  *                releases a task whose text it wrote any part of: it would be deciding on its own work. Releasing
  *                also takes `tokens:write`. Both are judged from who the board says wrote a message.
+ *   grants       what a task may reach or spend beyond the default of nothing (a capability set, a paid sandbox
+ *                run) is a signed-in person's to give, never a token's.
  *   the brief    a task the site opens has its brief in the thread before any worker can claim it.
  *
  * Without an asker the caller is whoever holds the handle (a person at their own machine): one voice, no rules.
@@ -20,7 +22,7 @@ import type { GitHubClient } from "../github/client.ts";
 import type { BoardSession } from "./client.ts";
 import { LABEL, RELAY_MESSAGE } from "./mapping.ts";
 import { actorProfile, BRIEF_PROFILE, postBrief, SITE_PROFILE, writtenAs } from "./site.ts";
-import { approveTask, closeTask, releaseTask, requestChanges, requeueTask, TaskError, type ApproveResult, type BoardTask, type CloseResult, type OpenTaskInput, type RequeueOptions } from "./tasks.ts";
+import { approveTask, closeTask, grantTask, releaseTask, requestChanges, requeueTask, TaskError, type ApproveResult, type BoardTask, type CloseResult, type OpenTaskInput, type RequeueOptions } from "./tasks.ts";
 import { openServedTask } from "./workers.ts";
 
 /** Who asked: `human:<login>` for a signed-in person, `bot:<token name>` for a token, with the scopes a token carries. */
@@ -86,6 +88,16 @@ export async function releaseFor(desk: Desk, id: string): Promise<BoardTask> {
     if (graded.some((m) => writtenAs(m, asker.actor))) throw new TaskError(`${asker.actor} wrote part of the text of ${id} and cannot release it. A person, or another bot with tokens:write, reads the text and decides.`, 403);
   }
   return releaseTask(desk.words, id, { own: desk.own, ...(asker ? { by: asker.actor } : {}) });
+}
+
+/**
+ * Grant a task a capability set of its project's profile, or a paid sandbox run up to a cap. Only a signed-in person:
+ * a token never decides what a task may reach or what it may spend.
+ */
+export async function grantFor(desk: Desk, id: string, grant: { set?: string; cloudCapUsd?: number }): Promise<BoardTask> {
+  const asker = desk.asker;
+  if (asker && !asker.actor.startsWith("human:")) throw new TaskError(`${asker.actor} cannot grant ${id} anything: a grant is a signed-in person's to give.`, 403);
+  return grantTask(desk.words, id, grant, { own: desk.own, ...(asker ? { by: asker.actor } : {}) });
 }
 
 /** Back to the queue, optionally on another lane or model (`model: null` goes back to the lane's default). */
