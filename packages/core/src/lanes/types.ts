@@ -20,6 +20,11 @@ export interface LaneRequest {
   project?: string;
   task?: string;
   step?: number;
+  /**
+   * What this run may use besides the defaults, from the project's profile and the task's grants (steps/profile.ts):
+   * Bash patterns for the project's own commands, and hosts for the sandbox's network allowlist.
+   */
+  access?: { tools?: string[]; hosts?: string[] };
   /** Aborting it ends the CLI: a job whose claim was lost stops its lane instead of running to the end. */
   signal?: AbortSignal;
   /** JSON schema for structured output (Claude lane only). */

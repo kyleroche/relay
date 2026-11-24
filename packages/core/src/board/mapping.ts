@@ -61,6 +61,8 @@ export const HOLD = {
   gate: "gate",
   /** The pull request is up and an after-pr step (eval) is looking at it before a person is asked. The reason is `evalHoldReason`. */
   eval: "awaiting_eval",
+  /** A plan is proposed and a person decides whether its tasks are opened. The reason is `planHoldReason`: the message that carries the plan and its digest. */
+  plan: "awaiting_plan",
 } as const;
 
 /** The reason of an eval hold: the step, the lane it runs on, its task, and the pull request it looks at. */
@@ -70,10 +72,19 @@ export function parseEvalHold(reason: string | undefined): { step: string; lane:
   return m ? { step: m[1]!, lane: m[2]!, task: m[3]!, ...(m[4] ? { pr: m[4] } : {}) } : undefined;
 }
 
+/** The reason of a plan hold: the reply that carries `plan.json`, and that file's SHA-256, so an approval opens exactly the plan the runner posted. */
+export const planHoldReason = (h: { message: string; sha256: string; tasks: number }): string => `plan ${h.message} ${h.sha256} (${h.tasks} task${h.tasks === 1 ? "" : "s"})`;
+export function parsePlanHold(reason: string | undefined): { message: string; sha256: string } | undefined {
+  const m = /^plan (\S+) ([0-9a-f]{64})(?: |$)/.exec((reason ?? "").trim());
+  return m ? { message: m[1]!, sha256: m[2]! } : undefined;
+}
+/** The reason of a review hold on a task whose deliverable is what the lane wrote: a report to read, not a pull request. */
+export const REPORT_REASON = "report";
+
 /**
  * The one word relay shows for a task:
  *   waiting   a task it needs has not completed            queued    ready for a worker
- *   running   a worker holds it                            review    held for a person's decision on a PR or an asset
+ *   running   a worker holds it                            review    held for a person's decision on a PR, outputs, a report or a plan
  *   held      held by the injection gate                   blocked   held for any other reason (a question, an approval, an edit)
  *   done      completed                                    failed    a worker gave up; reopen retries it
  *   closed    called off by its owner
@@ -91,7 +102,7 @@ export function relayState(task: Pick<TaskView, "state" | "blocked">): RelayStat
     case "claimed":
       return "running";
     case "blocked":
-      return task.blocked?.kind === HOLD.review ? "review" : task.blocked?.kind === HOLD.gate ? "held" : "blocked";
+      return task.blocked?.kind === HOLD.review || task.blocked?.kind === HOLD.plan ? "review" : task.blocked?.kind === HOLD.gate ? "held" : "blocked";
     case "completed":
       return "done";
     case "failed":

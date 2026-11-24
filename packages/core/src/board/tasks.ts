@@ -26,8 +26,9 @@ import { gateText, precheckTask } from "../tasks/gate.ts";
 import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
-import { HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
-import { ASSET_SCHEMA, blocksOf, evalText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, trustedBlocks, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
+import { PLAN_FILE, planOrder, planProblem, type Plan } from "./plan.ts";
+import { HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parsePlanHold, REPORT_REASON, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
+import { ASSET_SCHEMA, blocksOf, evalText, GRANT_SCHEMA, grantText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, trustedBlocks, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type GrantBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 
 /** A refusal with the HTTP status a route would answer: 400 bad input, 404 no such task, 409 wrong state, 502/503 GitHub. */
 export class TaskError extends Error {
@@ -455,6 +456,48 @@ export async function skipStep(board: Board, id: string, stepTask: string, why: 
   }
 }
 
+/** The digest of a task's own words, title and body: what a grant names, so it covers that text and no later edit of it. */
+export const taskDigest = (t: Pick<BoardTask, "title" | "body">): string => sha256(`${t.title}\n\n${t.body}`);
+
+export interface TaskGrants {
+  /** The capability sets of the project's profile this task may use. */
+  sets: string[];
+  /** The most a paid sandbox run of this task may cost, in US dollars; null when nobody approved one. */
+  cloudCapUsd: number | null;
+}
+
+/** What trusted people granted this task, for its text as it stands. A grant for an earlier wording counts for nothing. */
+export function grantsOf(thread: ThreadView, trusted: readonly string[]): TaskGrants {
+  const digest = taskDigest(toTask(thread.message));
+  const grants = trustedBlocks<GrantBlock>(thread.replies, GRANT_SCHEMA, trusted).map((g) => g.data).filter((g) => g.digest === digest);
+  const caps = grants.map((g) => g.cloud_cap_usd).filter((c): c is number => typeof c === "number");
+  return { sets: [...new Set(grants.map((g) => g.set).filter((x): x is string => !!x))], cloudCapUsd: caps.length ? caps.at(-1)! : null };
+}
+
+/**
+ * Grant a task something it does not have by default: a capability set of its project's profile, or a paid sandbox
+ * run up to a cap. A worker believes the block only from a trusted author, so on a site `own` is the handle it goes
+ * out on and `by` says who asked; the site lets only a signed-in person ask (board/desk.ts).
+ */
+export async function grantTask(board: Board, id: string, grant: { set?: string; cloudCapUsd?: number }, opts: { own?: Board; by?: string } = {}): Promise<BoardTask> {
+  const hasSet = grant.set !== undefined;
+  const hasCap = grant.cloudCapUsd !== undefined;
+  if (hasSet === hasCap) throw new TaskError("a grant is one thing: a capability set, or a cap for a paid sandbox run.", 400);
+  if (hasSet && !/^[a-z][a-z0-9-]{0,47}$/.test(grant.set!)) throw new TaskError(`'${grant.set}' is not a set name.`, 400);
+  if (hasCap && !(Number.isFinite(grant.cloudCapUsd) && grant.cloudCapUsd! > 0 && grant.cloudCapUsd! <= 1000)) throw new TaskError("the cap is a number of US dollars above 0 and at most 1000.", 400);
+  const thread = await readThread(board, id);
+  const task = toTask(thread.message);
+  if (task.state === "done" || task.state === "closed") throw new TaskError(`${task.id} is ${task.state}; a finished task is granted nothing.`, 409);
+  const what = hasSet ? `the capability set ${grant.set}` : `a paid sandbox run of up to $${grant.cloudCapUsd!.toFixed(2)}`;
+  try {
+    const said = `Granted${opts.by ? ` by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}` : ""}: ${what}, for this task's text as it stands.`;
+    await (opts.own ?? board).reply(id, { text: `${said}\n\n${grantText({ ...(hasSet ? { set: grant.set! } : { cloud_cap_usd: grant.cloudCapUsd! }), digest: taskDigest(task) })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    return task;
+  } catch (e) {
+    throw asTaskError(e);
+  }
+}
+
 export interface ApproveOptions {
   method?: "squash" | "merge" | "rebase";
   keepBranch?: boolean;
@@ -468,6 +511,8 @@ export interface ApproveResult {
   pr_url: string | null;
   merge_sha: string | null;
   branch_deleted: boolean;
+  /** The tasks an approved plan opened, in the order they were opened. */
+  opened?: string[];
 }
 
 /**
@@ -495,8 +540,14 @@ export async function approveTask(board: Board, github: GitHubClient | undefined
   const inReview = task.state === "review";
   const notInReview = new TaskError(`${task.id} is ${task.state}, not in review; only a task in review can be approved.`, 409);
   if (task.state === "done" || task.state === "closed") throw notInReview;
+  if (task.hold?.kind === HOLD.plan) return approvePlan(board, thread, task, opts);
   if (inReview && !task.pr) {
     const outputs = thread.replies.flatMap((m) => blocksOf<AssetBlock>(m, ASSET_SCHEMA)).length;
+    if (!outputs && task.hold?.reason === REPORT_REASON) {
+      const problem = await settleProblem(board, thread);
+      if (problem) throw new TaskError(problem, 403);
+      return { task: await settleTask(board, id, `report read${opts.by ? ` by ${opts.by}` : ""}`), pr_url: null, merge_sha: null, branch_deleted: false };
+    }
     if (!outputs) throw new TaskError(`${task.id} is in review with neither a pull request nor outputs to approve (its hold says: ${task.hold?.reason || "nothing"}).`, 409);
     const problem = await settleProblem(board, thread);
     if (problem) throw new TaskError(problem, 403);
@@ -554,6 +605,57 @@ export async function approveTask(board: Board, github: GitHubClient | undefined
     const now = toTask((await readThread(board, id)).message);
     if (now.state === "done") return { task: now, pr_url: url, merge_sha: sha, branch_deleted: branchDeleted };
     throw e;
+  }
+}
+
+/**
+ * Approve a plan: open its tasks as the approver, each waiting for the ones it needs, then complete the planning
+ * task. The plan is the file on the reply the runner's hold names, checked against the digest in that hold, so what
+ * is opened is what the runner posted and a person read, whatever else is in the thread. Each task is opened under a
+ * key made from the plan and its own key, so an approval that was cut off opens the rest and never a task twice.
+ */
+async function approvePlan(board: Board, thread: ThreadView, task: BoardTask, opts: ApproveOptions): Promise<ApproveResult> {
+  const at = parsePlanHold(task.hold?.reason);
+  const file = at ? thread.replies.find((m) => m.id === at.message && !m.deleted)?.attachments.find((a) => a.name === PLAN_FILE) : undefined;
+  if (!at || !file) throw new TaskError(`${task.id} is held for a plan, and the plan its hold names is not in the thread; relay task requeue ${task.id} plans it again.`, 409);
+  const res = await board.download(file.id).catch(() => undefined);
+  const text = res?.ok ? await res.text() : undefined;
+  if (text === undefined) throw new TaskError(`the plan of ${task.id} could not be read from the board.`, 502);
+  if (sha256(text) !== at.sha256) throw new TaskError(`the plan attached to ${task.id} is not the one the runner posted; not opening it.`, 409);
+  let plan: Plan;
+  try {
+    plan = JSON.parse(text) as Plan;
+  } catch {
+    throw new TaskError(`the plan of ${task.id} is not JSON.`, 409);
+  }
+  const bad = planProblem(plan);
+  if (bad) throw new TaskError(`the plan of ${task.id} cannot be opened: ${bad}`, 409);
+  if (!task.project) throw new TaskError(`${task.id} is in no project's queue.`, 409);
+  const problem = await settleProblem(board, thread);
+  if (problem) throw new TaskError(problem, 403);
+  const ids = new Map<string, string>();
+  try {
+    for (const t of planOrder(plan)!) {
+      const repo = t.repo ?? (t.project && t.project !== task.project ? undefined : (task.repo ?? undefined));
+      if (!repo) throw new TaskError(`the plan's task '${t.key}' is for project ${t.project} and names no repository.`, 409);
+      const made = await openTask(board, {
+        project: t.project ?? task.project,
+        repo,
+        title: t.title,
+        body: t.body,
+        lane: t.lane,
+        ...(t.model ? { model: t.model } : {}),
+        ...(t.base ? { base: t.base } : {}),
+        ...(t.needs?.length ? { needs: t.needs.map((n) => ids.get(n)!) } : {}),
+        idempotencyKey: `plan:${task.id}:${t.key}`,
+      });
+      ids.set(t.key, made.id);
+    }
+    const opened = [...ids.values()];
+    await board.reply(task.id, { text: `Plan approved${opts.by ? ` by ${opts.by}` : ""}. Opened ${opened.length} task${opened.length === 1 ? "" : "s"}: ${[...ids].map(([key, id]) => `${key} (${id})`).join(", ")}.`.slice(0, 9000), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    return { task: await settleTask(board, task.id, `plan approved: opened ${opened.length} task${opened.length === 1 ? "" : "s"}`), pr_url: null, merge_sha: null, branch_deleted: false, opened };
+  } catch (e) {
+    throw asTaskError(e);
   }
 }
 

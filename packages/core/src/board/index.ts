@@ -8,3 +8,4 @@ export { CODE_LANES, isCodeLane, laneUnservedProblem } from "../tasks/lanes.ts";
 export * from "./site.ts";
 export * from "./local.ts";
 export * from "./desk.ts";
+export * from "./plan.ts";

@@ -7,6 +7,8 @@
  *   relay-run@1      a run's outcome, in the runner's reply: the branch, the pull request, the eval task it opened
  *   relay-eval@1     an eval's verdict, in the reply that carries its findings to the work's thread
  *   relay-release@1  a person's release of the injection gate's hold, for exactly the text they read
+ *   relay-grant@1    a person's grant to one task: a capability set of its project's profile, or a spending cap for
+ *                    a paid sandbox run, for exactly the task text they read
  *   relay-usage@1    one model call's cost: what a lane, the gate or a media model used (the ledger's row)
  *   relay-worker@1   a worker machine: its lanes, its labels and the plan meters its logins report
  *   relay-asset@1    one output file of the nodes lane, attached to the same message
@@ -25,6 +27,7 @@ export const TASK_SCHEMA = "relay-task@1";
 export const RUN_SCHEMA = "relay-run@1";
 export const EVAL_SCHEMA = "relay-eval@1";
 export const RELEASE_SCHEMA = "relay-release@1";
+export const GRANT_SCHEMA = "relay-grant@1";
 export const USAGE_SCHEMA = "relay-usage@1";
 export const WORKER_SCHEMA = "relay-worker@1";
 export const ASSET_SCHEMA = "relay-asset@1";
@@ -67,6 +70,17 @@ export interface EvalBlock {
 
 export interface ReleaseBlock {
   /** The digest of the text the gate held (`gateDigest`), so text added later is graded again. */
+  digest: string;
+}
+
+/**
+ * What a person lets one task use beyond the default of nothing: a capability set its project's profile defines
+ * (names of environment variables and hosts), or a paid sandbox run up to a cap. It names the digest of the task's own
+ * text, so it covers that text and not an edit made afterwards.
+ */
+export interface GrantBlock {
+  set?: string;
+  cloud_cap_usd?: number;
   digest: string;
 }
 
@@ -153,6 +167,12 @@ const SCHEMAS: Array<{ name: string; version: number; description: string; schem
     version: 1,
     description: "A person's release of the injection gate's hold on a task, for the text with this digest.",
     schema: { type: "object", required: ["digest"], properties: { digest: str(64) } },
+  },
+  {
+    name: "relay-grant",
+    version: 1,
+    description: "A person's grant to one relay task, for the task text with this digest: a capability set of the project's profile, or a cap in US dollars for a paid sandbox run.",
+    schema: { type: "object", required: ["digest"], properties: { set: str(48), cloud_cap_usd: { type: "number", minimum: 0, maximum: 1000 }, digest: str(64) } },
   },
   {
     name: "relay-usage",
@@ -248,6 +268,7 @@ export const taskBlockText = (t: TaskBlock): string => block(TASK_SCHEMA, { ...t
 export const runText = (r: RunBlock): string => block(RUN_SCHEMA, { ...r });
 export const evalText = (e: EvalBlock): string => block(EVAL_SCHEMA, { ...e });
 export const releaseText = (r: ReleaseBlock): string => block(RELEASE_SCHEMA, { ...r });
+export const grantText = (g: GrantBlock): string => block(GRANT_SCHEMA, { ...g });
 export const usageText = (u: UsageBlock): string => block(USAGE_SCHEMA, { ...u });
 export const workerText = (w: WorkerBlock): string => block(WORKER_SCHEMA, { ...w });
 export const assetText = (a: AssetBlock): string => block(ASSET_SCHEMA, { ...a });

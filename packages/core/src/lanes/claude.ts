@@ -66,6 +66,7 @@ export function sandboxFor(req: LaneRequest, opts: ClaudeOptions): SandboxOption
   const o: SandboxOptions = on === true ? {} : { ...on };
   const extra = parseDomainList((req.env ?? process.env)["RELAY_LANE_ALLOWED_DOMAINS"]);
   if (extra.length) o.allowedDomains = [...(o.allowedDomains ?? []), ...extra];
+  if (req.access?.hosts?.length) o.allowedDomains = [...(o.allowedDomains ?? []), ...req.access.hosts];
   return o;
 }
 
