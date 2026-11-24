@@ -5,7 +5,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 import { existsSync, readFileSync } from "node:fs";
-import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, RETIRED_WORK_OPTIONS, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig } from "@relay/core";
+import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, RETIRED_WORK_OPTIONS, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig, srtCli } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -162,11 +162,15 @@ export const inContainer = (): boolean => process.env.RELAY_ISOLATION === "conta
  * on PATH and a kernel that lets bubblewrap start (`relay work` fails Claude jobs rather than run them unsandboxed,
  * docs/WORKERS.md; inside the relay container it runs them with the allowlist alone and says `sandbox:container`).
  */
-export async function sandboxCheck(platform: NodeJS.Platform = process.platform): Promise<Check> {
+export async function sandboxCheck(platform: NodeJS.Platform = process.platform, runtime: string | undefined = srtCli()): Promise<Check> {
   const r = sandboxPrerequisites(platform, (bin) => !!onPath(bin));
-  if (!r.ok || platform !== "linux") return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
+  // a project's own commands (its profile's setup and verify) run under the sandbox runtime shipped beside relay
+  const whole = (detail: string): Check =>
+    runtime ? { status: "ok", name: "sandbox", detail } : { status: "warn", name: "sandbox", detail: `${detail}; but the sandbox runtime (@anthropic-ai/sandbox-runtime) is not installed beside relay, so a project's setup and verify commands will not run: reinstall relay` };
+  if (!r.ok) return { status: "warn", name: "sandbox", detail: r.detail };
+  if (platform !== "linux") return whole(r.detail);
   const probe = await bwrapProbe();
-  if (probe.ok) return { status: "ok", name: "sandbox", detail: r.detail };
+  if (probe.ok) return whole(r.detail);
   const fix = inContainer()
     ? "the container is the boundary: the Claude lane runs with the allowlist alone, advertised as sandbox:container (recreate the container with `relay work --isolation container --install` to get the runtime flags it needs)"
     : "Claude jobs fail here (relay work never runs them unsandboxed); the kernel must allow unprivileged user namespaces";

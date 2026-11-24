@@ -44,6 +44,8 @@ echo "== relay doctor (first run creates the PGlite database)"
 npx --no-install relay init
 npx --no-install relay doctor || true   # exit 1 is expected on a machine without claude/gh logins
 grep -q "schema v" <(npx --no-install relay doctor 2>&1 || true) || { echo "::error::doctor did not report the database schema"; exit 1; }
+# a project's setup and verify commands run under the sandbox runtime, which has to come with the package
+if grep -q "sandbox runtime .* is not installed beside relay" <(npx --no-install relay doctor 2>&1 || true); then echo "::error::the installed package cannot find @anthropic-ai/sandbox-runtime"; exit 1; fi
 
 echo "== relay setup records the package's dist/ files (written into the isolated RELAY_USER_HOME)"
 npx --no-install relay setup --only claude --yes >/dev/null

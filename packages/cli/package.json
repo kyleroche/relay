@@ -47,6 +47,7 @@
   },
   "dependencies": {
     "@ai-sdk/gateway": "^4.0.149",
+    "@anthropic-ai/sandbox-runtime": "0.0.83",
     "@electric-sql/pglite": "^0.5.16",
     "@electric-sql/pglite-pgvector": "0.0.17",
     "@modelcontextprotocol/sdk": "^1.32.2",
