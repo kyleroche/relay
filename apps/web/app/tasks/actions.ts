@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { siteBoard } from "@/lib/board";
 import { cloudConfig, cloudProblem } from "@/lib/cloud/config";
+import { repoGuard } from "@/lib/cloud/guard";
 import { runApprovedQuietly } from "@/lib/cloud/pool";
 import { dataMode } from "@/lib/data";
 import { CROSS_SITE_MESSAGE } from "@/lib/fetch-site";
@@ -115,6 +116,9 @@ export async function grantSetAction(taskId: string, set: string): Promise<TaskA
  * Approve one paid sandbox run of a queued task, up to a cap: the owner's yes, without which nothing spends. The
  * grant is tied to the task's text, so an edit of the task voids it. The pool then starts the run (lib/cloud/pool.ts),
  * unless one of the owner's own workers takes the task first.
+ *
+ * Refused when the repository's default branch does not require an approved pull request (lib/cloud/guard.ts): the
+ * run's lane can run any code with a token that may push there, and nothing else stops it merging its own work.
  */
 export async function approveCloudRunAction(taskId: string, capUsd: number): Promise<TaskActionResult> {
   return decide(taskId, async (session, asker) => {
@@ -126,6 +130,8 @@ export async function approveCloudRunAction(taskId: string, capUsd: number): Pro
     const { profile, why } = await projectProfile(task.repo);
     if (!profile) return { ok: false, message: why ?? "The project's profile could not be read, so it is not known to allow a paid run." };
     if (profile.cloud === "never") return { ok: false, message: "This project's profile says cloud: never; its tasks wait for one of your own machines." };
+    const guard = await repoGuard(task.repo, { fresh: true });
+    if (!guard.ok) return { ok: false, message: guard.message };
     const cap = Math.round(capUsd * 100) / 100;
     await board.grantFor(board.deskFor(session, asker), taskId, { cloudCapUsd: cap });
     after(runApprovedQuietly);

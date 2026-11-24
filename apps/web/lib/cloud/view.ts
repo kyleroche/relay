@@ -6,12 +6,18 @@
  * An offer needs every one of: the task is queued on a lane a paid run serves, no worker on a person's own
  * subscriptions that is online or idle serves that lane, it has waited longer than the deployment's threshold, the
  * project's profile does not say `cloud: never`, and the deployment is set up for paid runs.
+ *
+ * An offer also says what the yes would not cover: that the cap is relay's own count (`capNote`), that the path is
+ * experimental, and, when the repository's default branch does not require an approved pull request, that a run
+ * cannot be approved there and what to turn on (`blocked`, from lib/cloud/guard.ts).
  */
 import type { ThreadView } from "@vercel/board";
-import { board, CLOUD_APPROVED, CLOUD_LABEL, CLOUD_LANE, cloudGrantOf, cloudMarksOf, cloudOffer, cloudStart, defaultCap, estimateUsd, subscriptionWorkers } from "@relay/core";
+import { board, CLOUD_APPROVED, CLOUD_CAP_NOTE, CLOUD_EXPERIMENTAL_NOTE, CLOUD_LABEL, CLOUD_LANE, cloudGrantOf, cloudMarksOf, cloudOffer, cloudStart, defaultCap, estimateUsd, subscriptionWorkers } from "@relay/core";
 import { getFeed } from "../data.ts";
+import { dataMode } from "../mode.ts";
 import { projectProfile } from "../profile.ts";
 import { cloudConfig, cloudProblem } from "./config.ts";
+import { repoGuard } from "./guard.ts";
 
 export interface CloudOfferView {
   waitedMs: number;
@@ -20,6 +26,14 @@ export interface CloudOfferView {
   /** The cap the person is shown first. */
   capUsd: number;
   maxCapUsd: number;
+  /** What the cap is and is not, shown beside the amount (core's `CLOUD_CAP_NOTE`). */
+  capNote: string;
+  /** That the path is unproven (core's `CLOUD_EXPERIMENTAL_NOTE`). */
+  experimental: string;
+  /** Why a run cannot be approved for this repository as it is, and what to turn on; absent when it can. */
+  blocked?: string;
+  /** The rule is there, but GitHub did not say whether relay's App may bypass it. */
+  caution?: string;
 }
 
 export interface CloudApprovedView {
@@ -100,8 +114,10 @@ export async function cloudView(task: board.BoardTask, i: CloudViewInput): Promi
   if (!likely) return approved ? { approved } : undefined;
   const offered = cloudOffer(task, own, (await projectProfile(task.repo)).profile, i.now, config.limits);
   if (!offered.offer) return approved ? { approved } : undefined;
-  const estimate = await projectEstimate(task.project!, i.now);
-  return { ...(approved ? { approved } : {}), offer: { waitedMs: offered.waitedMs, estimateUsd: estimate, capUsd: defaultCap(estimate, config.limits.maxCapUsd), maxCapUsd: config.limits.maxCapUsd } };
+  // the demo has no repository to ask about; a real deployment asks GitHub (kept a minute per repository)
+  const [estimate, guard] = await Promise.all([projectEstimate(task.project!, i.now), dataMode() === "db" ? repoGuard(task.repo, { now: i.now }) : undefined]);
+  const said = !guard ? {} : !guard.ok ? { blocked: guard.message } : guard.bypassKnown ? {} : { caution: `GitHub did not say whether relay's GitHub App may bypass the rule on ${guard.branch}. If it is on that rule's bypass list, a run can merge its own work: take it off.` };
+  return { ...(approved ? { approved } : {}), offer: { waitedMs: offered.waitedMs, estimateUsd: estimate, capUsd: defaultCap(estimate, config.limits.maxCapUsd), maxCapUsd: config.limits.maxCapUsd, capNote: CLOUD_CAP_NOTE, experimental: CLOUD_EXPERIMENTAL_NOTE, ...said } };
 }
 
 /** The views of a board's cards, by task ID: only queued tasks can have one. */

@@ -62,6 +62,10 @@ function approvedLine(a: CloudApprovedView): string {
  * "Keep waiting" does nothing but fold the offer away for this viewer, because waiting for one of their own machines
  * is the default and needs no action. When a run was already approved, the line says where it stands instead.
  * Renders into the parent's block: the same component on a board card (`sm`) and on the task page.
+ *
+ * The sheet says what the yes does not cover, in the words the server sends (lib/cloud/view.ts): what the cap is
+ * and is not, that the path is experimental, and, when the repository's default branch does not require an approved
+ * pull request, why nothing can be approved and what to turn on. Approve is off then; the server refuses it too.
  */
 export function CloudOffer({ taskId, view, canWrite, size = "default", className }: { taskId: string; view: CloudView; canWrite: boolean; size?: "default" | "sm"; className?: string }) {
   const router = useRouter();
@@ -76,7 +80,7 @@ export function CloudOffer({ taskId, view, canWrite, size = "default", className
   const [pending, start] = useTransition();
   const offer = view.offer;
   const amount = Number(cap);
-  const valid = !!offer && Number.isFinite(amount) && amount > 0 && amount <= offer.maxCapUsd;
+  const valid = !!offer && !offer.blocked && Number.isFinite(amount) && amount > 0 && amount <= offer.maxCapUsd;
 
   const approve = () => {
     if (pending || !valid) return;
@@ -122,19 +126,29 @@ export function CloudOffer({ taskId, view, canWrite, size = "default", className
               </SheetTrigger>
               <SheetContent side="right" className="overflow-y-auto sm:max-w-lg">
                 <SheetHeader>
-                  <SheetTitle>Run in a paid sandbox</SheetTitle>
+                  <SheetTitle>Run in a paid sandbox (experimental)</SheetTitle>
                   <SheetDescription>
-                    Approving starts one Vercel Sandbox that runs this task once on paid credits through the model gateway, opens its pull request and holds it for your review like any other run. It stops at the cap. Nothing is spent unless you approve here; if one of your own workers comes online and takes the task first, nothing is started. Closing this keeps the task waiting for your machines, which costs nothing.
+                    Approving starts one Vercel Sandbox that runs this task once on paid credits through the model gateway, opens its pull request and holds it for your review like any other run. Nothing is spent unless you approve here; if one of your own workers comes online and takes the task first, nothing is started. Closing this keeps the task waiting for your machines, which costs nothing.
                   </SheetDescription>
                 </SheetHeader>
                 <div className="flex flex-col gap-3 px-4">
+                  {offer.blocked && (
+                    <p role="alert" className="text-xs text-warn">
+                      A paid run cannot be approved for this repository yet. {offer.blocked}
+                    </p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    Inside the sandbox the run can execute any code, push to this repository and write in this project&apos;s queue on the board. The rule on the repository&apos;s default branch is what keeps its work behind a review. {offer.experimental}
+                  </p>
+                  {offer.caution && <p className="text-xs text-warn">{offer.caution}</p>}
                   <p className="text-xs text-muted-foreground">
                     {offer.estimateUsd === null ? "No history yet: fewer than three past runs of this project to estimate from." : `Past runs of this project on the claude lane cost about ${usd(offer.estimateUsd)} (the median).`}
                   </p>
                   <label className="flex flex-col gap-1 text-xs">
                     <span className="text-muted-foreground">Cap, in US dollars (at most {usd(offer.maxCapUsd)} on this deployment)</span>
                     <Input type="number" inputMode="decimal" min={0.01} max={offer.maxCapUsd} step={0.01} value={cap} onChange={(e) => setCap(e.target.value)} disabled={pending} className="w-32 font-mono" aria-label="Cap in US dollars" aria-invalid={!valid} />
-                    <span className="text-muted-foreground">A run that reaches its cap stops there, and what it spent is spent. The approval is for the task&apos;s text as it stands: an edit of the task voids it.</span>
+                    <span className="text-muted-foreground">{offer.capNote}</span>
+                    <span className="text-muted-foreground">What a run spent is spent, finished or not. The approval is for the task&apos;s text as it stands: an edit of the task voids it.</span>
                   </label>
                   <div>
                     <Button onClick={approve} disabled={pending || !valid}>

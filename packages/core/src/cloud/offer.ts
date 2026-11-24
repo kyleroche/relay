@@ -6,6 +6,15 @@
  * one of their own machines is the default and needs no action. So an offer is only ever a question, shown when no
  * machine of theirs can take the task now; the answer is a grant (board/tasks.ts `grantTask`), and only a grant starts
  * anything (cloud/start.ts).
+ *
+ * What the yes covers is narrower than the word "cap" suggests, and whoever asks for it has to say so
+ * (`CLOUD_CAP_NOTE`). The cap is kept by relay's own processes: each model call relay starts gets what is left of
+ * it. The sandbox's firewall adds the gateway's key to any request for the gateway's coding endpoint, whoever in the
+ * microVM sent it, so code a fooled lane runs there can call the gateway outside that count. The only limit on that
+ * is a budget on the key itself, at the gateway, which relay can neither set nor read with the deployment's own
+ * credentials.
+ *
+ * Experimental: no paid run has been made against a real sandbox or a real gateway.
  */
 import type { BoardTask } from "../board/tasks.ts";
 import type { WorkerView } from "../board/workers.ts";
@@ -21,6 +30,16 @@ export const CLOUD_MAX_CAP_USD = 10;
 export const CLOUD_MIN_CAP_USD = 1;
 /** Past runs needed before their median is called an estimate. */
 export const CLOUD_ESTIMATE_MIN_RUNS = 3;
+
+/**
+ * What the cap is and is not, in the one sentence every surface that asks for the yes shows beside the amount.
+ * It stays true only while the gateway's key is added by the firewall for any process in the sandbox; a key that is
+ * this run's alone, with a budget of its own, would make the cap the gateway's to keep.
+ */
+export const CLOUD_CAP_NOTE =
+  "relay stops its own model calls at the cap. Code the run executes inside the sandbox can reach the gateway with the same key, so a run fooled by the task's text could spend more, up to the budget set on that key at the gateway. Set one.";
+/** That the path is unproven, wherever it is offered. */
+export const CLOUD_EXPERIMENTAL_NOTE = "Experimental: paid runs have not been run against a real sandbox yet.";
 
 export interface CloudLimits {
   /** How long a task is queued before a paid run is offered. */

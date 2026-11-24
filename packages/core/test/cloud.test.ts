@@ -3,8 +3,8 @@
  * expected to cost, the cap, the timeout, and exactly what a run creates.
  */
 import { describe, expect, it } from "vitest";
-import { capProblem, cloudLimits, cloudOffer, defaultCap, estimateUsd, subscriptionWorkers, type CloudLimits } from "../src/cloud/offer.ts";
-import { CLOUD_GH_VARIABLE, CLOUD_MAX_TIMEOUT_MS, CLOUD_MIN_TIMEOUT_MS, CLOUD_PLACEHOLDER, cloudNames, CloudPlanError, cloudRunPlan, cloudTimeoutMs } from "../src/cloud/plan.ts";
+import { capProblem, CLOUD_CAP_NOTE, CLOUD_EXPERIMENTAL_NOTE, cloudLimits, cloudOffer, defaultCap, estimateUsd, subscriptionWorkers, type CloudLimits } from "../src/cloud/offer.ts";
+import { CLOUD_CLAUDE_CODE_VERSION, CLOUD_GH_VARIABLE, CLOUD_GITHUB_PERMISSIONS, CLOUD_MAX_TIMEOUT_MS, CLOUD_MIN_TIMEOUT_MS, CLOUD_PLACEHOLDER, cloudBoardCan, cloudHostCovers, cloudNames, CloudPlanError, cloudRunPlan, cloudTimeoutMs } from "../src/cloud/plan.ts";
 
 const MIN = 60_000;
 const NOW = Date.parse("2026-11-24T12:00:00Z");
@@ -100,6 +100,16 @@ describe("estimateUsd and defaultCap", () => {
   });
 });
 
+describe("what the offer says about the cap", () => {
+  it("says who keeps the cap, that code in the sandbox can spend past it, and where the real limit is", () => {
+    expect(CLOUD_CAP_NOTE).toMatch(/relay stops its own model calls at the cap/);
+    expect(CLOUD_CAP_NOTE).toMatch(/could spend more, up to the budget set on that key at the gateway/);
+    // it never says the run, the sandbox or the gateway stops at the cap: none of them does
+    expect(CLOUD_CAP_NOTE).not.toMatch(/(run|sandbox|gateway) stops at the cap|hard cap|cannot spend more/i);
+    expect(CLOUD_EXPERIMENTAL_NOTE).toMatch(/^Experimental: .*not been run against a real sandbox/);
+  });
+});
+
 describe("cloudTimeoutMs", () => {
   it("grows with the cap between a quarter of an hour and an hour", () => {
     expect(cloudTimeoutMs(0.25)).toBe(CLOUD_MIN_TIMEOUT_MS);
@@ -117,7 +127,7 @@ describe("cloudTimeoutMs", () => {
 });
 
 describe("cloudRunPlan", () => {
-  const input = { task: { id: "790.771" }, cap: 2, relayVersion: "0.3.2", hosts: ["api.example.com", "*.example.org"] };
+  const input = { task: { id: "790.771", project: "atlas-site" }, cap: 2, relayVersion: "0.3.2", hosts: ["api.example.com", "*.example.org"] };
 
   it("says exactly what is created", () => {
     const plan = cloudRunPlan({ ...input, start: { grant: "790.800", n: 1 } });
@@ -126,7 +136,7 @@ describe("cloudRunPlan", () => {
     expect(plan.hosts).toEqual(["*.example.org", "ai-gateway.vercel.sh", "api.example.com", "api.github.com", "github.com", "registry.npmjs.org"]);
     expect(plan.env).toEqual(["BOARD_TOKEN", "BOARD_URL", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", "RELAY_BOARD_FROM", "RELAY_GATEWAY_TOKEN", "RELAY_GATEWAY_URL", "RELAY_HOME"]);
     expect(plan.commands.map((c) => c.step)).toEqual(["node", "git", "gh", "install", "github", "work"]);
-    expect(plan.commands.find((c) => c.step === "install")).toMatchObject({ cmd: "npm", args: ["install", "-g", "--no-fund", "--no-audit", "@kyleroche/relay@0.3.2", "@anthropic-ai/claude-code"] });
+    expect(plan.commands.find((c) => c.step === "install")).toMatchObject({ cmd: "npm", args: ["install", "-g", "--no-fund", "--no-audit", "@kyleroche/relay@0.3.2", `@anthropic-ai/claude-code@${CLOUD_CLAUDE_CODE_VERSION}`] });
     expect(plan.commands.at(-1)).toEqual({ step: "work", cmd: "relay", args: ["work", "--task", "790.771", "--billing", "gateway", "--cap", "2.00", "--no-sandbox", "--name", names.worker, "--max-minutes", "25"], detached: true });
   });
 
@@ -147,8 +157,46 @@ describe("cloudRunPlan", () => {
     expect(cloudRunPlan({ ...input, hosts: [], gatewayUrl: "https://gateway.example.net/claude/" })).toMatchObject({ gatewayUrl: "https://gateway.example.net/claude", hosts: ["api.github.com", "gateway.example.net", "github.com", "registry.npmjs.org"] });
   });
 
-  it("holds the sandbox to the queues and its own worker message on the board", () => {
-    expect(cloudRunPlan(input).board).toEqual({ "work/": ["read", "post", "react", "label"], "relay/workers": ["read", "post", "label"] });
+  it("installs one exact version of each tool, never whatever was published last", () => {
+    expect(CLOUD_CLAUDE_CODE_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    const install = cloudRunPlan(input).commands.find((c) => c.step === "install")!.args;
+    const packages = install.filter((a) => !a.startsWith("-") && a !== "install");
+    expect(packages).toHaveLength(2);
+    for (const spec of packages) expect(spec).toMatch(/^@[a-z-]+\/[a-z-]+@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
+  });
+
+  it("refuses a wildcard from a capability set that takes in a host the firewall signs for", () => {
+    for (const host of ["*.github.com", "*.vercel.sh"]) expect(() => cloudRunPlan({ ...input, hosts: [host] }), host).toThrow(/a host the sandbox's firewall adds a credential for/);
+    // a wildcard over a whole top-level domain was never a host name
+    expect(() => cloudRunPlan({ ...input, hosts: ["*.com"] })).toThrow(/not a host name/);
+    expect(() => cloudRunPlan({ ...input, hosts: ["*.example.net"], gatewayUrl: "https://gateway.example.net/claude" })).toThrow(/takes in gateway\.example\.net/);
+    // a wildcard that takes in none of them is a set's to allow, and so is a host beside them
+    expect(cloudRunPlan({ ...input, hosts: ["*.githubusercontent.com", "*.example.org", "gist.github.com"] }).hosts).toEqual(expect.arrayContaining(["*.githubusercontent.com", "gist.github.com"]));
+    expect(cloudHostCovers("*.github.com", "api.github.com")).toBe(true);
+    expect(cloudHostCovers("*.github.com", "github.com")).toBe(true);
+    expect(cloudHostCovers("*.github.com", "notgithub.com")).toBe(false);
+    expect(cloudHostCovers("api.github.com", "api.github.com")).toBe(false);
+  });
+
+  it("holds the sandbox to its own project's queue and its worker message on the board", () => {
+    const can = cloudRunPlan(input).board;
+    expect(can).toEqual({ "work/atlas-site": ["read", "post", "react", "label"], "relay/workers": ["read", "post", "label"] });
+    expect(can).toEqual(cloudBoardCan("atlas-site"));
+    // no subtree, no wildcard, no other project's queue, and nothing that manages the board
+    for (const pattern of Object.keys(can)) expect(pattern).not.toMatch(/\/$|\*/);
+    expect(Object.keys(cloudRunPlan({ ...input, task: { id: "790.771", project: "nightfall" } }).board)).toEqual(["work/nightfall", "relay/workers"]);
+    expect(Object.values(can).flat()).not.toContain("manage");
+  });
+
+  it("plans nothing for a task that is in no project's queue, or whose project is no slug", () => {
+    expect(() => cloudRunPlan({ ...input, task: { id: "790.771", project: undefined } })).toThrow(/no project's queue/);
+    for (const project of ["", "Atlas", "a/b", "../demo", "work/"]) expect(() => cloudRunPlan({ ...input, task: { id: "790.771", project } }), project).toThrow(CloudPlanError);
+  });
+
+  it("asks GitHub for a token that may push and open a pull request, and nothing else the App holds", () => {
+    expect(cloudRunPlan(input).githubPermissions).toEqual({ contents: "write", metadata: "read", pull_requests: "write" });
+    expect(cloudRunPlan(input).githubPermissions).toEqual(CLOUD_GITHUB_PERMISSIONS);
+    for (const never of ["administration", "workflows", "issues", "actions", "deployments", "secrets", "members"]) expect(CLOUD_GITHUB_PERMISSIONS).not.toHaveProperty(never);
   });
 
   it("never contains a credential value: variables are names, and the one login command reads a placeholder's variable", () => {
@@ -162,7 +210,7 @@ describe("cloudRunPlan", () => {
     expect(text).not.toMatch(/Bearer|Basic |ghs_|ghp_|sk-|vck_|eyJ/);
     expect(text).not.toMatch(/authorization/i);
     expect(text).not.toContain(CLOUD_PLACEHOLDER);
-    expect(Object.keys(plan).sort()).toEqual(["board", "capUsd", "commands", "env", "gatewayUrl", "hosts", "image", "profile", "sandbox", "task", "timeoutMs", "vcpus", "worker"]);
+    expect(Object.keys(plan).sort()).toEqual(["board", "capUsd", "commands", "env", "gatewayUrl", "githubPermissions", "hosts", "image", "profile", "sandbox", "task", "timeoutMs", "vcpus", "worker"]);
   });
 
   it("runs unsandboxed inside the microVM, on the gateway, for one task, under the cap", () => {

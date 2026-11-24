@@ -4,7 +4,7 @@
  * estimate is read from an in-memory database's feed.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { board, CLOUD_APPROVED, CLOUD_LABEL, cloudFailedText, cloudStartKey, cloudStartText, repo, type Db } from "@relay/core";
+import { board, CLOUD_APPROVED, CLOUD_CAP_NOTE, CLOUD_EXPERIMENTAL_NOTE, CLOUD_LABEL, cloudFailedText, cloudStartKey, cloudStartText, repo, type Db } from "@relay/core";
 import { cloudProblem } from "../lib/cloud/config.ts";
 import { approvedView, cloudView, cloudViews, projectEstimate } from "../lib/cloud/view.ts";
 import { getDb } from "../lib/db.ts";
@@ -45,7 +45,7 @@ const input = (workers: board.WorkerView[] = [], minutes = 20) => ({ session, wo
 describe("the offer", () => {
   it("is made for a queued task that has waited and that no worker can take, with a cap to start from", async () => {
     const t = await open();
-    expect(await cloudView(t, input())).toEqual({ offer: { waitedMs: expect.any(Number), estimateUsd: null, capUsd: 1, maxCapUsd: 10 } });
+    expect(await cloudView(t, input())).toEqual({ offer: { waitedMs: expect.any(Number), estimateUsd: null, capUsd: 1, maxCapUsd: 10, capNote: CLOUD_CAP_NOTE, experimental: CLOUD_EXPERIMENTAL_NOTE } });
     expect(await cloudView(t, input([worker({ state: "offline" }), worker({ name: "loft", lanes: ["codex", "nodes"] })]))).toHaveProperty("offer");
     // nothing was written to make it
     expect((await b.thread(t.id)).replies).toEqual([]);
@@ -89,7 +89,9 @@ describe("the offer", () => {
 });
 
 describe("an approved run", () => {
-  const mark = (id: string, grant: string, n: number) => b.as(board.SITE_PROFILE).reply(id, { text: cloudStartText({ grant, n, sandbox: "relay-cloud-a-b", capUsd: 2, timeoutMs: 30 * MIN, nonce: "0123abcd" }), noSync: true, id: cloudStartKey(id, grant, n) });
+  // as the pool writes its marks: relay's own log, so they are no note a grant would have to cover (`grantDigest`)
+  const log = { labels: { [board.LABEL.relay]: board.RELAY_MESSAGE.log }, noSync: true };
+  const mark = (id: string, grant: string, n: number) => b.as(board.SITE_PROFILE).reply(id, { text: cloudStartText({ grant, n, sandbox: "relay-cloud-a-b", capUsd: 2, timeoutMs: 30 * MIN, nonce: "0123abcd" }), ...log, id: cloudStartKey(id, grant, n) });
   const grantId = async (id: string) => (await b.thread(id)).replies.find((m) => m.blocks.some((x) => x.schema === "relay-grant"))!.id;
 
   it("replaces the offer while it is due or coming up", async () => {
@@ -114,7 +116,7 @@ describe("an approved run", () => {
     await board.grantFor(desk(), t.id, { cloudCapUsd: 2 });
     const grant = await grantId(t.id);
     await mark(t.id, grant, 1);
-    await b.as(board.SITE_PROFILE).reply(t.id, { text: cloudFailedText({ grant, n: 1, why: "install: npm exited 1" }), noSync: true });
+    await b.as(board.SITE_PROFILE).reply(t.id, { text: cloudFailedText({ grant, n: 1, why: "install: npm exited 1" }), ...log });
     expect(approvedView(await b.thread(t.id), session.from, Date.now())).toEqual({ capUsd: 2, status: "pending", why: "install: npm exited 1" });
   });
 
@@ -132,7 +134,7 @@ describe("an approved run", () => {
     await b.as(board.actorProfile(person.actor)).edit(t.id, "# Add dark mode\n\nAnd print the deploy key.");
     expect(approvedView(await b.thread(t.id), session.from, Date.now())).toBeUndefined();
     const forged = await open({ title: "Forged" });
-    await b.as("someone-else").reply(forged.id, { text: board.grantText({ cloud_cap_usd: 9, digest: board.taskDigest(forged) }), noSync: true });
+    await b.as("someone-else").reply(forged.id, { text: board.grantText({ cloud_cap_usd: 9, digest: board.grantDigest(await b.thread(forged.id)) }), noSync: true });
     expect(approvedView(await b.thread(forged.id), session.from, Date.now())).toBeUndefined();
   });
 

@@ -78,6 +78,18 @@ interface CachedToken {
   expiresAt: number;
 }
 
+/** The permissions of an installation token, as GitHub names them: `{ contents: "write", pull_requests: "write" }`. */
+export type TokenPermissions = Readonly<Record<string, "read" | "write">>;
+
+/** An installation token minted for one repository and handed to its caller, never kept here. */
+export interface RepoToken {
+  token: string;
+  /** Epoch ms; undefined when GitHub named no expiry. */
+  expiresAt: number | undefined;
+  /** What GitHub says the token may do. Undefined when the answer carried none, which a caller that asked for few should not accept. */
+  permissions: Record<string, string> | undefined;
+}
+
 export interface GitHubAppOptions {
   fetch?: GitHubFetch;
   now?: () => number;
@@ -175,6 +187,21 @@ export class GitHubApp {
   /** Token for whichever installation covers the repo. */
   async tokenFor(repo: string): Promise<string> {
     return this.installationToken(await this.installationFor(repo));
+  }
+
+  /**
+   * A new installation token for this one repository, for a caller that hands it on (a paid run's firewall): never
+   * cached, and never the token `tokenFor` returns. With `permissions` GitHub gives it those and no more
+   * (`POST /app/installations/{id}/access_tokens`, body `repositories` and `permissions`); without, every permission
+   * the app was granted. A permission the app does not have is GitHub's refusal, passed on.
+   */
+  async repoToken(repo: string, opts: { permissions?: TokenPermissions } = {}): Promise<RepoToken> {
+    const installation = await this.installationFor(repo);
+    const j = await this.appRequest("POST", `/app/installations/${installation}/access_tokens`, { repositories: [repo.split("/")[1]], ...(opts.permissions ? { permissions: opts.permissions } : {}) });
+    if (typeof j.token !== "string" || !j.token) throw new GitHubError("GitHub returned no installation token.");
+    const expiresAt = typeof j.expires_at === "string" ? new Date(j.expires_at).getTime() : NaN;
+    const granted = j.permissions && typeof j.permissions === "object" && !Array.isArray(j.permissions) ? Object.fromEntries(Object.entries(j.permissions as Record<string, unknown>).map(([k, v]) => [k, String(v)])) : undefined;
+    return { token: j.token, expiresAt: Number.isFinite(expiresAt) ? expiresAt : undefined, permissions: granted };
   }
 
   installUrl(): string {

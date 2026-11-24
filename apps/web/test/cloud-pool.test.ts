@@ -4,9 +4,10 @@
  * start one, and that a grant is one run. No test creates a sandbox.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { board, CLOUD_APPROVED, CLOUD_GATEWAY_URL, CLOUD_LABEL, cloudFailedText, cloudGrantOf, cloudMarksOf, cloudNames, EMPTY_PROFILE, type CloudRunPlan, type ProjectProfile } from "@relay/core";
+import { board, CLOUD_APPROVED, CLOUD_GATEWAY_URL, CLOUD_GITHUB_PERMISSIONS, CLOUD_LABEL, cloudBoardCan, cloudFailedText, cloudGrantOf, cloudMarksOf, cloudNames, EMPTY_PROFILE, type CloudRunPlan, type ProjectProfile, type RepoToken } from "@relay/core";
+import type { BranchGuard } from "../lib/cloud/guard.ts";
 import { CloudLaunchError, type CloudSecrets } from "../lib/cloud/launch.ts";
-import { runApproved, type PoolDeps } from "../lib/cloud/pool.ts";
+import { runApproved, siteSecrets, type CloudStartAsk, type PoolDeps } from "../lib/cloud/pool.ts";
 
 const MIN = 60_000;
 const person: board.Asker = { actor: "human:kyle" };
@@ -18,22 +19,27 @@ let b: board.Board;
 let session: board.BoardSession;
 let launched: CloudRunPlan[];
 let handed: CloudSecrets[];
+let asked: CloudStartAsk[];
 
 beforeEach(async () => {
   b = await board.memoryBoard();
   session = await board.connectBoard(b);
   launched = [];
   handed = [];
+  asked = [];
 });
 
-const secrets = (): CloudSecrets => ({ board: { allow: { "board.example.com": [{ transform: [{ headers: { authorization: "Bearer fake-board-credential" } }] }] }, env: { BOARD_URL: "https://board.example.com", BOARD_TOKEN: "placeholder" } }, github: { repo: "acme/demo", token: GITHUB }, gateway: GATEWAY, from: session.from });
+const secrets = (): CloudSecrets => ({ board: { allow: { "board.example.com": [{ transform: [{ headers: { authorization: "Bearer fake-board-credential" } }] }] }, env: { BOARD_URL: "https://board.example.com", BOARD_TOKEN: "placeholder" } }, github: { repo: "acme/demo", token: GITHUB, permissions: { ...CLOUD_GITHUB_PERMISSIONS } }, gateway: GATEWAY, from: session.from });
+/** GitHub's answer for a repository whose default branch takes only approved pull requests. */
+const guarded: BranchGuard = { ok: true, repo: "acme/demo", branch: "main", by: "ruleset", bypassKnown: true };
 
 function deps(over: Partial<PoolDeps> = {}): PoolDeps {
   return {
     session,
     config: { limits: { afterMinutes: 15, maxCapUsd: 10 }, gatewayUrl: CLOUD_GATEWAY_URL, relayVersion: "0.3.2" },
     profile: async () => ({ profile }),
-    secrets: async () => ({ secrets: secrets(), lifeMs: 55 * MIN }),
+    guard: async () => guarded,
+    secrets: async (ask) => (asked.push(ask), { secrets: secrets(), lifeMs: 55 * MIN }),
     launch: async (plan, given) => {
       launched.push(plan);
       handed.push(given);
@@ -79,7 +85,40 @@ describe("what is started", () => {
     expect(plan.hosts).toEqual(["ai-gateway.vercel.sh", "api.example-cms.com", "api.github.com", "github.com", "registry.npmjs.org"]);
     expect(plan.commands.at(-1)!.args).toEqual(["work", "--task", id, "--billing", "gateway", "--cap", "1.50", "--no-sandbox", "--name", plan.worker, "--max-minutes", "20"]);
     expect(plan.commands[3]!.args).toContain("@kyleroche/relay@0.3.2");
-    expect(handed[0]!.github).toEqual({ repo: "acme/demo", token: GITHUB });
+    expect(handed[0]!.github).toEqual({ repo: "acme/demo", token: GITHUB, permissions: { contents: "write", metadata: "read", pull_requests: "write" } });
+  });
+
+  it("asks for credentials held to the task's own queue, and plans the same", async () => {
+    const id = await open();
+    const elsewhere = await open({ project: "nightfall", repo: "acme/productions", title: "Cutscene 3" });
+    await approve(id);
+    await approve(elsewhere);
+    await runApproved(deps());
+    const mine = asked.find((a) => a.repo === "acme/demo")!;
+    expect(mine.can).toEqual({ "work/demo": ["read", "post", "react", "label"], "relay/workers": ["read", "post", "label"] });
+    expect(mine.names).toMatchObject({ worker: cloudNames(id).worker, profile: cloudNames(id).profile });
+    expect(launched.find((p) => p.task === id)!.board).toEqual(mine.can);
+    // another project's task gets another queue, and neither names the other's nor every queue
+    const theirs = asked.find((a) => a.repo === "acme/productions")!;
+    expect(Object.keys(theirs.can)).toEqual(["work/nightfall", "relay/workers"]);
+    for (const a of asked) expect(Object.keys(a.can)).not.toContain("work/");
+  });
+
+  it("starts nothing where the default branch does not require an approved pull request, and says what to turn on", async () => {
+    const id = await open();
+    await approve(id);
+    const open_: BranchGuard = { ok: false, repo: "acme/demo", branch: "main", why: "open", message: "main of acme/demo takes direct pushes. In acme/demo, Settings, Rules, Rulesets, add a ruleset for main." };
+    const pass = await runApproved(deps({ guard: async () => open_ }));
+    expect(pass).toEqual({ started: [], failed: [{ task: id, why: open_.message }] });
+    expect(launched).toEqual([]);
+    // no credential was asked for, and the thread has the sentence a person needs
+    expect(asked).toEqual([]);
+    expect((await marks(id)).at(-1)).toMatchObject({ kind: "failed", n: 1, why: open_.message });
+    // the rule is asked about for the task's own repository, each time
+    const repos: string[] = [];
+    await runApproved(deps({ guard: async (repo) => (repos.push(repo), guarded) }));
+    expect(repos).toEqual(["acme/demo"]);
+    expect(launched.map((p) => p.task)).toEqual([id]);
   });
 
   it("starts nothing for a task nobody approved, or one a worker already took", async () => {
@@ -95,7 +134,7 @@ describe("what is started", () => {
 
   it("believes no grant a stranger wrote, and none for an earlier wording of the task", async () => {
     const forged = await open();
-    const digest = board.taskDigest(board.toTask((await b.thread(forged)).message));
+    const digest = board.grantDigest(await b.thread(forged));
     await b.as(board.actorProfile(person.actor)).reply(forged, { text: board.grantText({ cloud_cap_usd: 5, digest }), noSync: true });
     await b.as("someone-else").reply(forged, { text: board.grantText({ cloud_cap_usd: 5, digest }), noSync: true });
     await b.label(forged, { set: { [CLOUD_LABEL]: CLOUD_APPROVED } });
@@ -115,7 +154,7 @@ describe("what is started", () => {
     // what a fooled lane inside a paid run could post: its sandbox reaches the board as its worker's profile
     const forged = await open();
     const lane = b.as(cloudNames(forged).profile);
-    await lane.reply(forged, { text: board.grantText({ cloud_cap_usd: 10, digest: board.taskDigest(board.toTask((await b.thread(forged)).message)) }), noSync: true });
+    await lane.reply(forged, { text: board.grantText({ cloud_cap_usd: 10, digest: board.grantDigest(await b.thread(forged)) }), noSync: true });
     await b.label(forged, { set: { [CLOUD_LABEL]: CLOUD_APPROVED } });
     expect(await runApproved(deps({ wide: true }))).toEqual({ started: [], failed: [] });
 
@@ -266,5 +305,60 @@ describe("the credentials of a start", () => {
     const pass = await runApproved(deps({ secrets: async () => Promise.reject(new Error("The GitHub App is not installed on acme/demo.")) }));
     expect(pass.failed).toEqual([{ task: id, why: "The GitHub App is not installed on acme/demo." }]);
     expect(launched).toEqual([]);
+  });
+});
+
+describe("siteSecrets", () => {
+  const names = cloudNames("790.771", { grant: "790.800", n: 1 });
+  const ask: CloudStartAsk = { names, repo: "acme/demo", can: cloudBoardCan("demo") };
+  const NOW = Date.parse("2026-11-24T12:00:00Z");
+
+  /** The site's sources, remembering what each was asked. */
+  function sources(token: Partial<RepoToken> = {}) {
+    const seen: { mint?: { repo: string; opts: unknown }; policy?: unknown } = {};
+    return {
+      seen,
+      from: {
+        session: {
+          board: {
+            sandboxPolicy: async (options?: unknown) => {
+              seen.policy = options;
+              return { allow: { "board.example.com": [{ transform: [{ headers: { authorization: "Bearer fake-board-credential" } }] }] }, env: { BOARD_URL: "https://board.example.com", BOARD_TOKEN: "placeholder" } };
+            },
+          },
+          from: ["vercel:user:u1"],
+        },
+        app: {
+          repoToken: async (repo: string, opts?: unknown): Promise<RepoToken> => {
+            seen.mint = { repo, opts };
+            return { token: GITHUB, expiresAt: NOW + 60 * MIN, permissions: { contents: "write", metadata: "read", pull_requests: "write" }, ...token };
+          },
+        },
+        gateway: GATEWAY,
+      },
+    };
+  }
+
+  it("asks GitHub for a token for the one repository with the narrowed permissions", async () => {
+    const { from, seen } = sources();
+    const { secrets: got, lifeMs } = await siteSecrets(from, ask, NOW);
+    expect(seen.mint).toEqual({ repo: "acme/demo", opts: { permissions: { contents: "write", metadata: "read", pull_requests: "write" } } });
+    expect(got.github).toEqual({ repo: "acme/demo", token: GITHUB, permissions: { contents: "write", metadata: "read", pull_requests: "write" } });
+    expect(got.gateway).toBe(GATEWAY);
+    expect(lifeMs).toBe(60 * MIN);
+  });
+
+  it("asks the board for a policy as the worker's profile, held to the task's own queue", async () => {
+    const { from, seen } = sources();
+    await siteSecrets(from, ask, NOW);
+    expect(seen.policy).toEqual({ profile: { name: names.profile }, can: { "work/demo": ["read", "post", "react", "label"], "relay/workers": ["read", "post", "label"] } });
+  });
+
+  it("hands on no token that may do more than was asked, or whose permissions GitHub did not name", async () => {
+    const wide = sources({ permissions: { actions: "read", contents: "write", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" } });
+    await expect(siteSecrets(wide.from, ask, NOW)).rejects.toThrow(/may do more than a run needs \(actions: read, deployments: read, issues: write\), so it is not handed to a sandbox/);
+    // the board was not even asked
+    expect(wide.seen.policy).toBeUndefined();
+    await expect(siteSecrets(sources({ permissions: undefined }).from, ask, NOW)).rejects.toThrow(/did not say what the installation token may do/);
   });
 });
