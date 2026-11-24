@@ -16,3 +16,4 @@ allowBuilds:
 # version is named here. Drop the entry once the version in use is older than the window.
 minimumReleaseAgeExclude:
   - '@vercel/board@0.52.0'
+  - eve@1.4.0
