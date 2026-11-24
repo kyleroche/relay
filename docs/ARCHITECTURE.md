@@ -4,7 +4,7 @@ relay exists because one person using several coding-agent subscriptions wastes 
 
 ## The rules
 
-1. **Tasks move, credentials never do.** Every model call runs on a machine where the owner logged in with the vendor's own tool. No token is copied, proxied, or stored in CI.
+1. **Tasks move, credentials never do.** A lane's model call runs on a machine where the owner logged in with the vendor's own tool. No token is copied, proxied, or stored in CI. Two things are paid per token instead, and both are opt-in: the lead ("The lead" below) and one task a person approved a paid sandbox run for (`docs/WORKERS.md`, "One task on paid credits").
 2. **The board is the task bus.** A task is a thread in its project's queue on the team's Vercel Board (`work/<project>`), a `lane` label picks the lane, a pull request on GitHub is the result, and the thread is the record of what happened to it. Labels only steer: what relay acts on (the repository, the pull request, a run's outcome, a release) is in the task's own text or in blocks whose author the board verifies. The lane registry is open: `claude`, `codex`, `grok` and `nodes` are the built-in lanes `relay work` serves, `any` is whichever code lane is free, and an app that wants to be a worker for a lane of its own (`embroidery`), one per craft, claims tasks from the board directly with `vercel board tasks` or `@vercel/board`; tasks may be opened on it while a worker that lists it is online (docs/WORKERS.md).
 3. **Every step starts fresh with a small brief.** No transcript is ever sent to a model. A brief is the repo's rules file, the task, relevant decisions, and the vendor guidance that matches the intent.
 4. **Official vendor sources only.** Model guidance comes from the vendor's documentation and the skills the vendor publishes. Community prompt guides are excluded unless the user allowlists a domain.
@@ -15,10 +15,11 @@ relay exists because one person using several coding-agent subscriptions wastes 
 | Piece | What | Where it runs |
 |---|---|---|
 | Front end | Any chat agent that can call the site's MCP tools or API, or a terminal with `relay task`. Grok Bot is the reference. | wherever the user talks |
-| Task bus | Channels on the team's Vercel Board: `work/<project>` is a project's queue (every thread in it is a task), `relay/workers` has one message per worker machine. The only labels on a task are `lane` and `model` (`packages/core/src/board/mapping.ts`). Where the work happens is a `relay-task@1` block in the task's own text (`repo`, `base`, `issue`); how a run ended, an eval's verdict and a gate release are `relay-run@1`, `relay-eval@1` and `relay-release@1` blocks in replies, counted only from an author the worker takes work from (`packages/core/src/board/schemas.ts`). A task's ID is the board's message ID | Vercel Board |
+| Task bus | Channels on the team's Vercel Board: `work/<project>` is a project's queue (every thread in it is a task), `relay/workers` has one message per worker machine. The only labels on a task are `lane` and `model` (`packages/core/src/board/mapping.ts`). Where the work happens is a `relay-task@1` block in the task's own text (`repo`, `base`, `issue`); how a run ended, an eval's verdict, a gate release and a grant are `relay-run@1`, `relay-eval@1`, `relay-release@1` and `relay-grant@1` blocks in replies, counted only from an author the worker takes work from (`packages/core/src/board/schemas.ts`). A task's ID is the board's message ID | Vercel Board |
 | Workers | Machines running `relay work`: they show their lanes from their logins in `relay/workers`, claim ready tasks from the board with the machine's own `vercel login`, run `claude -p`, `codex exec`/`fx`, or `grok -p` in a fresh clone, open a PR and report in the task's thread (`docs/WORKERS.md`). | the user's machines |
 | Scheduler | The board's own tasks: a claim gives the oldest ready task under `work/` whose `lane` label and owner match to exactly one claimer, under a lease of at most 5 minutes that the job renews; a worker with nothing to take waits on the board instead of polling (`packages/core/src/work/worker.ts`) | Vercel Board |
-| Steps | Named instructions a lane runs at a fixed point of a task: comment cleanup before the PR, a second lane's eval after it, a cleanup pass on demand. Markdown files in three layers (relay's, the user's, the project's), listed per project in `.relay/project.json` (`docs/STEPS.md`) | the worker, from the repo's default branch |
+| Steps | Named instructions a lane runs at a fixed point of a task: comment cleanup before the PR, a second lane's eval after it, a cleanup pass, a plan or a retro on demand. Markdown files in three layers (relay's, the user's, the project's), listed per project in `.relay/project.json` (`docs/STEPS.md`) | the worker, from the repo's default branch |
+| Project profile | The rest of `.relay/project.json`: the commands a worker runs before and after the work, the project's tools and skills, and capability sets (names of environment variables and hosts, never values). A task gets a set only through a `relay-grant@1` block a person gave it for its text as it stands (`docs/PROFILE.md`) | the worker, from the repo's default branch |
 | Task state | The board's task state plus the kind of its hold, folded into one word by `relayState` (`waiting`, `queued`, `running`, `review`, `held`, `blocked`, `done`, `failed`, `closed`). Nothing else keeps a task's state: the CLI, the site and the MCP tools all ask the board | Vercel Board |
 | The site | A caller on the board like any other: it reads tasks and workers from it, writes for each person or bot as a profile, and copies the queues' events into the feed ("The site and the board" below) | the web app |
 | Memory | Postgres: projects, file digests keyed by content hash, decisions with validity, preferences, vendor guidance with vector and full-text search | Neon in production, PGlite locally |
@@ -26,7 +27,8 @@ relay exists because one person using several coding-agent subscriptions wastes 
 | Rules file | A generated `relay.md` per repo, referenced from `AGENTS.md`/`CLAUDE.md` through an owned, marker-delimited section | in every linked repo |
 | Hooks | Session-start injection and session-end capture for Claude Code, Codex, and Grok Build | each machine |
 | Feed | The events table plus a web page over it, with usage meters as a rollup. A task's turns, its runs and its model calls are copied from the board by the site's ledger; GitHub and Vercel webhooks, memory and access write the rest (`docs/FEED.md`) | the web app |
-| Onboarding gate | A model cannot be used by a lane until its official docs and skills are ingested | CLI and runners |
+| Onboarding gate | A model cannot be used by a lane until its official docs and skills are ingested | the CLI and workers |
+| The lead (optional) | An agent on Vercel's eve framework that takes an ask in plain language and opens tasks. It reaches relay only through the site's MCP server ("The lead" below) | its own Vercel project |
 
 ## Lanes
 
@@ -35,20 +37,21 @@ user owns that runs `relay work`.
 
 | Label | Executes on | Login lives | Brief | Result | Usage in the ledger |
 |---|---|---|---|---|---|
-| `lane=claude` | a worker, `claude -p` (Bash in Claude Code's OS sandbox, acceptEdits, tool allowlist, max turns) | the worker's keychain | the newest `brief.md` attached to the task's thread by a trusted author (the site posts one for a new task), else the machine's own memory; the task text and the thread's notes are added as quoted data | `relay/claude-<ref>` PR (`<ref>`: eight hex characters of the task ID's hash) | yes, `relay-usage@1` blocks the worker posts in the task's thread, next to the run's `relay-run@1` block; the site's ledger copies them into the feed |
+| `lane=claude` | a worker, `claude -p` (Bash in Claude Code's OS sandbox, acceptEdits, tool allowlist, max turns) | the worker's keychain | the machine's own memory, else the newest `brief.md` attached to the task's thread by a trusted author (the site posts one for a new task); the task text and the thread's notes are added as quoted data | `relay/claude-<ref>` PR (`<ref>`: eight hex characters of the task ID's hash) | yes, `relay-usage@1` blocks the worker posts in the task's thread, next to the run's `relay-run@1` block; the site's ledger copies them into the feed |
 | `lane=codex` | a worker, `codex exec --sandbox workspace-write` or `fx` | the worker's `~/.codex` | same | `relay/codex-<ref>` PR | yes |
 | `lane=grok` | a worker, `grok -p` (acceptEdits, no subagents) | the worker's `~/.grok` | same | `relay/grok-<ref>` PR | yes |
 | `lane=nodes` | a worker with the Griptape Nodes engine, the workflow the task's manifest names | the vendor keys in the worker's environment | none | outputs attached to the task's thread, no PR | yes, one block per output model |
 
-The vendors' hosted tiers are not lanes on the board. The GitHub Actions path (`docs/RUNNERS.md`: self-hosted
-runners, `run-lane.sh`, the `relay-cloud.yml` caller) still reports through GitHub issues, nothing tracks its runs,
-and it is scheduled for removal.
+The vendors' hosted tiers are not lanes on the board. One task can run on paid credits instead of a subscription:
+`relay work --task <id> --billing gateway --cap <usd>` runs it on the Claude lane through a model gateway, after a
+person granted that task a cap (`docs/WORKERS.md`, "One task on paid credits").
 
 ## A task's life
 
 1. A human or bot opens a task in the project's queue: `relay task create`, the site (`relay_task_create`,
    `POST /api/v1/tasks`), an `agent:<lane>` label on a GitHub issue where the site is connected to GitHub, or anything
    that makes a task in `work/<project>` with a `lane` label and a `relay-task@1` block that names the repository.
+   `relay handoff` opens one from a session's work in progress, with the uncommitted work as its starting branch.
    relay makes it out of every worker's reach, runs the injection gate's deterministic pre-check, and either holds it
    (`held`) or releases it: the task is `queued` (`waiting` while a task it needs is open).
 2. A worker whose logins serve that lane, and that takes tasks from the task's owner, claims it: the board gives
@@ -60,12 +63,15 @@ and it is scheduled for removal.
    call with no tools. Text that reads as instructions to the agent rather than to the work holds the task (`held`):
    nothing runs, and it waits for `relay task release`, which posts a `relay-release@1` block with the digest of the
    text as it stands and lifts the hold (`queued`). That text is not graded again; text added afterwards is. A
-   tripwire, not a boundary: the sandbox is what contains a lane. Otherwise the worker branches
-   `relay/<lane>-<ref>` from the base, takes the brief (the thread's `brief.md`, else the machine's own memory) and
-   runs the vendor CLI headless with the planner and subagents disabled and the vendor's own permission model.
+   tripwire, not a boundary: the sandbox is what contains a lane. Otherwise the worker reads the project's profile
+   from the default branch, looks up by name the values of the capability sets the task was granted, branches
+   `relay/<lane>-<ref>` from the base, takes the brief (the machine's own memory, else the thread's `brief.md`),
+   runs the profile's `setup` commands under the sandbox runtime, and runs the vendor CLI headless with the planner
+   and subagents disabled and the vendor's own permission model (`docs/PROFILE.md`).
 4. The project's `before-pr` steps go over the change (`docs/STEPS.md`; steps are read from the repository's default
    branch, whatever base the task starts from). The result is committed as the machine's GitHub login, with
-   `relay-agent` as co-author, and pushed; a PR opens, with `Closes #n` when the task's block names an issue in the
+   `relay-agent` as co-author, the worker runs the profile's `verify` commands itself and reports each result, and
+   the branch is pushed; a PR opens, with `Closes #n` when the task's block names an issue in the
    same repository, and the lane's summary as a comment. The worker posts the summary, a `relay-run@1` block and
    the `relay-usage@1` blocks in the thread and holds the task for review, with the pull request's URL as the
    hold's reason (`review`). A lane that fails or changes nothing fails the task with the reason (`failed`). A
@@ -84,6 +90,12 @@ and it is scheduled for removal.
    thread and on the PR and the hold is lifted; the task is `queued` again, the next run reads the whole thread and
    pushes to the same branch and PR. A pull request merged on GitHub itself completes the task the same way, when
    the site receives the delivery.
+   **Plans and reports.** A task that runs a read-only `task` step by itself ends without a pull request. A planning
+   task (`relay task create --plan`, `relay_task_create` with `plan: true`) ends with a plan: the worker posts it as
+   `plan.json` and holds the task with kind `awaiting_plan`, and approving it opens the plan's tasks as the approver
+   and completes the planning task. Without a plan the lane's words are a report, held for review with the reason
+   `report`, and approving it completes the task as read. Both show as `review` (`docs/STEPS.md`, "Plans and
+   reports").
    At any point before that, `relay task requeue` puts a failed or held task back in the queue, optionally on
    another lane or model, and `relay task close` cancels it (`closed`), calls off a step's task that was looking at
    it, and on GitHub, best effort, closes its own open pull requests, deletes their branches and closes its issue.
@@ -128,18 +140,22 @@ and in `relay_task_get`, is only the rows relay's own authors wrote. A thread ou
 (`work/<project>`) is no task to any of these, whatever its ID.
 
 **The desk: what it writes, and its rules.** `packages/core/src/board/desk.ts` is the one layer for what a site does
-to a task (open, approve, request changes, release, requeue, close). The site's API routes and its pages' server
-actions reach it through `apps/web/lib/task-ops.ts`, and the MCP server calls it directly, so a decision is the same
-wherever it was asked for. Underneath are the functions the CLI calls (`packages/core/src/board/tasks.ts`). Two
-rules are the site's own, because only the site knows a caller is a bot (a token, not a signed-in person): a bot
-never approves a task it opened, and it never releases a task whose text it wrote any part of, the task itself or a
-note in its thread; a release also needs `tokens:write`. Both are judged from who the board says wrote a message,
-and `bot:oauth:<name>` and `bot:<name>` are the same bot. An approval checks first that the deployment can settle
-the task, so a site without the grant refuses before anything merges.
+to a task (open, approve, request changes, release, requeue, close, grant). The site's API routes and its pages'
+server actions reach it through `apps/web/lib/task-ops.ts`, and the MCP server calls it directly, so a decision is the
+same wherever it was asked for. Underneath are the functions the CLI calls (`packages/core/src/board/tasks.ts`). Three
+rules are the site's own, because only the site knows a caller is a bot (a token, not a signed-in person): a bot never
+approves a task it opened, it never releases a task whose text it wrote any part of, the task itself or a note in its
+thread, and it never grants: a capability set or a paid run is a signed-in person's to give, and a token is refused
+with 403. A release also needs `tokens:write`. The first two are judged from who the board says wrote a message, and
+`bot:oauth:<name>` and `bot:<name>` are the same bot. An approval checks first that the deployment can settle the
+task, so a site without the grant refuses before anything merges.
 
 **The brief.** A task the site opens (its API, the MCP tool, GitHub intake) has `brief.md` in its thread
 before any worker can claim it: the task is made out of every worker's reach, the brief is posted as `relay-brief`,
-then the task is released. A brief that cannot be made never stops the task from opening.
+then the task is released. A brief that cannot be made never stops the task from opening. A brief on the board is
+read by everyone who can read the board, so it holds the preferences and decisions scoped to the project and leaves
+the owner's own, wider ones out (`shared` in `packages/core/src/brief/index.ts`). A worker with memory of its own
+compiles its brief from that instead, with the owner's preferences in it.
 
 **What the board wakes it for.** Two watchers on every project's queue (`work/`), served at `/api/board`
 (`apps/web/lib/board-watch.ts`); the board verifies its own wake-ups, so the route needs no session.
@@ -190,8 +206,36 @@ The site merges with its own GitHub credential, the GitHub App or `GITHUB_TOKEN`
 **Demo mode** (`RELAY_DATA=mock`) is an in-memory board with relay's schemas, seeded through the same functions a
 real one is written with, so every page reads real threads. It has nobody to wake it, and `/api/board` answers 404.
 
+## The lead
+
+The lead is optional (`apps/lead`; `apps/lead/README.md`). It is an agent built on Vercel's eve framework, deployed
+as its own Vercel project. A person says what they want in plain language; the lead recalls what relay's memory
+holds, asks at most one question, and opens tasks a stranger could run. Work that needs breaking down becomes a
+planning task, so a worker that has read the repository proposes the pieces and nothing opens until the plan is approved.
+
+| | |
+|---|---|
+| How it reaches relay | only through the site's MCP server at `<site>/mcp`, with a scoped token, like any other bot. It imports nothing from relay's packages except the wire of its own wake route (`packages/core/src/lead/client.ts`) |
+| Its token's scopes | `tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read`, `events:write`. Never `tokens:write` |
+| What it can do | open, read and list tasks, requeue one, send one back with a note, recall memory and record decisions, read the feed and log its own `external.*` events (`RELAY_TOOLS` in `apps/lead/agent/lib/relay-tools.ts`) |
+| What it cannot do | approve, release or close a task, claim one, grant anything, or edit a repository: it has no tool for any of it, and none of eve's default tools (no shell, file or web tools) |
+| What it costs | its model calls go through Vercel AI Gateway and are billed per token to the Vercel team that owns its project. It is the one part of relay that is not a subscription. After each turn it writes one `external.lead.usage` row to the feed |
+| What shows on the board | what it does shows under its token's name, and the desk's rules for a bot apply to it |
+
+`packages/core/src/lead/client.ts` also defines the request that wakes the lead about a task that failed, was held
+at the gate or reached review: `wakeLead` sends it, the lead's route `POST /relay/wake` validates it with
+`parseLeadWake` and checks the caller's Vercel OIDC token against the site's team and project
+(`apps/lead/README.md`, "Environment"), and `leadWakeOf` in `packages/core/src/board/site.ts` says which board events
+are such a wake-up.
+
+The lead's behavior evals (`apps/lead/evals`) are written and have not been run against a model.
+
 ## What relay deliberately does not do
 
-- It does not run a coordinator model. Planning is the front end's job, or the human's.
+- It does not put a coordinator model between a task and a worker. The board hands a task to a worker, and a person
+  approves what a worker produced. Planning is the front end's job, the human's, a planning task's, or the optional
+  lead's. A plan opens nothing until it is approved, under the rules of any approval: a person, or a bot that did not
+  open the planning task. The lead opens tasks, can requeue one or send one back with a note, and has no tool to
+  approve, release or close one.
 - It does not host a chat UI. It hosts a feed.
 - It does not hold API keys for vendors. Pay-per-token providers are optional overflow lanes the user configures.

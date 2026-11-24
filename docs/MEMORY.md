@@ -14,8 +14,10 @@ it, the old row gets `valid_to = now()` and `superseded_by = <new id>`; nothing 
 "what did we believe on the 3rd". Recall only returns current decisions unless asked for history.
 
 Sources (`decisions.source`): `claude`, `codex`, `grok` (captured by the session-end hook), `pr` (extracted from a
-merged PR's description and review thread), `human` (typed through the CLI, the MCP tools or the web app), `nightly`
-(produced by consolidation). `source_ref` keeps the session id or PR URL so a decision can be traced.
+merged PR's description and review thread), `human` (typed through the CLI, the MCP tools or the web app), `adopt`
+(a Claude Code memory note `relay link` adopted, "Adoption" below), `nightly` (produced by consolidation).
+`source_ref` keeps the session id, the PR URL or the note's file so a decision can be traced; the MCP tool
+`relay_decide` takes it as an optional argument.
 
 ### Preferences, with scopes
 
@@ -60,14 +62,21 @@ are the ≈4-chars/token estimate from `approxTokens`; the ledger records real c
 section of the brief: they are replies in the task's thread, which the job's prompt carries next to the brief
 (`docs/WORKERS.md`, "What a job does on the machine").
 
+**A brief posted on the board.** `shared: true` compiles the brief a site posts in a task's thread as `brief.md`.
+Everyone who can read the board can read it, so it holds only what is scoped to the project: preferences with scope
+`project`, and decisions tied to that project. The owner's global, lane and model preferences and the global
+decisions stay in memory. A worker with memory of its own compiles its brief from that instead, without `shared`,
+so it has them.
+
 ## How recall reaches a model
 
 Nothing reads memory inside the model loop. Memory is injected at two edges and captured at a third:
 
-1. **Brief time (runners).** `scripts/runner/run-lane.sh` calls `relay brief <issue>` when the relay CLI is
-   installed on the runner and appends its output to the brief under a `## Memory` heading. `relay brief` fetches
-   the issue through `gh` when it can, compiles the envelope under a 3K-token cap (`--max-tokens`), and prints it.
-   Without the CLI the section is skipped and the lane still runs.
+1. **Brief time (workers).** A job's brief comes from the worker's own memory when it has one (the local database,
+   or the hosted site in site mode), compiled for the task's title and body under a 2.5K-token cap. A worker with no
+   memory of its own uses the `brief.md` a trusted author attached to the task's thread (`docs/WORKERS.md`, "What a
+   job does on the machine"). `relay brief <issue-or-intent>` prints the same envelope by hand, under a 3K-token
+   cap (`--max-tokens`).
 2. **Session start and every prompt (hooks).** `pnpm relay setup` installs hooks into each CLI it finds:
 
    | CLI | File | Events installed | Injects |
@@ -109,20 +118,21 @@ Nothing reads memory inside the model loop. Memory is injected at two edges and 
    `~/.harness/cache/capture-state.json` makes per-turn `Stop` hooks and re-runs incremental. The transcript is never
    stored and never sent whole.
 
-Cloud agents and the web app reach the same data through the memory MCP server (`packages/mcp`): the `relay-mcp`
-stdio binary for local CLIs (`dist/relay-mcp.js` in the published `@kyleroche/relay`; `packages/mcp/bin/relay-mcp.mjs`
-run through the repo's `tsx` in a checkout; either way with the node that ran `relay setup`), and `createMcpHandler(db, {token, publicRead?})` for a Next.js route at `/api/memory`
-(Streamable HTTP, stateless; `RELAY_MEMORY_TOKEN` as the bearer enables `relay_decide` and `relay_prefer`, reads
-are open only when `publicRead` is set). Tools: `relay_recall(query, project?)`, `relay_decide(text, project,
-source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`, `relay_guidance(model, query)`,
-`relay_brief(project, intent)`, `relay_feed(project?, limit?)`, `relay_project(slug)`. Every result is text capped at
-3K tokens.
+Cloud agents and the web app reach the same data through the memory MCP server (`packages/mcp`): the `relay-mcp` stdio
+binary for local CLIs (`dist/relay-mcp.js` in the published `@kyleroche/relay`; `packages/mcp/bin/relay-mcp.mjs` run
+through the repo's `tsx` in a checkout; either way with the node that ran `relay setup`), and `createMcpHandler(db,
+{token, publicRead?})` for a Next.js route at `/api/memory` (Streamable HTTP, stateless; `RELAY_MEMORY_TOKEN` as the
+bearer enables `relay_decide` and `relay_prefer`, reads are open only when `publicRead` is set). Tools:
+`relay_recall(query, project?)`, `relay_decide(text, project, source?, supersedes_id?, source_ref?)`,
+`relay_prefer(key, value, scope, scope_id?, reason?)`, `relay_guidance(model, query)`, `relay_brief(project, intent)`,
+`relay_feed(project?, limit?)`, `relay_project(slug)`. Every result is text capped at 3K tokens.
 
 ## The rules file and the owned section
 
-`relay link` is the one per-repo step and runs the whole pipeline, printing a line per stage:
+`relay link` is the one command that adds a repository. Adding a project is that command and one pull request to
+merge. It runs the whole pipeline, printing a line per stage:
 
-1. owned sections in `AGENTS.md`/`CLAUDE.md` (below), so a created `AGENTS.md` is hashed in the same run;
+1. owned sections in `AGENTS.md`/`CLAUDE.md` (below);
 2. register the project and hash every text file (`scanFiles`; `relay.md` itself is skipped);
 3. digest the files whose hash changed (`digestProject`: Sonnet lane, no tools, 8 files per call, at most
    `--max-files` = 400 per run); an entry under 10 words is dropped and re-requested once with a stricter prompt;
@@ -130,13 +140,32 @@ source?, supersedes_id?)`, `relay_prefer(key, value, scope, scope_id?, reason?)`
    The summary comes back through `--json-schema` as `{summary}`, must be 150-700 words and carry the headings
    Purpose, Stack and layout, Commands, Conventions and Gotchas; a rejected answer is re-requested once, a second
    rejection fails the stage (the old summary is kept) and link exits non-zero;
-5. render `relay.md` from the real summary (rewritten whenever its content changed);
-6. GitHub labels (`--no-labels`); the Actions caller workflows only with `--workflows` (`docs/RUNNERS.md`);
-7. in site mode, the upload of the project, its digests and the summary, then the `events` stage: is the site's
+5. adoption: what Claude Code knows about the repository on this machine, with no model call ("Adoption" below;
+   `--no-adopt` skips it). The decisions go to memory now, so `relay.md` is rendered with them;
+6. render `relay.md` from the real summary (rewritten whenever its content changed);
+7. the pull request: every repository file from the stages above (the owned sections, `.relay/rules.json`,
+   `relay.md`, the adopted notes under `docs/context/`, a drafted `.relay/project.json`) as one commit on top of
+   origin's default branch, pushed to the branch `relay/link` and opened as one pull request titled "Link this
+   repository to relay". A caller workflow relay itself wrote into the repository is removed in the same commit;
+8. GitHub labels (`--no-labels`);
+9. in site mode, the upload of the project, its digests and the summary, then the `events` stage: is the site's
    GitHub App installed on this repo (`GET /api/v1/projects/{slug}/github`)? `ok` with the installation id, or `warn`
-   with the install link (and a closing `left:` line naming it as the one thing left to do); without a site the line
-   says GitHub events are not ingested locally. Advice only, never a failure; `--no-events` skips it;
-8. one cost line read back from the ledger: calls, tokens in/out, cost equivalent.
+   with the install link; without a site the line says GitHub events are not ingested locally. Advice only, never a
+   failure; `--no-events` skips it;
+10. one cost line read back from the ledger: calls, tokens in/out, cost equivalent;
+11. a `left:` line for each thing only a person can do (merge the pull request, install the GitHub App), or
+    `done:` when nothing is left.
+
+**The checkout is not written.** `relay link` reads the files it would change from the default branch as origin has
+it and builds the commit in a temporary index (`packages/cli/src/commands/_tree.ts`), so the working tree, the index
+and the current branch stay as they are. A later run updates the same branch and pull request, and opens none when
+the default branch already has every file. Workers read `relay.md`, the steps and the profile from the default
+branch, so nothing takes effect until the pull request is merged.
+
+**Without a pull request.** With `--no-pr`, when the checkout has no origin or its origin is not the repository
+being linked, when `gh` is not on the machine, or when origin's default branch cannot be read, the same files are
+written into the working tree as each stage makes them, and the first line of output says why. The closing `left:`
+line then says to commit them and get them onto the default branch.
 
 `--no-digest` skips steps 3 and 4. A second run with nothing changed makes zero model calls. The utility calls run
 `claude -p` with no tools, no skills, no instruction files or auto-memory, in a scratch directory
@@ -146,7 +175,7 @@ for tests.
 Each linked repo gets a generated `relay.md` (`renderRulesFile`, ≤2K tokens): a header that says how relay works in
 this repo (tasks opened on the team's board and claimed by relay workers, `relay/<lane>-<task>` branches, a person's
 approval before a merge) and tells the model to use the memory tools, the hard rules from preferences, the top current decisions, and as many whole paragraphs of the project
-summary as still fit. `run-lane.sh` puts `relay.md` at the top of every brief.
+summary as still fit. A job puts `relay.md` at the top of every prompt.
 
 So that every CLI reads it without being told, `relay link` adds a short owned section to `AGENTS.md` (and
 `CLAUDE.md` when it exists and is more than an `@AGENTS.md` include) between two markers:
@@ -171,12 +200,42 @@ Rules for the owned section (`packages/core/src/rules/owned-section.ts`):
   If the text inside the markers no longer matches that hash (you edited it), or markers exist that relay never
   wrote, `relay link` refuses to overwrite and says so; `relay link --force` takes the section over.
 - If you delete the markers, relay stops writing to that file (`checkOwnedSection` reports it).
-- `relay link` re-renders `relay.md` whenever memory changed; `--refresh` also rewrites the project summary and the
-  caller workflows. The post-merge job that extracts decisions and opens a `relay/rules-<date>` PR is not built yet;
-  until it is, run `relay link` after memory changes.
+- `relay link` re-renders `relay.md` whenever memory changed; `--refresh` also rewrites the project summary. The
+  change reaches the repository through the `relay/link` pull request. The post-merge job that extracts decisions and
+  opens a `relay/rules-<date>` PR is not built yet; until it is, run `relay link` after memory changes.
 - `relay brief` budgets the project summary first, so a linked project's brief always carries it when one exists;
   when the project has no summary it says so and points at `relay link --refresh`. In `--hook` mode errors are never
   printed; they go to `~/.harness/cache/hooks.log`.
+
+## Adoption
+
+A worker sees the repository it clones, the task's thread and relay's memory. What Claude Code learned about a
+project on one machine is in none of them. Adoption moves it there (`packages/core/src/adopt/`). `relay link` does
+it; `relay adopt [path]` prints the plan and writes nothing.
+
+Claude Code keeps a directory per working directory under `~/.claude/projects/`, named for the absolute path with
+every character that is not a letter or a digit turned into `-`. Adoption reads the directories of the checkout and
+of its worktrees:
+
+| In Claude Code's directory | Becomes | Reviewed how |
+|---|---|---|
+| `memory/<name>.md` of type `project` or `reference` | a file in the repository, `docs/context/<name>.md`, with `docs/context/README.md` listing each note in one line | in the `relay/link` pull request |
+| `memory/<name>.md` of type `feedback` or `user` | a decision in relay's memory, scoped to the project, with source `adopt` | `relay adopt` shows each before `relay link` records it |
+| `<session>.jsonl` transcripts | nothing of their text. They are only counted: which commands were run, with the arguments dropped. The counts draft a first `.relay/project.json` when the repository has none (`docs/PROFILE.md`) | in the `relay/link` pull request |
+
+No model reads any of it. The rules:
+
+- **Secrets.** Every text is checked before it goes into a repository file or a decision (`adopt/secrets.ts`: private
+  keys, the token formats of common providers, model provider keys, credentials in a URL, bearer tokens, a key-like
+  value assigned to a name such as `password` or `api_key`). A match leaves the whole note out, and the report names
+  the file and the kind of thing found, never the match. Redact the note and run `relay link` again.
+- **Once.** `~/.harness/cache/adopt-state.json` records which note became which decision. A note that did not
+  change is not recorded again; a note that changed supersedes the decision it was.
+- **Yours stay yours.** A `docs/context/README.md` that adoption did not write is left alone, and so is a
+  `.relay/project.json` the repository already has.
+
+`relay adopt` takes `--project <slug>`, `--claude-projects <dir>` (another place to look than `~/.claude/projects`),
+`--no-transcripts` (skip the command count) and `--json`.
 
 ## Consolidation
 
@@ -196,15 +255,15 @@ with no approval; `--token <t>` pastes a token from `/access`. `relay setup` che
 credential before saving (`--yes` saves anyway). `docs/INTEGRATIONS.md` has the flows.
 
 With a site configured, `openHarness()` hands every command a `RelayClient` over HTTPS (`packages/core/src/client/`,
-`httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`,
-`relay brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite`
-and the session hooks (which call these commands) talk to `/api/v1` and the memory tools on `/mcp`.
-`relay task`, `relay steps run` and `relay work` use the team's Vercel Board in either mode, with the machine's own
-`vercel login` (`docs/WORKERS.md`). `relay link` still
-hashes and digests files on the machine, with its own Claude login, and uploads the project, digests, summary and the
-`step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`, `/digests`, `/summary`; scope `projects:write`).
-`relay doctor` reports `mode`, `auth` (how the machine got its token, its name and expiry), `site`, `whoami` and `mcp`.
-Without a site nothing changes: the CLI opens PGlite or `DATABASE_URL`.
+`httpClient`) instead of one over the database (`localClient`): `relay feed`, `relay usage`, `relay recall`, `relay
+brief`, `relay decide`, `relay prefer`, `relay memory history`, `relay token`, `relay invite` and the session hooks
+(which call these commands) talk to `/api/v1` and the memory tools on `/mcp`. `relay task`, `relay handoff`, `relay
+steps run` and `relay work` use the team's Vercel Board in either mode, with the machine's own `vercel login`
+(`docs/WORKERS.md`). `relay link` still hashes and digests files on the machine, with its own Claude login, and
+uploads the project, digests, summary and the `step.usage` rows the calls produced (`PUT /api/v1/projects/<slug>`,
+`/digests`, `/summary`; scope `projects:write`). `relay doctor` reports `mode`, `auth` (how the machine got its token,
+its name and expiry), `site`, `whoami` and `mcp`. Without a site nothing changes: the CLI opens PGlite or
+`DATABASE_URL`.
 
 The MCP server `relay setup` installed into the CLIs (`relay-mcp`, stdio) follows the same decision, so there is
 nothing to repoint: with a site configured it opens no database and forwards every message (`initialize`,
@@ -228,7 +287,8 @@ mode, for the CLI, the hooks and the MCP server alike.
 pnpm relay setup [--yes] [--only claude|codex|grok] [--remove] [--no-statusline]   # hooks + MCP server per CLI (+ Claude Code's plan-meter status line); prints the plan, writes with --yes
 pnpm relay setup --site <url> [--invite <code> | --token <t>] | --no-site   # site mode: device flow (approve the code at /activate), invite, or a pasted token
 pnpm relay invite create --for <name> --scopes a,b [--expires 24h] [--uses 1]   # one-time code another machine redeems with --invite
-pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400] [--no-events]   # the per-repo step: digests, summary, relay.md, owned sections, workflows, labels, GitHub App check
+pnpm relay link [--repo owner/name] [--refresh] [--force] [--no-digest] [--max-files 400] [--no-adopt] [--no-pr] [--no-labels] [--no-events]   # add a repository: digests, summary, adoption, relay.md and the owned sections as one pull request, labels, GitHub App check
+pnpm relay adopt [path] [--project <slug>] [--no-transcripts] [--json]   # what relay link would adopt from Claude Code's notes and transcripts for this repo; writes nothing
 pnpm relay brief <issue-number | intent words> [--max-tokens 3000] [--model <id>] [--lane <name>]
 pnpm relay recall [text] [--project <slug>]                      # what a brief would contain right now
 pnpm relay decide "<text>" [--project <slug> | --global] [--supersedes <id>]
@@ -296,8 +356,6 @@ shipped migration was edited.
 
 - `DATABASE_URL` (env, optional): use Postgres over TCP instead of the embedded database.
 - `AI_GATEWAY_API_KEY` (env, optional): enables embeddings for guidance and decisions.
-- `RELAY_REPO`, `RELAY_REF` (env, optional) or `relay.repo` / `relay.ref` in `~/.harness/config.json`: what
-  `relay link` substitutes for `__RELAY_REPO__` / `__RELAY_REF__` in the caller workflows (default `<owner>/relay@main`).
 - `RELAY_CAPTURE_GATE` (env, optional) or `capture.gateCommand` in `~/.harness/config.json`: the segment gate command.
 - `RELAY_SITE`, `RELAY_TOKEN` (env, optional) or `site` in `~/.harness/config.json` plus `token` in
   `~/.harness/credentials.json` (0600): site mode, written by `relay setup --site`.

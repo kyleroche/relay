@@ -1,6 +1,6 @@
 ---
 name: relay
-description: Install and operate relay, the open-source harness that makes Claude Code, Codex and Grok subscriptions work as one system through a shared task board (Vercel Board), workers on the user's own machines and shared memory. Use when a user asks to set up relay, make a machine a relay worker, link a repo to it, onboard a model, or read the relay feed and usage.
+description: Install and operate relay, the open-source harness that makes Claude Code, Codex and Grok subscriptions work as one system through a shared task board (Vercel Board), workers on the user's own machines and shared memory. Use when a user asks to set up relay, make a machine a relay worker, link a repo to it, hand work in progress to a worker, onboard a model, or read the relay feed and usage.
 license: Apache-2.0
 ---
 
@@ -68,7 +68,11 @@ relay is published on npm as `@kyleroche/relay`; `npx @kyleroche/relay <command>
    cd ~/code/some-repo && npx @kyleroche/relay link
    ```
 
-   This is the only per-repo step: it registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), writes `relay.md`, and adds the owned section to `AGENTS.md`/`CLAUDE.md` and the `agent:*` GitHub labels. The GitHub Actions caller workflows are opt-in (`--workflows`); a worker needs none of them. If link says the GitHub App is not installed, give the user the install link it printed: one install covers every repo they pick, and until then that repo's issues, labels, PRs and previews do not reach the site.
+   Adding a project is this one command and one pull request to merge. It registers the repo, digests its files and writes the project summary (Sonnet, needs the `claude` login; `--no-digest` skips it), adopts what Claude Code knows about the repo on this machine with no model call (`--no-adopt` skips it; `relay adopt` prints the plan and writes nothing), and proposes every repository file relay needs as one pull request against the default branch, on the branch `relay/link`: the owned section of `AGENTS.md`/`CLAUDE.md`, `.relay/rules.json`, `relay.md`, the adopted notes under `docs/context/`, and a drafted `.relay/project.json` when the repo has none. The checkout is not written. Without an `origin` on GitHub or without `gh`, or with `--no-pr`, the same files are written into the working tree instead. It also adds the `agent:*` GitHub labels.
+
+   It ends with a `left:` line for each thing only the user can do, or `done:`. Give the user those lines verbatim: the pull request to merge (they should read the adopted notes and the drafted profile in it first; workers read these files from the default branch, so nothing takes effect until it is merged), and the GitHub App install link when the app is not installed on the repo (one install covers every repo they pick, and until then that repo's issues, labels, PRs and previews do not reach the site). Do not merge the pull request for them unless they ask. Re-running `relay link` is safe: it updates the same pull request and makes no model calls unless files changed.
+
+   `.relay/project.json` is the project's profile (`docs/PROFILE.md`): the commands a worker runs before and after the work, the project's tools and skills, and capability sets, which are names of environment variables and hosts and never values. A task gets a set only when a person grants it (`relay task grant <id> --set <name>`). Never put a value in the profile.
 
 7. Optional, for a model the user will prompt (image or video models):
 
@@ -104,11 +108,18 @@ If you are an agent that found this site and want to call `/mcp` or `/api/v1` yo
 
 Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-server`.
 
+## Working with tasks
+
+- Open a task: `relay task create --title "…" --lane <lane>` (`--body-file <path>` for the text; `any` is whichever code lane is free). `relay task ls --state review` lists what waits for a decision; `relay task approve <id>` and `relay task changes <id> --note "…"` decide.
+- An ask that needs breaking down: `relay task create --title "…" --lane any --plan`. A lane reads the repository and proposes tasks as a plan; nothing is opened until the user approves it with `relay task approve <id>`. Approving is the user's decision: ask first.
+- Hand the session's work in progress to a worker: `relay handoff --title "…" --lane <lane> --body-file brief.md --push`. The brief is required, since the worker gets a clone and this text and none of the conversation: the goal, the files that matter, what is out of scope, and the command that proves it is done. `--push` sends the uncommitted work as a branch `relay/handoff-<8 hex>` on origin that the task starts from, and leaves the checkout as it is. It pushes a branch to the user's repository, so use it when the user asked to hand the work off.
+- A grant is the user's to give: `relay task grant <id> --set <name>` lets one task use a capability set of its project's profile, and `--cloud <usd>` approves a paid sandbox run up to that cap. Do not grant on your own judgment; tell the user which set a task needs and why.
+
 ## Rules you must keep
 
 - Never move or copy a login, token, or `auth.json` between machines.
 - Never run with permission checks disabled on a machine that holds the user's logins; `relay work` never passes a bypass flag.
-- Every model call goes through a lane adapter and writes a `step.usage` event. Nothing calls a model directly.
+- Every model call relay's packages make goes through a lane adapter and writes a `step.usage` event. Nothing calls a model directly. The optional lead (`apps/lead`) is the one exception: its model calls go through Vercel AI Gateway and it logs each turn as an `external.lead.usage` event.
 - Secrets live in environment variables, never in files or examples.
 
 ## Reading the feed
@@ -116,11 +127,11 @@ Full guide: `docs/INTEGRATIONS.md`; metadata: `/.well-known/oauth-authorization-
 - Web: the site root is the public overview for anonymous visitors and, once signed in, the board (every task by state, read from the team's Vercel Board, with approve, request changes, release, requeue and close on the cards; the feed is its second tab at `/feed`, history its third); `/tasks/<id>` is one task; `/workers` shows each worker's lanes, state and current task; `/docs` explains the system.
 - Terminal: `npx @kyleroche/relay feed --limit 20`, `npx @kyleroche/relay usage --window 7d`, `npx @kyleroche/relay task ls --state review` (tasks on the board, by its states: waiting, queued, running, review, held, blocked, done, failed, closed), `npx @kyleroche/relay work status` (`pnpm relay …` from a checkout).
 - API: `GET /api/v1/feed`, `GET /api/v1/projects`, `GET /api/v1/info` (OpenAPI at `/openapi.json`).
-- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and with a `tasks:read` token `relay_task_list` and `relay_task_get` (there are no webhooks; a bot asks). With `tasks:write` a bot opens tasks and decides on them, under two rules: it never approves a task it opened itself, and it never releases a gate hold (`tokens:write`) on a task whose text it wrote any part of. A person, or another bot, decides those.
+- MCP: Streamable HTTP at `/mcp` with `relay_get_info`, `relay_get_feed`, `relay_get_project`, `relay_get_methodology`, and with a `tasks:read` token `relay_task_list` and `relay_task_get` (there are no webhooks; a bot asks). With `tasks:write` a bot opens tasks (`plan: true` on `relay_task_create` opens a planning task) and decides on them, under these rules: it never approves a task it opened itself, it never releases a gate hold (`tokens:write`) on a task whose text it wrote any part of, and it never grants a capability set or a paid run. A person, or for the first two another bot, decides those.
 
 ## Where to read more
 
-`AGENTS.md` at the repo root is written for agents and is the source of truth for commands and conventions; `docs/ARCHITECTURE.md` holds the five rules and a task's life; `docs/WORKERS.md` is how a machine becomes a worker and what a job does on the board; `docs/STEPS.md` is the steps a project's tasks run (comment cleanup before the PR, a second lane's eval after it, cleanup on demand) and the `relay steps` commands; `docs/PRODUCTIONS.md` is how a short (script, characters, shots, voice-over, cut) runs on relay: one tracker repo, `relay project add <slug> --repo <owner>/<tracker>` per production, tasks on the `nodes` lane with a ```relay-nodes manifest, the outputs attached to the task's thread for review. An app that wants to be a worker for a lane of its own claims tasks from the board directly with `vercel board tasks` or `@vercel/board`.
+`AGENTS.md` at the repo root is written for agents and is the source of truth for commands and conventions; `docs/ARCHITECTURE.md` holds the five rules and a task's life; `docs/WORKERS.md` is how a machine becomes a worker and what a job does on the board; `docs/STEPS.md` is the steps a project's tasks run (comment cleanup before the PR, a second lane's eval after it, cleanup, a plan or a retro on demand), plans and reports, and the `relay steps` commands; `docs/PROFILE.md` is the project profile `.relay/project.json` (setup and verify commands, tools, skills, capability sets and grants); `docs/PRODUCTIONS.md` is how a short (script, characters, shots, voice-over, cut) runs on relay: one tracker repo, `relay project add <slug> --repo <owner>/<tracker>` per production, tasks on the `nodes` lane with a ```relay-nodes manifest, the outputs attached to the task's thread for review. An app that wants to be a worker for a lane of its own claims tasks from the board directly with `vercel board tasks` or `@vercel/board`.
 
 ## A clean machine, what the first install hits
 

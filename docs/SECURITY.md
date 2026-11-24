@@ -8,22 +8,24 @@ change to relay would weaken any rule here, it needs a decision in `docs/ARCHITE
 
 **Tasks move, credentials never do.**
 
-- Every model call runs on a machine where you logged in with the vendor's own tool (`claude`, `codex`, `grok`,
-  `fx`, `gh`). The login lives in that user's home directory and keychain, where the vendor put it.
+- A lane's model call runs on a machine where you logged in with the vendor's own tool (`claude`, `codex`, `grok`,
+  `fx`, `gh`). The login lives in that user's home directory and keychain, where the vendor put it. Two things are
+  paid per token instead, and both are opt-in: one task a person approved a paid sandbox run for ("Grants and paid
+  runs" below) and the optional lead ("The lead" below).
 - No login, token, `auth.json`, cookie, or config directory is ever copied between machines, pasted into a chat,
   stored as a GitHub secret, or checked into a repository. `.env.example` lists names only.
-- The runner workflow never reads `secrets.*`, never passes `GITHUB_TOKEN` into a step, and does not use
-  `actions/checkout` (which would wire the token into git). `run-lane.sh` and the worker's `cleanEnv`
-  (`packages/core/src/work/job.ts`) unset `GH_TOKEN`, `GITHUB_TOKEN`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-  `OPENAI_API_KEY` and `XAI_API_KEY` so a stray key can never make a lane run outside the subscription or act as
-  someone other than the machine's operator, and `RELAY_TOKEN`, `RELAY_SITE` and `RELAY_HOME` so the lane never sees
-  the worker's own site credential or its `~/.harness`. The worker's `cleanEnv` also drops `BOARD_TOKEN`,
-  `BOARD_URL`, `BOARD_PROFILE`, `VERCEL_TOKEN`, `VERCEL_AUTH_TOKEN` and `VERCEL_OIDC_TOKEN`.
+- The worker's `cleanEnv` (`packages/core/src/work/env.ts`, `JOB_ENV_STRIPPED`) unsets `GH_TOKEN`, `GITHUB_TOKEN`,
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY` and `XAI_API_KEY` so a stray key can never make a
+  lane run outside the subscription or act as someone other than the machine's operator, and `RELAY_TOKEN`,
+  `RELAY_SITE` and `RELAY_HOME` so the lane never sees the worker's own site credential or its `~/.harness`. It also
+  drops `BOARD_TOKEN`, `BOARD_URL`, `BOARD_PROFILE`, `VERCEL_TOKEN`, `VERCEL_AUTH_TOKEN`, `VERCEL_OIDC_TOKEN`,
+  `RELAY_GATEWAY_URL` and `RELAY_GATEWAY_TOKEN`. The Claude lane also hands Claude Code no API endpoint from the
+  environment (`ANTHROPIC_BASE_URL`), so the lane cannot be pointed at another server by a variable.
 - A worker holds no relay credential. It reaches the team's Vercel Board, where the tasks live, with the machine's
   own `vercel login` (`BOARD_TOKEN` in CI), and what it may claim and write there is what the board's grants give
   that login. A lane never talks to the board; the worker does.
 - API keys for pay-per-token overflow lanes (`AI_GATEWAY_API_KEY`) live in Vercel's environment for the web app and
-  nowhere else; runners do not have them.
+  nowhere else; workers do not have them.
 
 If a credential does leak, revoke it at the vendor first, then redo the login on the affected machine.
 
@@ -32,12 +34,11 @@ If a credential does leak, revoke it at the vendor first, then redo the login on
 Anyone who can open an issue in a linked repo can write text that a lane will read. relay treats that text as
 data, never as instructions:
 
-- **Who can start a lane.** `relay-run.yml` refuses to run unless `github.event.sender.login` (the person who added
-  the label, or who opened the PR being reviewed) is listed in the `RELAY_ALLOWED_SENDERS` variable. Opening an
-  issue does nothing; labelling it needs triage permission and an allowlisted login. The web app applies the same
-  gate when an `agent:<lane>` label arrives by webhook and would open a task on the board (`senderMayOpenTasks`,
-  `apps/web/lib/webhooks/usage.ts`): the label's sender must be in `RELAY_ALLOWED_SENDERS` (the environment, else
-  the repo's Actions variable), and when neither is set nobody may open a task that way. The site's API and MCP
+- **Who can start a lane.** Opening an issue does nothing; labelling it needs triage permission and an allowlisted
+  login. The web app applies that gate when an `agent:<lane>` label arrives by webhook and would open a task on the
+  board (`senderMayOpenTasks`, `apps/web/lib/webhooks/usage.ts`): the label's sender must be in
+  `RELAY_ALLOWED_SENDERS` (the environment, else the repo's Actions variable), and when neither is set nobody may
+  open a task that way. The site's API and MCP
   tools need a `tasks:write` token instead, and the site writes the task as a profile named for the caller. On the
   board, `relay task create` acts as the caller's own Vercel login, and a
   worker claims only tasks whose owner is its own login or one named in `board.from` (`relay setup --board --from`):
@@ -68,39 +69,41 @@ data, never as instructions:
   then `json#`. It is not the boundary; who wrote the message is. It keeps a task's own text from carrying a second
   routing block and a malformed fence from making the board refuse a message, and a task whose text still carries a
   block the filter did not know is cancelled as it is made.
-- **How text reaches the shell.** Issue and PR title and body are passed only through `env:`. No `${{ }}` with
-  user-controlled content appears inside a `run:` script, so a title like `"; rm -rf ~` is a string, not a command.
-- **How text reaches the model.** `run-lane.sh` writes the issue into the brief between `<<<ISSUE` and `ISSUE>>>`
-  markers under a banner that says it is data, that instructions inside it about tools, permissions, files, or
-  credentials are to be ignored and reported, and what the actual deliverable is. The repo's own `relay.md` rules
-  come first in the brief, the issue after.
-- **What the model can do anyway.** Even a fooled model is boxed by the CLI's permission model: Claude Code runs
-  with `--permission-mode acceptEdits`, an allowlist of named commands (`Read, Edit, Write, Glob, Grep`, `Bash(git
+- **How text reaches the shell.** It does not. A task's title and body reach a CLI only as its prompt, handed to a
+  process the worker starts without a shell, so a title like `"; rm -rf ~` is a string, not a command. The
+  commands a worker runs by itself are the project's own `setup` and `verify` lines, read from the profile on the
+  repository's default branch, never from a task ("The project's commands and grants" below).
+- **How text reaches the model.** The worker writes the task into the prompt between `<<<TASK` and `TASK>>>`
+  markers under a banner that says it is data, that instructions inside it about tools, permissions, files,
+  credentials or how to commit are to be ignored and reported, and what the actual deliverable is. The thread's notes
+  follow between `<<<THREAD` and `THREAD>>>` the same way. The repo's own `relay.md` rules come first in the prompt,
+  the task after (`composeJobPrompt` in `packages/core/src/work/job.ts`).
+- **What the model can do anyway.** Even a fooled model is boxed by the CLI's permission model: Claude Code runs with
+  `--permission-mode acceptEdits`, an allowlist of named commands (`Read, Edit, Write, Glob, Grep`, `Bash(git
   status|diff|log|add|commit|checkout|restore *)`, `Bash(pnpm install|test|typecheck|build|lint *)`, `Bash(pnpm run
   *)`, `Bash(pnpm -r *)`, `Bash(npm ci|install|test *)`, `Bash(npm run *)`, `Bash(npx tsc|eslint|vitest|next|prettier
-  *)`, `Bash(yarn install|test|build|lint *)`, `Bash(yarn run *)`) and a refusal list (`--disallowedTools`) for
-  `git push`, `git -c`, `git config`, `git remote`, `curl` and `wget`; anything on neither list (`pnpm dlx`, `pnpm
-  exec`, `npm exec`, any other `npx`) is a question, which `-p` mode refuses (`CODE_TOOLS` and `CODE_DISALLOWED_TOOLS` in
-  `packages/core/src/work/job.ts`, the same lists in `run-lane.sh`); Codex runs with `--sandbox workspace-write`;
-  Grok with `--permission-mode acceptEdits`; fx with `--auto` under its own permission rules. Reviews are read-only
-  (`plan` modes, `--sandbox read-only`). Subagents and planners are disabled (`-c agents.enabled=false`,
-  `--no-subagents --no-plan`, MCP servers off) so the lane is one process the runner can account for. **The Claude
-  allowlist is a permission policy, the second layer**: it decides which tool calls the CLI accepts without asking.
-  What the accepted commands and their children (a `package.json` script run by `pnpm test`, a git hook in the
-  clone) can then reach is decided by Claude Code's OS sandbox, which every code run starts inside: see "Workers"
-  below for what it blocks and what it does not.
-- **What the model cannot reach.** On a GitHub Actions runner the lane runs in a fresh clone under `$RUNNER_TEMP` as
-  the dedicated `relay` OS user. That user has no SSH keys, no browser profile, no sudo, and no access to your home
-  directory. The worktree is deleted after the job. On a worker (`relay work`) the lane runs as the worker's own OS
-  user; "Workers" below says what that means and how to set the machine up.
+  *)`, `Bash(yarn install|test|build|lint *)`, `Bash(yarn run *)`) and a refusal list (`--disallowedTools`) for `git
+  push`, `git -c`, `git config`, `git remote`, `curl` and `wget`; anything on neither list (`pnpm dlx`, `pnpm exec`,
+  `npm exec`, any other `npx`) is a question, which `-p` mode refuses (`CODE_TOOLS` and `CODE_DISALLOWED_TOOLS` in
+  `packages/core/src/work/job.ts`; a project's profile adds its own `setup`, `verify` and tool commands to the
+  allowlist as written); Codex runs with `--sandbox workspace-write`; Grok with `--permission-mode acceptEdits`; fx
+  with `--auto` under its own permission rules. Reviews are read-only (`plan` modes, `--sandbox read-only`). Subagents
+  and planners are disabled (`-c agents.enabled=false`, `--no-subagents --no-plan`, MCP servers off) so the lane is
+  one process the worker can account for. **The Claude allowlist is a permission policy, the second layer**: it
+  decides which tool calls the CLI accepts without asking. What the accepted commands and their children (a
+  `package.json` script run by `pnpm test`, a git hook in the clone) can then reach is decided by Claude Code's OS
+  sandbox, which every code run starts inside: see "Workers" below for what it blocks and what it does not.
+- **What the model cannot reach.** On a worker (`relay work`) the lane runs in a fresh clone as the worker's own OS
+  user, and the clone is deleted after the job; "Workers" below says what that means and how to set the machine
+  up.
 - **What happens to the output.** The lane cannot merge. The lane itself cannot push (`git push` is on the refusal
-  list); the worker or runner pushes its own `relay/<lane>-…` branch with `--force-with-lease` and opens a PR that a
-  human approves; a second lane on a different model reviews it first. **Branch protection on the default branch is
+  list); the worker pushes its own `relay/<lane>-…` branch with `--force-with-lease` and opens a PR that a human
+  approves; with the `eval` step listed, a second lane judges it first. **Branch protection on the default branch is
   required**, not optional: the account that pushes is the operator's own `gh` login, so without protection a fooled
   lane that found another way to run `git push` could land on `main`. Require the review and a passing CI run, and
   forbid force pushes.
 
-The usage comment the runner posts is parsed only when the comment author is in `RELAY_ALLOWED_SENDERS`; anyone
+A usage comment on a pull request is parsed only when the comment author is in `RELAY_ALLOWED_SENDERS`; anyone
 else's `{"relay":"step.usage",...}` block is stored as untrusted and excluded from the ledger (`docs/FEED.md`).
 
 ### The gate
@@ -167,18 +170,18 @@ State the facts plainly:
 
 - **The Claude lane's Bash runs inside Claude Code's OS sandbox** (Seatbelt on macOS, bubblewrap and socat on Linux).
   Every code run passes one settings document with `--settings` (`claudeSandboxSettings` in
-  `packages/core/src/lanes/sandbox.ts`; `relay lane settings` prints it, `run-lane.sh` uses the same), and
-  `--setting-sources ""` makes it the only settings the run sees, so neither the machine's `~/.claude` nor a
-  `.claude/settings.json` in the clone can loosen it. Inside it, every Bash command and every child process (git,
-  pnpm, a repository's own scripts, a git hook) may write only inside the clone and the pnpm/npm stores, may not read
-  `~/.harness`, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.grok`, `~/.fx`, `~/.ssh`, `~/.aws`, `~/.config/gh`,
-  `~/.netrc`, `~/.npmrc`, `~/.gitconfig` or the login the worker reaches the board with (the Vercel CLI's auth
-  directories, `~/.vercel`, `~/.config/board`), and may reach only the package registries and GitHub download hosts on the
-  network allowlist (`strictAllowlist`; `RELAY_LANE_ALLOWED_DOMAINS` adds hosts) through Claude Code's local proxy.
-  `failIfUnavailable` and `allowUnsandboxedCommands: false` mean a machine that cannot sandbox fails the job with a
-  message saying what to install; nothing ever falls back to running unsandboxed. Verified on macOS with Claude Code
-  2.1.280: `head ~/.gitconfig` and `touch ~/x` fail with "Operation not permitted", `curl` to an unlisted host gets a
-  proxy 403 with a `deny network-outbound` violation.
+  `packages/core/src/lanes/sandbox.ts`), and `--setting-sources ""` makes it the only settings the run sees, so
+  neither the machine's `~/.claude` nor a `.claude/settings.json` in the clone can loosen it. Inside it, every Bash
+  command and every child process (git, pnpm, a repository's own scripts, a git hook) may write only inside the clone
+  and the pnpm/npm stores, may not read `~/.harness`, `~/.claude`, `~/.claude.json`, `~/.codex`, `~/.grok`, `~/.fx`,
+  `~/.ssh`, `~/.aws`, `~/.config/gh`, `~/.netrc`, `~/.npmrc`, `~/.gitconfig` or the login the worker reaches the board
+  with (the Vercel CLI's auth directories, `~/.vercel`, `~/.config/board`), and may reach only the package registries
+  and GitHub download hosts on the network allowlist (`strictAllowlist`; `RELAY_LANE_ALLOWED_DOMAINS` adds hosts, and
+  so does a capability set a person granted the task) through Claude Code's local proxy. `failIfUnavailable` and
+  `allowUnsandboxedCommands: false` mean a machine that cannot sandbox fails the job with a message saying what to
+  install; nothing ever falls back to running unsandboxed. Verified on macOS with Claude Code 2.1.280: `head
+  ~/.gitconfig` and `touch ~/x` fail with "Operation not permitted", `curl` to an unlisted host gets a proxy 403 with
+  a `deny network-outbound` violation.
 - **What the sandbox does not cover.** It wraps Bash, not the Read/Edit/Write tools, so the same paths are refused
   again with `permissions.deny` rules (`Read(~/.ssh/**)`, `Edit(~/.gitconfig)`, ...) and
   `blockReadsOutsideWorkingDirectories` keeps the Read tool inside the clone. The Claude Code process itself (the
@@ -216,23 +219,69 @@ State the facts plainly:
 - **Branch protection on the default branch is required.** The worker pushes with the operator's `gh` login; only the
   repository's rules keep a `relay/<lane>-…` branch from becoming `main` without a review.
 - Keep `board.from` short: a worker runs its own login's tasks and those of the owners that list names, and the
-  board's grants decide who may make a task in a project's queue. `RELAY_ALLOWED_SENDERS` is the same gate for the
-  site's webhook and for Actions runners: it keeps a label added by anyone with triage on a linked repo from
-  becoming a task.
+  board's grants decide who may make a task in a project's queue. `RELAY_ALLOWED_SENDERS` is the gate for the
+  site's webhook: it keeps a label added by anyone with triage on a linked repo from becoming a task.
 
-## Runner isolation
+## The project's commands and grants
 
-- One dedicated OS user per machine holds the agent logins and nothing else (`docs/RUNNERS.md`).
-- Runners are registered at the org level in a runner group restricted to private repositories. Public repos never
-  get the `relay` labels: a fork PR could otherwise run on your machine.
-- One job per runner process; the subscriptions are personal-use and the lanes are serialized per subscription.
-- Every job has `timeout-minutes` from `max_minutes` (default 60, reviews 30) and a per-issue concurrency group.
-- The relay scripts a job runs are cloned at `RELAY_REF` from `RELAY_REPO` using the runner's own gh login. Pin
-  `RELAY_REF` to a tag or SHA if you do not want runners to pick up `main` automatically.
-- Jobs leave nothing behind: `$RUNNER_TEMP/work` and `$RUNNER_TEMP/relay` are removed in an `always()` step. The
-  brief and the CLI's JSON output are written to a `mktemp -d` directory that is removed on exit.
+A project's profile, `.relay/project.json`, names commands a worker runs by itself and capability sets a task may be
+granted (`docs/PROFILE.md`). What keeps that safe:
+
+- **A task cannot change it.** The profile is read from the repository's default branch, never from the task's
+  working tree or its base branch. Widening a set, adding a command or dropping a check takes a merged pull request.
+- **Names, never values.** A set lists names of environment variables and hosts. No value is in the repository, the
+  task's thread, a prompt or the log. A set may not name a credential no job may carry (`JOB_ENV_STRIPPED`).
+- **Nothing by default.** A task gets a set only through a `relay-grant@1` block from an author the worker believes
+  ("Who relay believes" above). The block names the SHA-256 of the task's title and body, so a grant covers the text
+  the person read: after an edit it counts for nothing.
+- **A person grants.** On a site only a signed-in person may grant a set or a paid run; a token is refused with 403
+  and there is no MCP tool for it (`grantFor` in `packages/core/src/board/desk.ts`). `relay task grant` on a machine
+  acts as that machine's own Vercel login.
+- **Where the values come from.** The worker's own environment, then the development environment of the Vercel
+  project the profile names, read with the worker's own `vercel login` into a scratch directory outside the clone
+  that is deleted before the lane starts. Only the granted names are taken. Nothing is copied between machines.
+- **Where the values go.** Into the environment of that run's lane and of the profile's commands, and nowhere else.
+  The lane is told the names and never to print a value or write one to a file. That is an instruction, not a
+  boundary: a fooled lane holds the values it was granted, which is why a set is granted per task, by a person who
+  read the task, with only the hosts the set names added to the network allowlist.
+- **The commands are sandboxed.** `setup` and `verify` commands run without a model, and `npm ci` runs every
+  dependency's install script. Each runs under Anthropic's sandbox runtime with the Claude lane's limits: writes
+  inside the clone and the package caches, the credential paths unreadable, the network allowlist. A worker that
+  should sandbox and cannot find the runtime fails the command and never runs it unguarded. With `--no-sandbox`, or
+  in a container whose nested sandbox cannot start, they run directly (`packages/core/src/work/exec.ts`).
+
+### Grants and paid runs
+
+One task can run on paid credits instead of a subscription: `relay work --task <id> --billing gateway --cap <usd>`
+(`docs/WORKERS.md`, "One task on paid credits"). The gateway's address and credential are read from the environment
+of whoever starts that worker (`RELAY_GATEWAY_URL`, `RELAY_GATEWAY_TOKEN`), never from a flag, a task or the board.
+No child of the job inherits them by name; the Claude Code process gets them as its endpoint and credential for
+that run. Only the Claude lane runs this way, and the cap is passed to Claude Code as its budget limit. A person
+approves the spend for one task with a `relay-grant@1` block that carries the cap, under the same rules as a
+capability set: for the text as it stands, from a trusted author, and on a site from a signed-in person only.
+
+> Not documented yet: what starts a paid sandbox, how it checks the grant and the profile's `cloud` policy, and what
+> the sandbox can reach. That code is still being written.
+
+## The lead
+
+The lead (`apps/lead`) is optional. It is a bot like any other: it reaches relay only through the site's MCP server
+with a scoped token, and the desk's rules for a bot apply to it (`docs/ARCHITECTURE.md`, "The lead").
+
+- Its token carries `tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read` and `events:write`.
+  Never `tokens:write`, the scope that releases a held task. Revoking the token on the Access page stops it at once.
+- Its tool allowlist has no approve, release or close tool, and none of the asset, token, invite or access tools. It
+  has none of its framework's default tools: no shell, no file tools, no web tools.
+- What a worker wrote about a task reaches it as data (a wake-up's reason), never as instructions.
+- Its routes that can start a turn take no anonymous caller: its conversation API takes Vercel OIDC tokens of its own
+  project, and its wake route checks the caller's Vercel OIDC token against the site's team and project.
+- Its model calls are billed per token through Vercel AI Gateway to the Vercel team that owns its project. A budget
+  on that project in AI Gateway is the limit to rely on (`apps/lead/README.md`).
+
+## The web app's reach
+
 - The web app receives only webhooks (verified with `GITHUB_WEBHOOK_SECRET`, the GitHub App's own secret, and
-  `VERCEL_WEBHOOK_SECRET`) and API and MCP calls carrying a scoped bearer token. It can never reach a runner; runners
+  `VERCEL_WEBHOOK_SECRET`) and API and MCP calls carrying a scoped bearer token. It can never reach a worker; workers
   call it, not the reverse. It makes no outbound call to an address a caller chose: besides its database and blob
   store it talks to the team's Vercel Board, as its own deployment, and to GitHub.
 - The web app's GitHub credential is an App, not a person's token: installation tokens are minted per repository, last
@@ -245,12 +294,14 @@ These are refused in code review regardless of who asks or why:
 
 - Running any lane with permission checks disabled: `--dangerously-skip-permissions`,
   `--allow-dangerously-skip-permissions`, `--permission-mode bypassPermissions`, `fx --full-access` / `--yolo`,
-  `codex --dangerously-bypass-approvals-and-sandbox`, or equivalents. `relay-run.yml` and `run-lane.sh` contain
-  none of them and CI greps for them.
+  `codex --dangerously-bypass-approvals-and-sandbox`, or equivalents. `relay work` never passes one, and CI greps
+  the workflows and scripts for them.
 - Copying or syncing a login between machines, or storing one as a GitHub secret or Vercel variable.
-- Expanding `${{ github.event.* }}` user content inside a `run:` script.
-- Serving a public repository from a self-hosted runner, or removing the sender gate.
-- Giving the runner OS user sudo, SSH keys, or access to another user's home directory.
+- Expanding `${{ github.event.* }}` user content inside a `run:` script of a workflow.
+- Removing the sender gate on GitHub intake.
+- Giving a worker's dedicated OS user sudo, SSH keys, or access to another user's home directory.
+- Putting a value in a project's profile, or letting a token grant a capability set or a paid run.
+- Giving the lead an approve, release or close tool, `tokens:write`, or a tool that does work.
 - Sending a transcript, or anything other than the brief, to a model; storing transcripts in memory.
 - Letting the lane merge, force-push to a protected branch, or push anything other than its own
   `relay/<lane>-…` branch (`--force-with-lease` on that branch only).
@@ -259,15 +310,14 @@ These are refused in code review regardless of who asks or why:
 ## Reporting
 
 Security issues in relay itself: open a private security advisory on the repository rather than a public issue.
-Include the workflow run id if a runner was involved; the Actions log never contains credentials, so it is safe to
-attach.
+Include the task's ID and the worker's name if a run was involved.
 
 ## Signing in to the web app
 
 The web app signs people in with GitHub OAuth, with no third-party auth library. Sign-in is allowed for the GitHub
-logins listed in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities runners trust as issue
+logins listed in `RELAY_ALLOWED_USERS` (comma-separated, case-insensitive), the same identities the site trusts as issue
 senders. An empty list means nobody can sign in, and the sign-in page says so. A successful sign-in mints a signed
-session cookie scoped to the site; nothing else is stored. Agents, runners, and bots never use the browser flow: they
+session cookie scoped to the site; nothing else is stored. Agents, workers, and bots never use the browser flow: they
 hold scoped bearer tokens, issued by the site's own authorization server after one approval by a signed-in person
 ("Access for agents" below) or minted by the operator with `relay token create`. There is no self-serve sign-up: every
 token traces to a person on the allowlist. Public read of the feed is off in production; the landing, the trust pages,

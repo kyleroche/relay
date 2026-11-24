@@ -1,12 +1,16 @@
 # Steps
 
 A **step** is a named instruction a lane runs at a fixed point of a task: tidy the comments before the pull request
-opens, have a second lane judge the work once it is up, run a cleanup pass on demand. A step is one Markdown file.
-relay ships four, any of them can be replaced, and a project decides which ones its tasks run.
+opens, have a second lane judge the work once it is up, run a cleanup pass on demand, break an ask into tasks before
+any of them opens. A step is one Markdown file. relay ships six, any of them can be replaced, and a project decides
+which ones its tasks run.
 
-Code: `packages/core/src/steps/index.ts` (the file format, the layers, the profile), `packages/core/src/work/job.ts`
-(where a job runs them), `packages/cli/src/commands/steps.ts` (`relay steps`), `packages/cli/steps/*.md` (the steps
-relay ships; `dist/steps/` in the npm package). What a job does around them is in `docs/WORKERS.md`.
+Code: `packages/core/src/steps/index.ts` (the file format, the layers, the `steps` list),
+`packages/core/src/steps/check.ts` (step checks), `packages/core/src/board/plan.ts` (a plan),
+`packages/core/src/work/job.ts` (where a job runs them), `packages/cli/src/commands/steps.ts` (`relay steps`),
+`packages/cli/steps/*.md` (the steps relay ships; `dist/steps/` in the npm package) and `packages/cli/steps/checks/`
+(their cases). What a job does around them is in `docs/WORKERS.md`; the rest of `.relay/project.json` is in
+`docs/PROFILE.md`.
 
 ## A step file
 
@@ -41,7 +45,7 @@ branch the work started from (`git diff origin/{{base}}...HEAD`).
 | `before-pr` | in the job's own clone, after the lane's work and before the commit, over the change that is about to be committed |
 | `after-pr` | as a task of its own once the pull request is up; its findings go back to the work's thread |
 | `respond` | as the answer to an `after-pr` step's findings, by the lane that did the work, on its branch as it was left |
-| `task` | by itself: `relay steps run <name>` opens a task whose text is the step |
+| `task` | by itself: `relay steps run <name>` opens a task whose text is the step. With `mode: edit` it ends in a pull request; with `mode: read-only` it ends in a report or a plan ("Plans and reports" below) |
 
 ## Three layers, the nearest wins
 
@@ -56,7 +60,8 @@ stays in effect. `relay steps ls` prints the problems and exits 1; a job writes 
 
 ## What a project runs
 
-A project lists the steps its tasks run, in order, in `.relay/project.json`:
+A project lists the steps its tasks run, in order, under the `steps` key of `.relay/project.json` (the project's
+profile; its other keys are in `docs/PROFILE.md`):
 
 ```json
 { "steps": ["remove-yap", "eval"] }
@@ -79,6 +84,8 @@ one on the worker that runs the job.
 | `eval` | `after-pr` | `other` | `read-only` | A lane that did not write the change judges it cold. First against the task: what is missing, what nobody asked for, what looks finished and is not. Then four questions: is this how it would have been built from scratch, does it paper over a deeper issue, did it make the codebase healthier, would you put your name on it. The answer is `Verdict: ship \| fix first \| rethink` and at most seven numbered findings, each with a file and line, why it matters and what to do instead. |
 | `eval-respond` | `respond` | `same` | `edit` | The lane that did the work answers every finding: fixes it in the code when it is right, leaves the code alone and gives the fact that settles it when it is wrong, names the follow-up task when it is right and too large. It runs the project's checks again and ends with the findings numbered as given, each `fixed`, `declined` or `follow-up`. |
 | `cleanup` | `task` | `any` | `edit` | A cleanup pass with behaviour unchanged, as its own pull request, in this order: easy refactors, performance wins it can measure, dead code it can prove dead, duplicated logic, tests that cannot fail, docs that disagree with the code. It runs the checks before and after, changes no public names, layout or dependencies, lists bugs instead of fixing them, and stays inside the scope the task names. |
+| `plan` | `task` | `any` | `read-only` | Reads the task and enough of the repository to know where the work lands, then breaks the ask into the fewest tasks that can each be finished, checked and reviewed alone. Each task is written for someone who has seen none of the conversation: what to change and where, what is out of scope, how to tell it is done. The lane and model come from the standing preferences in the memory section. It says why the plan has this shape, then ends with the plan as JSON in a `relay-plan` fence. When the ask is already one runnable task it says so and writes no plan. |
+| `retro` | `task` | `any` | `read-only` | Reads the last four weeks of merged work and pull requests and looks for problems that repeat. It reports at most seven, each with the exact change that would stop it and where that change belongs: the rules file, the profile's `verify` list, a skill or playbook, or a preference (`relay prefer`). It changes nothing. |
 
 ## The eval round on the board
 
@@ -128,6 +135,100 @@ task>` calls the step's task off.
 Every step's model call is a `relay-usage@1` row with `kind: step` and the step's name: a `before-pr` step's in the
 work's thread, the eval's in its own task's thread. The answer is a `run` row in the work's thread, like the work.
 
+## Plans and reports
+
+A `task` step with `mode: read-only` delivers what the lane says. The lane reads the repository and may run checks,
+nothing it changes is kept, the profile's `setup` commands are not run, and no branch or pull request is made. What
+it says decides how the task ends:
+
+| The lane's answer | The task is held | `relay task approve <id>` |
+|---|---|---|
+| ends with a `relay-plan` fence that passes the checks below | `awaiting_plan`; the reason names the reply that carries the plan and its SHA-256 | opens the plan's tasks, then completes the task |
+| has no `relay-plan` fence | `awaiting_review` with the reason `report` | completes the task as read |
+| has a `relay-plan` fence that fails a check, or is empty | not held: the task is `failed` with what was wrong | |
+
+Both holds show as `review` in `relay task ls`. `relay task changes <id> --note "…"` sends either back to the queue,
+and the next run reads the note.
+
+**A planning task.** `relay task create --title "…" --lane <lane> --plan` (MCP: `relay_task_create` with
+`plan: true`) opens a task whose `relay-task@1` block names the step `plan`. The worker runs the `plan` step of the
+default branch's layers over the task's text, so a project can replace it with `.relay/steps/plan.md`.
+`relay steps run retro` opens a task for the `retro` step the same way.
+
+**The plan.** The lane ends its answer with one fenced block:
+
+````text
+```relay-plan
+{ "tasks": [ { "key": "…", "title": "…", "body": "…", "lane": "codex", "needs": ["…"] } ] }
+```
+````
+
+| Field | Rule |
+|---|---|
+| `tasks` | 1 to 20 tasks |
+| `key` | lowercase letters, digits and dashes, at most 40 characters, unique in the plan |
+| `title` | at most 200 characters |
+| `body` | 40 to 20,000 characters |
+| `lane` | a lane name |
+| `model` | optional: a model id |
+| `needs` | optional: keys of tasks in the same plan that must complete first; no cycles |
+| `project`, `repo`, `base` | optional: another project's queue, its repository and a base branch, for work that crosses repositories. A task for another project must name the repository |
+
+The worker checks the plan, posts it in the thread as the attachment `plan.json` with a numbered summary a person
+can read, and holds the task. Nothing is opened yet.
+
+**Approving a plan.** `relay task approve <id>` reads `plan.json` from the reply the hold names, compares its SHA-256
+with the one in the hold, checks the plan again, and opens each task as the approver, in an order that puts every
+task after the ones it needs, with `needs` set to the board IDs of those tasks. Each task is opened under the
+idempotency key `plan:<the planning task's ID>:<key>`, so approving twice opens nothing twice. A reply in the thread
+lists the opened tasks by key and ID, and the planning task completes with `plan approved: opened N tasks`.
+
+## Step checks
+
+A step is a prompt, and the way to know a lane follows it is to hand it a change and look at what comes back.
+`relay steps check <name>` does that on this machine's logins. It spends them: every run is a real lane call and
+every grade is another.
+
+A case is a directory, `packages/cli/steps/checks/<step>/<case>/` (`dist/steps/checks/` in the npm package):
+
+| Entry | What it is |
+|---|---|
+| `files/` | the repository before the work |
+| `change/` | the files the work left different, laid over `files/`. Absent for a `task` step, which starts from the repository as it is |
+| `check.json` | what must be true afterwards, and a rubric |
+
+`check.json` keys (an unknown key is refused):
+
+| Key | Meaning |
+|---|---|
+| `task` | `{ "title": "…", "body": "…" }`: the task the change was made for |
+| `must_remove` | each entry must match in no file after the step |
+| `must_keep` | each entry must still match in some file after the step |
+| `unchanged` | paths that must be byte for byte what they were |
+| `no_code_change` | `true`: the step may change comments only |
+| `text_must_match` | each entry must match the lane's last words, such as an eval's verdict line |
+| `rubric` | required: one or two sentences a second lane grades the result against |
+
+An entry of `must_remove`, `must_keep` or `text_must_match` is a whole line, compared trimmed, or
+`/a regular expression/flags`.
+
+A run builds a throwaway git repository in the state a job would find: for a `before-pr` step the change uncommitted
+over the base, for an `after-pr` step the change committed on a branch, for a `task` step the base alone. The step
+runs through the same lane runner a job uses, with the prompt a job composes. The fixed expectations are applied
+first; when they hold, a second lane grades the result against the rubric. Each case runs three times by default and
+passes only when every run passes. The command exits 1 when a case fails.
+
+The cases relay ships:
+
+| Step | Cases |
+|---|---|
+| `remove-yap` | `narration`, `nothing-to-do`, `stale` |
+| `cleanup` | `dead-code` |
+| `eval` | `misses-the-task` |
+
+The step that runs is the one the repository would run (the nearest layer), so a step you ejected and changed is
+checked against relay's cases for that name. Every call is a `step.usage` row in this machine's own ledger.
+
 ## Commands
 
 ```text
@@ -139,6 +240,9 @@ relay steps eject eval                           # copy the step that runs into 
 relay steps eject eval --user                    # copy it to ~/.harness/steps instead; --force replaces a copy that is there
 relay steps run cleanup                          # open a task in the project's queue that runs a task step by itself
 relay steps run cleanup --scope packages/core --lane codex --model <id>
+relay steps run retro                            # a read-only task step: it ends in a report, or a plan to approve
+relay steps check remove-yap                     # run the step against its cases on this machine's logins; exits 1 on a failure
+relay steps check remove-yap --case stale --repeat 1 --lane claude --judge codex --keep
 ```
 
 `ls`, `show`, `eject`, `add` and `rm` read and write the working tree (`--cwd <path>` names another one); they need
@@ -146,7 +250,13 @@ no board. Commit what `add`, `rm` and `eject` wrote: a job reads the default bra
 (`relay setup --board`) and takes `--project`, `--repo`, `--lane` (default: the step's), `--model` (default: the
 step's, else the lane's), `--scope <path>` and `--json`. It copies the step's instruction into the task's text as it
 is in the working tree at that moment, names the step in the task's `relay-task@1` block, and prints the task's ID;
-the task then runs like any other, in a fresh clone, to its own pull request.
+the task then runs like any other, in a fresh clone, to its own pull request, or to a report or a plan when the step
+is read-only.
+
+`check` takes `--lane` (the code lane that runs the step; default: the step's own when it names one, else the first
+this machine is logged in to), `--judge` (the code lane that grades; default: a logged-in code lane other than the
+one that ran, and the same lane when there is no other), `--repeat <n>` (1 to 20 runs per case), `--case <case>`,
+`--keep` (leaves each case's last repository under `~/.harness/work/checks`) and `--json`. It needs no board.
 
 ## Writing your own
 
@@ -173,3 +283,5 @@ task's title only for a `before-pr` step.
   `Steps: <name>: did not finish (…)`.
 - Steps are for the code lanes. A `nodes` task runs none, and a step's own task runs none on itself.
 - `relay steps run` takes `task` steps only; `relay steps add` takes `before-pr` and `after-pr` steps only.
+- A plan holds at most 20 tasks. A plan that fails a check fails the task; it is not repaired.
+- `relay steps check` runs the cases relay ships. `plan`, `retro` and `eval-respond` have none.

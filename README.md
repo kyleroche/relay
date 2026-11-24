@@ -10,7 +10,9 @@ relay turns Claude Code, Codex, and Grok Build into a team that shares memory, p
 
 - **One memory.** Decisions made in Codex show up in Claude and Grok. A generated rules file in each repo plus a small MCP server keep every tool on the same page.
 - **Work from anywhere.** Open a task with `relay task create` from any machine that has your Vercel login, from a chat bot through the site's MCP tools, or by labelling a GitHub issue `agent:<lane>` where the site is connected to the repository. A worker on your own machine claims it, opens a PR and holds the task for your review. `relay task approve` merges the pull request the worker opened for that task and nothing else; `relay task changes --note` sends it back and the next run reads the note; a task that failed or is on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the task text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
+- **Plans before work.** `relay task create --plan` opens a planning task: a lane reads the repository and proposes the tasks, and nothing is opened until the plan is approved. A read-only step that ends without a plan is a report you read and accept.
 - **A second opinion before yours.** A project lists the steps its tasks run: comment cleanup before the PR opens, a second lane that judges the finished work and the first lane's answer to each finding, a cleanup pass on demand. Steps are Markdown files you can replace ([docs/STEPS.md](docs/STEPS.md)).
+- **A profile per project.** `.relay/project.json` on the default branch names the commands a worker runs before and after the work, the project's tools and skills, and the capability sets a task may be granted: environment variable names and hosts, never values. A task gets a set only when a person grants it ([docs/PROFILE.md](docs/PROFILE.md)).
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
 
@@ -32,7 +34,7 @@ relay setup --board               # checks that login on the board, saves which 
 relay doctor                      # what is installed, logged in, reachable, and which lanes this machine can serve
 npx @kyleroche/relay work --install --yes   # this machine becomes a worker: a service that claims and runs tasks for those lanes (add --isolation container to run it all in a Linux container; then `relay work container login all` makes the logins inside)
 npx @kyleroche/relay setup      # hooks + memory server into each CLI you have, and Claude Code's plan-meter status line; --yes writes
-cd ~/code/some-repo && npx @kyleroche/relay link
+cd ~/code/some-repo && npx @kyleroche/relay link   # add a repository: one command, then one pull request to merge
 ```
 
 The published package (`@kyleroche/relay` on npm) carries the CLI, the session hooks and the memory MCP server;
@@ -58,12 +60,22 @@ npx @kyleroche/relay setup --site https://relay.kyro.house --invite <code>   # z
 Agents get access the same way, by themselves: `POST /oauth/device`, a person approves the short code once, then the
 bearer token works on `/mcp` and `/api/v1` and renews itself ([Connect in one step](docs/INTEGRATIONS.md)).
 
-`relay link` is the only per-repo step: it registers the repo, digests its files and writes the project summary
-(Sonnet, a few cents), renders `relay.md` from that summary, and installs the owned sections and
-labels. On a hosted relay it ends by checking that the site's GitHub App is installed on the repo, and prints the
-install link when it is not (without it the repo's issues, labels, PRs and previews never reach the site). It prints
-each stage and one cost line, and a second run with nothing changed makes no model calls. `--refresh` rewrites the
-summary after memory changes; `--no-digest` skips the model steps; `--no-events` skips the GitHub App check.
+Adding a repository is one command and one pull request to merge. `relay link` registers the repo, digests its files
+and writes the project summary (Sonnet, a few cents), adopts what Claude Code already knows about the repo on this
+machine, and proposes every repository file relay needs as one pull request against the default branch, on the branch
+`relay/link`: the owned sections of `AGENTS.md` and `CLAUDE.md`, `.relay/rules.json`, `relay.md`, the adopted notes
+under `docs/context/` with an index, and a drafted `.relay/project.json` when the repo has none. Your checkout is not
+written. Without an `origin` on GitHub or without `gh`, or with `--no-pr`, the same files are written into the working
+tree for you to commit. Workers read these files from the default branch, so they take effect when the pull request
+is merged.
+
+`relay link` also adds the GitHub labels, and on a hosted relay it checks that the site's GitHub App is installed on
+the repo and prints the install link when it is not (without it the repo's issues, labels, PRs and previews never
+reach the site). It prints each stage and one cost line, then a `left:` line for each thing only you can do (merge the
+pull request, install the App), or `done:` when nothing is left. A second run with nothing changed makes no model
+calls and opens no second pull request. `--refresh` rewrites the summary after memory changes; `--no-digest` skips the
+model steps; `--no-adopt` skips adoption; `--no-labels` and `--no-events` skip the labels and the GitHub App check.
+`relay adopt` prints what adoption would take from this machine and writes nothing.
 
 A project without a checkout, such as a film production whose tasks end in an asset rather than a pull request, is
 registered with `npx @kyleroche/relay project add <slug> --repo owner/name`; several productions can share one
@@ -104,7 +116,7 @@ See [docs/MEMORY.md](docs/MEMORY.md) for the data model, the brief compiler and 
 
 ## How it fits together
 
-A task is a thread in its project's queue on your team's Vercel Board. A `lane` label picks the lane; where the work happens is in the task's own text, and what a run produced is in blocks the board verifies the author of. Workers (your machines running `relay work`) claim tasks from the board, run the vendor CLI in a fresh clone, open a PR on GitHub and report in the task's thread; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the board, the feed, projects, workers, and usage; it is one more caller on the board, and copies what happens there into the feed. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker, and [docs/STEPS.md](docs/STEPS.md) for the steps a project runs around a task.
+A task is a thread in its project's queue on your team's Vercel Board. A `lane` label picks the lane; where the work happens is in the task's own text, and what a run produced is in blocks the board verifies the author of. Workers (your machines running `relay work`) claim tasks from the board, run the vendor CLI in a fresh clone, open a PR on GitHub and report in the task's thread; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the board, the feed, projects, workers, and usage; it is one more caller on the board, and copies what happens there into the feed. An optional agent, the lead ([apps/lead](apps/lead/README.md)), takes an ask in plain language and opens tasks through the site's MCP server; it cannot approve, release or close one, and it is the one part of relay billed per token. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker, and [docs/STEPS.md](docs/STEPS.md) for the steps a project runs around a task.
 
 ## Hosting
 

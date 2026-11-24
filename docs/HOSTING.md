@@ -234,7 +234,8 @@ The firewall answers an over-limit request with 403 before it reaches the app. A
 ## 8. Publishing the CLI to npm
 
 The `relay` command ships as `@kyleroche/relay` (`packages/cli`, built with `tsup` into `dist/`: the CLI, the stdio
-MCP server, the hook scripts and the SQL migrations, plus the workflow templates). `.github/workflows/release.yml`
+MCP server, the hook scripts, the SQL migrations, the shipped steps with their checks, the Griptape Nodes shim and the
+container files). `.github/workflows/release.yml`
 publishes it when a `v*` tag is pushed whose version matches `packages/cli/package.json`; it typechecks, tests, runs
 `scripts/check-package.sh` (pack, install into an empty directory, run `relay` and `relay-mcp`), then
 `pnpm publish --provenance --access public`.
@@ -258,6 +259,13 @@ Node 24 or newer is required (`engines`). A `relay setup` run from the installed
 valid; a checkout records its `packages/cli/hooks` and `packages/mcp/bin` paths instead.
 
 Releases are staged, not published, by the workflow: pushing a `v<version>` tag (matching `packages/cli/package.json`) runs the checks and `npm stage publish` through the package's trusted publisher, then a maintainer approves the staged version on npmjs.com (Staged packages, 2FA) or with `npm stage approve`. Nothing goes live without that approval, and no npm token exists anywhere.
+
+## 8b. The lead (optional)
+
+The lead (`apps/lead`) is a separate Vercel project on the same team as the site, with its own environment, token
+and deployment steps: `apps/lead/README.md`. It reaches this site only through `/mcp` with a scoped token minted on
+the Access page (`tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read`, `events:write`). Its model
+calls are billed per token through Vercel AI Gateway to the team that owns its project. The site runs without it.
 
 ## 9. Checklist
 

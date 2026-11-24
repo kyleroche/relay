@@ -18,7 +18,7 @@ refresh tokens 90 days and rotate on use; `docs/SECURITY.md` ("Access for agents
 | You are | One step | Who approves |
 |---|---|---|
 | an MCP client with a browser (Claude Code, a desktop app) | point it at `<site>/mcp`; the 401 names the authorization server, the client registers itself and opens the consent page | the signed-in person clicks Approve |
-| a headless bot or a CLI (Grok Bot, Concierge, a runner) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` approves it from the chat where the code was relayed (`relay_access_approve` over MCP, or `POST /api/v1/access/<code>/approve`), for scopes the bot holds itself |
+| a headless bot or a CLI (Grok Bot, Concierge, a worker machine) | `POST <site>/oauth/device`, show the code, poll `<site>/oauth/token` | the person opens `<site>/activate`, or a bot with `tokens:write` approves it from the chat where the code was relayed (`relay_access_approve` over MCP, or `POST /api/v1/access/<code>/approve`), for scopes the bot holds itself |
 | a machine the operator sets up (`relay setup --site <site>`) | the CLI runs the device flow for you and stores the token with its refresh token | same as above; `--invite <code>` skips it |
 | anything the operator trusts in advance | `relay invite create --for <name> --scopes <a,b>`; the holder runs `relay setup --site <site> --invite <code>` or posts grant `urn:relay:invite` | nobody: the invite is the approval, once |
 | a GitHub organization | install the relay GitHub App once (`<site>/setup/github`) | the GitHub org owner, on GitHub |
@@ -163,6 +163,7 @@ When the app is installed on a repository, relay writes `project.github_connecte
 | `tokens:write` | approve other devices' codes and mint invites (`relay_access_list`, `relay_access_approve`, `relay_invite_create`, `relay_invite_revoke`; `GET /api/v1/access`, `POST /api/v1/access/<code>/approve`, `/api/v1/invites`), for scopes the bot holds itself and never `tokens:write`; release a task the injection gate held (`relay_task_release`, `POST /api/v1/tasks/{id}/release`), never one whose text the bot wrote any part of (the task, or a note in its thread) |
 | `feed:read` | optional: read the whole feed and the projects |
 | `memory:read` | optional: `relay_recall`, `relay_brief`, decisions history |
+| `memory:write` | optional: `relay_decide` (with an optional `source_ref`, at most 200 characters, that says where the decision came from, such as a file name or a session) and `relay_prefer` |
 
 Every write the bot makes is attributed to it. On the board its words and decisions go out as a profile named for
 it under the site's deployment (`bot-grok-bot` for the token `oauth:grok-bot`: `bot:oauth:<name>` and `bot:<name>`
@@ -182,10 +183,10 @@ under `<site>/api/v1` and are described by `<site>/openapi.json`; errors are RFC
 | Tool | REST | Scope | Does |
 |---|---|---|---|
 | `relay_whoami()` | `GET /api/v1/whoami` | public | the connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
-| `relay_task_create(project, title, body?, lane?, model?, needs?, base?, idempotency_key?)` | `POST /api/v1/tasks` (`lane` required) | `tasks:write` | opens a task: a thread in the project's queue on the board, labelled with its lane (and model), in the repository the project is registered with. A lane that is neither built in nor listed by an online worker is refused, naming the lanes that have one. Returns `task_id` and the task's state |
+| `relay_task_create(project, title, body?, lane?, model?, needs?, base?, plan?, idempotency_key?)` | `POST /api/v1/tasks` (`lane` required) | `tasks:write` | opens a task: a thread in the project's queue on the board, labelled with its lane (and model), in the repository the project is registered with. A lane that is neither built in nor listed by an online worker is refused, naming the lanes that have one. With `plan: true` (the MCP tool) it is a planning task: a lane reads the repository and proposes tasks, and none of them is opened until the plan is approved ("Plans and reports" below). Returns `task_id` and the task's state |
 | `relay_task_get(task_id)` | `GET /api/v1/tasks/{id}` | `tasks:read` | the task with its state, lane, model, pull request (`pr_url`), hold and its reason, who holds the claim, result or reason, the usage rows relay's own authors wrote in its thread, and the latest notes there |
 | `relay_task_list(project?, state?, limit?)` | `GET /api/v1/tasks?project=&state=&lane=&limit=` | `tasks:read` | tasks oldest first, the order a queue is worked in. Default `state: "open"`: everything not done or closed, failed included. `state: "review"` is what waits for a decision |
-| `relay_task_approve(id)` | `POST /api/v1/tasks/{id}/approve` | `tasks:write` | approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task; a task whose deliverable is its attached outputs is completed with no merge. Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review. A bot never approves a task it opened (403). The deployment must be able to settle the task on the board, which is checked before anything merges (403 without the `--site-project` grant). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success |
+| `relay_task_approve(id)` | `POST /api/v1/tasks/{id}/approve` | `tasks:write` | approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task; a task whose deliverable is its attached outputs or a report is completed with no merge, and approving a task held for a plan opens the plan's tasks as the approver and completes it. Only the pull request the runner's hold names is merged, and only when its branch is the task's own. GitHub's refusal comes back as an error and the task stays in review. A bot never approves a task it opened (403). The deployment must be able to settle the task on the board, which is checked before anything merges (403 without the `--site-project` grant). A task whose own pull request is already merged is finished from any open state, and an approval that finds the task already completed by GitHub's delivery is a success |
 | `relay_task_request_changes(id, note)` | `POST /api/v1/tasks/{id}/request-changes` | `tasks:write` | send it back: the note goes in the task's thread and as a comment on the pull request, and the task is `queued`; the next run reads the thread and pushes to the same branch and pull request |
 | `relay_task_requeue(id, lane?, model?)` | `POST /api/v1/tasks/{id}/requeue` (`"model": null` goes back to the lane's default) | `tasks:write` | put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it |
 | `relay_task_close(id, reason?)` | `POST /api/v1/tasks/{id}/close` | `tasks:write` | close a task without a merge from any state but `done` or `closed`: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub, best effort |
@@ -217,10 +218,10 @@ The board keeps a task's state; relay shows one word for it. Nothing is cached: 
 | `waiting` | a task it needs has not completed; it joins the queue by itself when that one does |
 | `queued` | ready for a worker that serves its lane: new, sent back with a note, or requeued |
 | `running` | a worker holds it and the lane is working in a fresh clone; `claim` says who and until when |
-| `review` | the pull request (`pr_url`) or the outputs are there and wait for a decision |
+| `review` | the pull request (`pr_url`), the outputs, a report or a plan is there and waits for a decision; `hold.kind` is `awaiting_review` or `awaiting_plan` |
 | `held` | the injection gate flagged the text; `hold.reason` says what it saw. No worker runs it until a release |
 | `blocked` | held for another reason: an eval step is looking at the work, or the board holds a task whose text someone else edited |
-| `done` | merged, by an approval or on GitHub, or its outputs were approved; `result` says which |
+| `done` | merged, by an approval or on GitHub, or its outputs were approved, its report read, or its plan approved; `result` says which |
 | `failed` | a worker gave up; `reason` says why. A requeue retries it |
 | `closed` | called off without a merge |
 
@@ -253,6 +254,32 @@ is fixed by the board, not by the caller: the pull request the worker's hold nam
 branch relay pushed for that task. The pattern for a chat bot that opened the task is: relay the pull request and
 ask the person to approve it on the task's page, or have a second bot the person trusts approve on their word.
 
+### Plans and reports
+
+An ask that needs breaking down is opened as a planning task: `relay_task_create` with `plan: true`, or
+`relay task create --plan` on a machine. A worker runs the `plan` step read-only over the repository and ends with a
+plan of at most 20 tasks, each with a key, a title, a body, a lane and the keys of the tasks it needs. The worker
+posts it in the thread as `plan.json` with a summary and holds the task with kind `awaiting_plan`; the task shows as
+`review`. Nothing is opened yet.
+
+Approving the planning task opens the plan's tasks as whoever approved, each once (the idempotency key is
+`plan:<the planning task's ID>:<key>`), with `needs` pointing at the opened tasks, and completes the planning task.
+The approval reads the plan from the reply the hold names and checks it against the SHA-256 in the hold, so what is
+opened is the plan the worker posted. `relay_task_request_changes` sends it back for another plan. The rule for bots
+is the same as for any approval: a bot never approves a planning task it opened.
+
+A read-only step that ends without a plan, such as `retro`, leaves a report: the lane's words in the thread, held
+for review with the reason `report`. Approving it completes the task as read (`docs/STEPS.md`, "Plans and reports").
+
+### Grants are a person's
+
+A project's profile (`.relay/project.json`, `docs/PROFILE.md`) defines capability sets: names of environment
+variables and hosts a task may be allowed to use. A task has none until a person grants it one, for the task's text
+as it stands. A person also grants the cap for a paid sandbox run. There is no MCP tool for a grant, and the site
+refuses a grant asked with a token (403): a token never decides what a task may reach or what it may spend. On a
+machine, `relay task grant <id> --set <name>` or `--cloud <usd>` grants as that machine's own Vercel login. A bot
+that opens a task whose tools need a set tells the person which set to grant.
+
 ### A task on the wrong lane, failed or held: requeue
 
 `relay_task_requeue({id, lane?, model?})`, `POST /api/v1/tasks/{id}/requeue` with `{"lane"?, "model"?}`, "Requeue" on
@@ -262,6 +289,17 @@ refused (409): open a new one. A `running` task is refused with who holds it and
 queue by itself when that worker stops renewing its claim, and `relay_task_close` is how a run is stopped. The next
 worker that serves the lane claims it, clones fresh from the base branch, replaces the task's branch and reuses the
 open pull request if there is one.
+
+## relay's lead
+
+relay ships one bot of its own, optional: the lead (`apps/lead`), an agent on Vercel's eve framework deployed as its
+own Vercel project. It connects like any bot on this page, to `<site>/mcp` with a token whose scopes are
+`tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read` and `events:write`, and it opens tasks from a
+person's ask, as a planning task when the work needs breaking down. Its tool allowlist has no approve, release or
+close tool. Its model calls are billed per token through Vercel AI Gateway, and it logs its own usage as
+`external.lead.usage` rows. Its token is an operator token minted by hand, since it keeps the token in an
+environment variable and cannot store a rotated one. `apps/lead/README.md` has the environment, the token and the
+deployment.
 
 ## Grok Bot walkthrough
 
