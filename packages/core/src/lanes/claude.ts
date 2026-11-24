@@ -163,6 +163,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     // the lane must run on the subscription, never on a stray API key
     delete env["ANTHROPIC_API_KEY"];
     delete env["ANTHROPIC_AUTH_TOKEN"];
+    delete env["ANTHROPIC_BASE_URL"];
     if (opts.gateway) {
       env["ANTHROPIC_BASE_URL"] = opts.gateway.baseUrl;
       env["ANTHROPIC_AUTH_TOKEN"] = opts.gateway.token;
