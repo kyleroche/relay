@@ -20,6 +20,7 @@ import type { Db } from "../db/client.ts";
 import { writeEvent, type EventInput, type EventRow } from "../db/events.ts";
 import { getSetting, putSetting } from "../db/settings.ts";
 import type { BoardSession } from "./client.ts";
+import type { LeadWake } from "../lead/client.ts";
 import { HOLD, isBranchOf, LABEL, parsePullUrl, projectOfChannel, RELAY_MESSAGE, splitTaskText, taskRef, WORK_SUBTREE } from "./mapping.ts";
 import { blocksOf, isTrustedActor, RELAY_PROFILE, RELEASE_SCHEMA, RUN_SCHEMA, TASK_SCHEMA, USAGE_SCHEMA, withoutBlocks, type ReleaseBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 import { listTasks, settleTask, type BoardTask } from "./tasks.ts";
@@ -193,6 +194,31 @@ export interface LedgerSync {
   cursor: string | null;
   /** False when it stopped at `maxPages` with more to read: call again. */
   caught_up: boolean;
+}
+
+/**
+ * The wake-up a board event is for the lead, if it is one: a task that failed, was held at the gate, or reached
+ * review (a pull request, outputs, a report or a plan waiting for a person). A step's own task is none (the task
+ * whose work it looked at is what a person decides on), and neither is anything a principal outside `trusted` did.
+ * The reason is what a worker wrote: the lead reads it as data.
+ */
+export function leadWakeOf(event: BoardEventView, trusted: readonly string[]): Pick<LeadWake, "project" | "task" | "event"> | undefined {
+  const m = event.message;
+  const project = m ? projectOfChannel(m.channel) : undefined;
+  if (!m || !project || !m.task || m.re !== null) return undefined;
+  if (event.type !== "task.failed" && event.type !== "task.blocked") return undefined;
+  if (!isTrustedActor(event.payload.by.actor, trusted) || blocksOf<TaskBlock>(m, TASK_SCHEMA)[0]?.step) return undefined;
+  const kind = event.type === "task.failed" ? "failed" : event.payload.kind === HOLD.gate ? "held" : event.payload.kind === HOLD.review || event.payload.kind === HOLD.plan ? "review" : undefined;
+  if (!kind) return undefined;
+  const title = splitTaskText(withoutBlocks(m.text)).title.slice(0, 200);
+  const lane = m.labels?.[LABEL.lane];
+  const reason = event.payload.reason;
+  const pr = kind === "review" && parsePullUrl(reason) ? reason : undefined;
+  return {
+    project,
+    task: { id: m.id, ...(title ? { title } : {}), ...(lane ? { lane } : {}), ...(pr ? { pr_url: pr } : {}) },
+    event: { kind, cursor: event.cursor, ...(reason && !pr ? { reason: reason.slice(0, 2000) } : {}) },
+  };
 }
 
 /**

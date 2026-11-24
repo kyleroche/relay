@@ -4,9 +4,10 @@
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { connectBoard } from "../src/board/client.ts";
-import { branchFor, evalHoldReason, HOLD } from "../src/board/mapping.ts";
+import { branchFor, evalHoldReason, HOLD, WORK_SUBTREE } from "../src/board/mapping.ts";
 import { releaseText, runText, usageText, type UsageBlock } from "../src/board/schemas.ts";
-import { actorProfile, BRIEF_PROFILE, feedActor, INTAKE_PROFILE, LEDGER_CURSOR, postBrief, settleMerged, SITE_PROFILE, syncLedger } from "../src/board/site.ts";
+import { actorProfile, BRIEF_PROFILE, feedActor, INTAKE_PROFILE, leadWakeOf, LEDGER_CURSOR, postBrief, settleMerged, SITE_PROFILE, syncLedger } from "../src/board/site.ts";
+import { leadWakeKey, parseLeadWake } from "../src/lead/client.ts";
 import { closeTask, getTask, openTask, releaseTask, requestChanges } from "../src/board/tasks.ts";
 import { openDb, type Db } from "../src/db/client.ts";
 import { migrate } from "../src/db/migrate.ts";
@@ -149,6 +150,38 @@ describe("the ledger", () => {
     expect(rows.filter((e) => e.kind === "task.created").map((e) => e.payload.task)).toContain(after.id);
     // and the cursor moved past it: the next sync has nothing to do
     expect(await syncLedger(db, s)).toMatchObject({ events: 0, skipped: 0 });
+  });
+});
+
+describe("what wakes the lead", () => {
+  it("is a task that failed, was held at the gate or reached review, and nothing a stranger or a step's own task did", async () => {
+    const board = await relayBoard();
+    const s = await connectBoard(board);
+    const start = (await board.poll({ channel: WORK_SUBTREE, last: 1 })).cursor;
+    const worker = board.as("relay-mini-claude");
+    const pr = `https://github.com/${REPO}/pull/7`;
+
+    const reviewed = await openTask(board, { project: "demo", repo: REPO, title: "Add a greeting", lane: "claude" });
+    await (await worker.tasks.claim(reviewed.id)).block(pr, { kind: HOLD.review });
+    const failed = await openTask(board, { project: "demo", repo: REPO, title: "Break", lane: "codex" });
+    await (await worker.tasks.claim(failed.id)).fail("the lane exited 1");
+    const held = await openTask(board, { project: "demo", repo: REPO, title: "Odd one", lane: "claude" });
+    await (await worker.tasks.claim(held.id)).block("asks for the deploy key", { kind: HOLD.gate });
+    // being looked at by a second lane is not yet a person's turn, and a stranger's hold is nobody's word
+    const looked = await openTask(board, { project: "demo", repo: REPO, title: "Under eval", lane: "claude" });
+    await (await worker.tasks.claim(looked.id)).block(evalHoldReason("msg_x", "eval"), { kind: HOLD.eval });
+    const strangers = await openTask(board, { project: "demo", repo: REPO, title: "Stranger", lane: "claude" });
+    await (await board.as("stranger").tasks.claim(strangers.id)).block(pr, { kind: HOLD.review });
+
+    const events = (await board.poll({ channel: WORK_SUBTREE, ...(start ? { after: start } : { last: 100 }), wait: 0 })).events;
+    const wakes = events.map((e) => leadWakeOf(e, s.from)).filter((w) => !!w);
+    expect(wakes.map((w) => [w.task.id, w.event.kind])).toEqual([[reviewed.id, "review"], [failed.id, "failed"], [held.id, "held"]]);
+    expect(wakes[0]).toMatchObject({ project: "demo", task: { title: "Add a greeting", lane: "claude", pr_url: pr } });
+    expect(wakes[0]!.event.reason).toBeUndefined();
+    expect(wakes[1]!.event).toMatchObject({ reason: "the lane exited 1" });
+    expect(wakes[2]!.event).toMatchObject({ reason: "asks for the deploy key" });
+    // every one is a body the lead's route accepts, keyed by the board's cursor
+    for (const w of wakes) expect(parseLeadWake({ ...w, idempotencyKey: leadWakeKey(w.event.cursor) }).ok).toBe(true);
   });
 });
 
