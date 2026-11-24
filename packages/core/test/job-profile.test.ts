@@ -165,6 +165,22 @@ describe("a job in a project with a profile", () => {
     expect(req.prompt).not.toContain("value-of-");
   });
 
+  it("hands a granted value to the commands and not to a lane that cannot be held to the granted hosts", async () => {
+    const r = await rig();
+    const t = await r.open("Re-render on codex", { lane: "codex" });
+    await grantTask(r.board, t.id, { set: "store-build" }, { by: "human:kyleroche" });
+    await runJob(await r.board.as("relay-mini-codex").tasks.claim(t.id), r.job({ board: r.board.as("relay-mini-codex"), lane: "codex" }));
+    const req = r.requests[0]!;
+    expect(req.env!["BLOB_READ_WRITE_TOKEN"]).toBeUndefined();
+    // relay sandboxes the project's own commands itself, so they still get it, with the hosts
+    expect(r.ran.length).toBeGreaterThan(0);
+    expect(r.ran.every((x) => x.at.env["BLOB_READ_WRITE_TOKEN"] === "value-of-BLOB_READ_WRITE_TOKEN" && x.at.hosts?.includes("blob.example.com"))).toBe(true);
+    expect(req.prompt).toContain("Granted, and not in your environment: BLOB_READ_WRITE_TOKEN.");
+    expect(req.prompt).not.toContain("Set in your environment for this task");
+    const log = (await getTask(r.board, t.id)).thread.replies.find((m) => m.text.startsWith("Access for this run:"))!.text;
+    expect(log).toContain("not handed to the codex lane, which cannot be held to the granted hosts (the claude lane can): BLOB_READ_WRITE_TOKEN");
+  });
+
   it("believes a grant only from a trusted person, and only for the task's text as it was read", async () => {
     const r = await rig();
     const ungranted = (req: LaneRequest) => req.env!["BLOB_READ_WRITE_TOKEN"] === undefined && (req.access?.hosts ?? []).length === 0;

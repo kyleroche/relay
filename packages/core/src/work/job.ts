@@ -511,6 +511,11 @@ interface JobAccess {
   hosts: string[];
   /** The granted variables this worker found, by name. Values never leave the lane's and the commands' environment. */
   values: Record<string, string>;
+  /**
+   * Found, and not handed to the lane: only the Claude lane can hold a model's commands to the set's hosts, so on any
+   * other lane the values reach the project's own commands (which relay sandboxes itself) and not the lane's process.
+   */
+  withheld: string[];
   /** Granted names this worker could not find a value for, and granted sets the profile does not define. */
   missing: string[];
   unknown: string[];
@@ -529,7 +534,7 @@ function skillAbout(dir: string, path: string): string {
  * that matter and whether this task may use what they need, and the skill files worth reading. Names only; a value
  * is never in a prompt.
  */
-export function projectSection(i: { profile: ProjectProfile; access: Pick<JobAccess, "sets" | "values" | "missing">; skills: Array<{ path: string; about: string }> }): string | undefined {
+export function projectSection(i: { profile: ProjectProfile; access: Pick<JobAccess, "sets" | "values" | "missing" | "withheld">; skills: Array<{ path: string; about: string }> }): string | undefined {
   const { profile, access } = i;
   const lines: string[] = [];
   if (profile.setup.length) lines.push(`Already run in this clone: ${profile.setup.map((c) => `\`${c}\``).join(", ")}.`);
@@ -545,8 +550,9 @@ export function projectSection(i: { profile: ProjectProfile; access: Pick<JobAcc
     lines.push("", "Skill files in this repository. Read one when the task is the kind it covers:");
     for (const k of i.skills) lines.push(`- ${k.path}${k.about ? `: ${k.about}` : ""}`);
   }
-  const set = Object.keys(access.values);
+  const set = Object.keys(access.values).filter((n) => !access.withheld.includes(n));
   if (set.length) lines.push("", `Set in your environment for this task: ${set.join(", ")}. Never print a value or write one to a file.`);
+  if (access.withheld.length) lines.push("", `Granted, and not in your environment: ${access.withheld.join(", ")}. This lane cannot be held to the hosts the grant names, so a tool that needs one will fail here; say so in your summary.`);
   if (access.missing.length) lines.push("", `Granted but not available on this worker: ${access.missing.join(", ")}. A command that needs one will fail; say so in your summary.`);
   return lines.length ? lines.join("\n") : undefined;
 }
@@ -723,8 +729,11 @@ async function runCodeTask(j: Job): Promise<JobResult> {
   // Commit as the machine's own GitHub login: hosts such as Vercel block deployments whose commit author is not a
   // team member, so a synthetic author would leave every preview "Blocked". relay signs as co-author instead.
   const who = j.opts.gitName && j.opts.gitEmail ? { name: j.opts.gitName, email: j.opts.gitEmail } : await ghIdentity(j.opts.gh);
-  const laneEnv = { ...cleanEnv(), ...access.values, GIT_AUTHOR_NAME: who.name, GIT_AUTHOR_EMAIL: who.email, GIT_COMMITTER_NAME: who.name, GIT_COMMITTER_EMAIL: who.email };
-  const command = (cmd: string) => j.exec(cmd, { cwd: j.dir, env: laneEnv, hosts: access.hosts, signal: j.keeper.signal });
+  const gitEnv = { GIT_AUTHOR_NAME: who.name, GIT_AUTHOR_EMAIL: who.email, GIT_COMMITTER_NAME: who.name, GIT_COMMITTER_EMAIL: who.email };
+  const laneEnv = { ...cleanEnv(), ...Object.fromEntries(Object.entries(access.values).filter(([n]) => !access.withheld.includes(n))), ...gitEnv };
+  // the project's own commands run under relay's sandbox with the granted hosts, whatever the lane is
+  const commandEnv = { ...cleanEnv(), ...access.values, ...gitEnv };
+  const command = (cmd: string) => j.exec(cmd, { cwd: j.dir, env: commandEnv, hosts: access.hosts, signal: j.keeper.signal });
 
   // the project's setup, so the lane starts in a clone that works; a setup that fails is the task's failure, with what it printed
   if (!reports) {
@@ -996,14 +1005,14 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const want = grantedAccess(profile, granted.sets);
     const found = want.env.length ? await (opts.secrets ?? envSecrets)({ project, names: want.env, vercel: profile.vercel }).catch((e: unknown) => (log(`${id}: could not read the granted variables (${e instanceof Error ? e.message : String(e)})`), {} as Record<string, string>)) : {};
     const values = Object.fromEntries(want.env.flatMap((n) => (typeof found[n] === "string" && found[n] !== "" ? [[n, found[n]!]] : [])));
-    const access: JobAccess = { sets: granted.sets.filter((name) => profile.sets[name]), hosts: want.hosts, values, missing: want.env.filter((n) => !(n in values)), unknown: want.unknown };
+    const access: JobAccess = { sets: granted.sets.filter((name) => profile.sets[name]), hosts: want.hosts, values, withheld: lane === "claude" ? [] : Object.keys(values), missing: want.env.filter((n) => !(n in values)), unknown: want.unknown };
 
     const rulesPath = join(dir, "relay.md");
     const job: Job = { opts, claim, board, host, laneRun: paid ? paid.lane(opts.laneRunner ?? defaultLaneRunner) : (opts.laneRunner ?? defaultLaneRunner), log, id, lane, dir, repo, project, base, thread, task, body: gate.body, notes: gate.notes, state: runState(thread, opts.trusted), steps, profile, access, exec: opts.exec ?? projectExec({ sandbox: opts.sandbox !== false }), rules: existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, keeper, report, usageOf, git, finish, fail };
     await say(`Running on ${opts.workerName} (${lane}${task.model ? `, model ${task.model}` : ""}) from \`${base}\`.`, RELAY_MESSAGE.log);
     if (granted.sets.length) {
       // names only: which sets, how many hosts, which variables are missing here. A value is never written anywhere.
-      const parts = [access.sets.length ? `granted ${access.sets.join(", ")} (${access.hosts.length} host${access.hosts.length === 1 ? "" : "s"}, ${Object.keys(values).length} of ${want.env.length} variable${want.env.length === 1 ? "" : "s"} found on this worker)` : "", access.missing.length ? `not found here: ${access.missing.join(", ")}` : "", access.unknown.length ? `granted but not in the project's profile: ${access.unknown.join(", ")}` : ""].filter(Boolean);
+      const parts = [access.sets.length ? `granted ${access.sets.join(", ")} (${access.hosts.length} host${access.hosts.length === 1 ? "" : "s"}, ${Object.keys(values).length} of ${want.env.length} variable${want.env.length === 1 ? "" : "s"} found on this worker)` : "", access.missing.length ? `not found here: ${access.missing.join(", ")}` : "", access.withheld.length ? `not handed to the ${lane} lane, which cannot be held to the granted hosts (the claude lane can): ${access.withheld.join(", ")}` : "", access.unknown.length ? `granted but not in the project's profile: ${access.unknown.join(", ")}` : ""].filter(Boolean);
       await say(`Access for this run: ${parts.join("; ")}.`, RELAY_MESSAGE.log);
     }
     if (task.step && task.evaluates) return await runStepTask(job, { step: task.step, evaluates: task.evaluates, branch: task.branch });
