@@ -67,7 +67,7 @@ describe("pushing work in progress", () => {
     const sent = pushWorkInProgress(repo, "Finish the answer");
     expect(checkout()).toEqual(before);
     expect(sent.head).toBe(before.head);
-    expect(sent.branch).toBe(`relay/handoff-${sent.sha.slice(0, 8)}`);
+    expect(sent.branch).toBe(`relay/handoff/${sent.sha.slice(0, 8)}`);
     expect(readFileSync(join(repo, "secret.env"), "utf8")).toBe("TOKEN=do-not-send\n");
     expect(sh(repo, ["for-each-ref", "--format=%(refname)", "refs/remotes"]).split("\n")).toEqual(["refs/remotes/origin/main", `refs/remotes/origin/${sent.branch}`]);
   });
@@ -142,7 +142,7 @@ describe("relay handoff", () => {
     const [task] = await board.listTasks(r.b, { state: "all" });
     expect(r.out).toEqual([task!.id]);
     expect(task).toMatchObject({ title: "Finish the answer", lane: "claude", model: "fable", project: "demo", state: "queued" });
-    expect(task!.base).toMatch(/^relay\/handoff-[0-9a-f]{8}$/);
+    expect(task!.base).toMatch(/^relay\/handoff\/[0-9a-f]{8}$/);
     expect(sh(bare, ["show", `${task!.base}:src/new.js`])).toBe("export const fresh = true;");
     const text = (await board.getTask(r.b, task!.id)).task.body;
     expect(text).toContain("Done when: `node --test` passes.");

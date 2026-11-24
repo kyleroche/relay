@@ -23,7 +23,7 @@ export const BODY_HELP =
   "and the command that proves it is done (the test or check to run, and what it should show)";
 
 export interface WorkInProgress {
-  /** `relay/handoff-<8 hex of the commit>`, on origin. */
+  /** `relay/handoff/<8 hex of the commit>`, on origin. */
   branch: string;
   /** The commit the branch points at: a new one holding the uncommitted work, or `HEAD` itself when there was none. */
   sha: string;
@@ -67,12 +67,13 @@ export function commitWorkInProgress(root: string, message: string): { sha: stri
   }
 }
 
-/** Push the work in progress to origin as `relay/handoff-<8 hex>`. The checkout is left as it was. */
+/** Push the work in progress to origin as `relay/handoff/<8 hex>`. The checkout is left as it was. */
 export function pushWorkInProgress(root: string, title: string): WorkInProgress {
   const toplevel = git(root, ["rev-parse", "--show-toplevel"]);
   const at = git(toplevel, ["rev-parse", "--abbrev-ref", "HEAD"]);
   const made = commitWorkInProgress(toplevel, `relay handoff: ${title}\n\nWork in progress from ${at === "HEAD" ? "a detached HEAD" : at}, handed to a worker by relay handoff.`);
-  const branch = `relay/handoff-${made.sha.slice(0, 8)}`;
+  // under its own prefix, so it never reads as a worker's `relay/<lane>-<8 hex>` branch of a lane called handoff
+  const branch = `relay/handoff/${made.sha.slice(0, 8)}`;
   git(toplevel, ["push", "--quiet", "origin", `${made.sha}:refs/heads/${branch}`]);
   return { branch, ...made };
 }
@@ -88,7 +89,7 @@ export function registerHandoff(program: Command, deps: HandoffDeps = {}): void 
     .requiredOption("--title <text>")
     .requiredOption("--lane <lane>", `the lane that finishes it: ${board.ANY_LANE}, a built-in lane, or one a worker registered (relay work status)`)
     .option("--body-file <path>", "the brief: the goal, the files that matter, what is out of scope, the command that proves it is done ('-' for stdin)")
-    .option("--push", "send the uncommitted work along: a branch relay/handoff-<8 hex> on origin that the task starts from; the working tree, index and branch stay as they are")
+    .option("--push", "send the uncommitted work along: a branch relay/handoff/<8 hex> on origin that the task starts from; the working tree, index and branch stay as they are")
     .option("--model <id>", "the model the lane should use; the lane's default without it")
     .option("--project <slug>", "project slug (default: the linked project of the cwd)")
     .option("--cwd <path>")
