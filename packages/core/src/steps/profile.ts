@@ -47,6 +47,13 @@ export interface ProjectProfile {
   problems: string[];
 }
 
+/**
+ * Variables a capability set may not name. A set's values go into the environment of the lane and of the project's
+ * commands, so a set could otherwise widen the sandbox's hosts (`RELAY_LANE_ALLOWED_DOMAINS`), send traffic through a
+ * proxy, load code into every Node process, or repoint git: none of that is a secret a task was granted.
+ */
+export const STEERING_ENV = /^(?:RELAY_|GIT_|NPM_CONFIG_|CLAUDE_|ANTHROPIC_|BOARD_|FX_|LD_|DYLD_|XDG_)|^(?:PATH|HOME|SHELL|USER|TMPDIR|IFS|ENV|BASH_ENV|ZDOTDIR|SSH_AUTH_SOCK|NODE_OPTIONS|NODE_PATH|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|HTTP_PROXY|HTTPS_PROXY|ALL_PROXY|NO_PROXY)$/;
+
 /** Every key the file may hold; `steps` is read by the step loader (steps/index.ts). */
 export const PROFILE_KEYS = ["steps", "setup", "verify", "tools", "skills", "sets", "vercel", "cloud"] as const;
 
@@ -98,6 +105,7 @@ export function readProfile(files: StepFiles): ProjectProfile {
         if (!SET_NAME.test(name)) bad(`'${name}' is not a set name (lowercase letters, digits and dashes)`);
         else if (!s || typeof s !== "object" || !strings(env) || !strings(hosts)) bad(`set '${name}' must have env and hosts lists`);
         else if (!env.every((e): e is string => typeof e === "string" && ENV_NAME.test(e))) bad(`set '${name}': env holds names of environment variables only (A_NAME), never values`);
+        else if (env.some((e) => STEERING_ENV.test(e))) bad(`set '${name}' names a variable that steers the run instead of carrying a secret (${env.filter((e) => STEERING_ENV.test(e)).join(", ")}): the worker's own, git's, Node's, a proxy or a path`);
         else if (env.some((e) => (JOB_ENV_STRIPPED as readonly string[]).includes(e))) bad(`set '${name}' names a credential no job may carry (${env.filter((e) => (JOB_ENV_STRIPPED as readonly string[]).includes(e)).join(", ")})`);
         else if (!hosts.every((h): h is string => typeof h === "string" && HOST.test(h))) bad(`set '${name}': hosts are host names (api.example.com, *.example.com)`);
         else sets[name] = { env: [...new Set(env)], hosts: [...new Set(hosts)] };
