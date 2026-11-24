@@ -10,7 +10,8 @@ import { tmpdir } from "node:os";
 import { join, posix } from "node:path";
 import { diskAdoptFs, type AdoptFs } from "@relay/core";
 
-function git(root: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number } = {}): string {
+/** git in `root`, its output as it printed it; throws with git's own last words. Never prompts. */
+export function git(root: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input?: string; timeoutMs?: number } = {}): string {
   try {
     return execFileSync("git", args, {
       cwd: root,
@@ -53,7 +54,8 @@ function hasObject(root: string, sha: string): boolean {
   }
 }
 
-function ensureObject(root: string, sha: string, ref: string): void {
+/** Make sure this clone has commit `sha`, fetching `ref` from origin when it does not. */
+export function ensureObject(root: string, sha: string, ref: string): void {
   if (hasObject(root, sha)) return;
   git(root, ["fetch", "--quiet", "--no-write-fetch-head", "origin", ref], { timeoutMs: 5 * 60_000 });
   if (!hasObject(root, sha)) throw new Error(`fetched ${ref} from origin and still do not have ${sha.slice(0, 8)}`);
@@ -187,23 +189,9 @@ export function remoteBranch(root: string, branch: string): string | undefined {
 }
 
 /**
- * Does the branch on origin already hold these changes? True when every file to write is there with the same text
- * and every file to remove is gone, whatever else moved under it: a second run then leaves the branch, and whatever
- * a reviewer pushed to it, alone.
- */
-export function branchHolds(root: string, branch: string, tip: string, changes: readonly TreeChange[]): boolean {
-  try {
-    ensureObject(root, tip, `refs/heads/${branch}`);
-  } catch {
-    return false;
-  }
-  const there = treeReader(root, tip);
-  return changes.every((c) => (c.remove || c.content === undefined ? there.read(c.path) === undefined && !there.isDir(c.path) : there.read(c.path) === c.content));
-}
-
-/**
- * Put `sha` on origin as `branch`. A branch that is already there is replaced only if it is still at `seen`, the tip
- * this run looked at; without `seen` the branch must not exist.
+ * Put `sha` on origin as `branch`. A branch that is already there moves only if it is still at `seen`, the tip this
+ * run looked at; without `seen` the branch must not exist. Whether that replaces commits is the caller's choice of
+ * `sha`: a commit made on top of `seen` only adds to the branch.
  */
 export function pushProposal(root: string, sha: string, branch: string, seen: string | undefined): void {
   git(root, ["push", "--quiet", `--force-with-lease=refs/heads/${branch}:${seen ?? ""}`, "origin", `${sha}:refs/heads/${branch}`], { timeoutMs: 5 * 60_000 });

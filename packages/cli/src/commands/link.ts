@@ -15,7 +15,16 @@
  * merges the pull request. A repository with no origin, a machine without gh, or `--no-pr` gets the same files
  * written into the working tree instead.
  *
- * Idempotent: a second run with nothing changed makes no model calls and no new pull request. --refresh re-digests
+ * While that pull request is open, a later run reads the branch as it stands, a reviewer's commits included, and
+ * adds one commit on top: it never replaces what is there. Only a branch left over from a pull request that was
+ * merged or closed is started again from the default branch.
+ *
+ * What adoption found is the one thing the command asks about. Notes written for one person on one machine would
+ * otherwise be pushed to the repository's host, and preferences sent to relay's memory, before anybody read them:
+ * the command lists them and waits for a yes (`--yes` says it in advance; without a terminal and without `--yes`
+ * they are left out and named).
+ *
+ * Idempotent: a second run with nothing changed makes no model calls and no new commit or pull request. --refresh re-digests
  * stale files and rewrites the summary; --no-digest skips the model steps; --no-adopt leaves Claude Code's files
  * unread; --force overwrites a locally edited owned section. In site mode the stage `events` asks the site whether
  * its GitHub App is installed on the repo and prints the install link; --no-events skips it.
@@ -23,6 +32,7 @@
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
 import { dirname, join } from "node:path";
 import {
   applyAdoption,
@@ -46,7 +56,7 @@ import {
 import { worktreesOf } from "./adopt.ts";
 import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady } from "./_common.ts";
 import { eventsCheck, eventsLeft, formatStage, localEventsCheck } from "./events-check.ts";
-import { branchHolds, commitOnBase, diskReader, overlayAdoptFs, pushProposal, remoteBase, remoteBranch, treeReader, type RemoteBase, type TreeChange, type TreeReader } from "./_tree.ts";
+import { commitOnBase, diskReader, ensureObject, overlayAdoptFs, pushProposal, remoteBase, remoteBranch, treeReader, type RemoteBase, type TreeChange, type TreeReader } from "./_tree.ts";
 
 const LABELS: Array<{ name: string; color: string; description: string }> = [
   { name: "agent:claude", color: "D97757", description: "relay: implement with the Claude lane" },
@@ -81,18 +91,38 @@ interface LinkOptions {
   events: boolean;
   adopt: boolean;
   pr: boolean;
+  yes?: boolean;
   cwd?: string;
 }
 
 export interface LinkDeps {
   /** Where the pull request is opened (default: gh). Tests pass their own. */
-  host?: Pick<GitHost, "findPr" | "createPr">;
+  host?: Pick<GitHost, "findPr" | "createPr" | "comment">;
+  /** Asks the person a yes/no question (default: the terminal, and no without one). Tests pass their own. */
+  confirm?: (question: string) => Promise<boolean>;
 }
 
-/** Where the repository's files are read and where relay's changes to them go. */
-type Target = { kind: "pr"; base: RemoteBase; reader: TreeReader; host: Pick<GitHost, "findPr" | "createPr"> } | { kind: "tree"; reader: TreeReader; why: string };
+/**
+ * Where the repository's files are read and where relay's changes to them go. For a pull request: `parent` is the
+ * commit the proposal is made on, which is the open pull request's own tip when there is one (`open`), so the files
+ * are read as a reviewer left them, and the default branch's tip otherwise; `seen` is the branch's tip on origin.
+ */
+type Target =
+  | { kind: "pr"; base: RemoteBase; parent: string; seen: string | undefined; open: { number: number; url: string } | undefined; reader: TreeReader; host: Pick<GitHost, "findPr" | "createPr" | "comment"> }
+  | { kind: "tree"; reader: TreeReader; why: string };
 
-function targetOf(root: string, repoName: string, o: LinkOptions, deps: LinkDeps): Target {
+/** The terminal's yes or no; no when there is no terminal to ask. */
+async function askTerminal(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) return false;
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    return /^y(es)?$/i.test((await rl.question(`${question} [y/N] `)).trim());
+  } finally {
+    rl.close();
+  }
+}
+
+async function targetOf(root: string, repoName: string, o: LinkOptions, deps: LinkDeps): Promise<Target> {
   const tree = (why: string): Target => ({ kind: "tree", reader: diskReader(root), why });
   if (!o.pr) return tree("--no-pr");
   const origin = gitRemoteRepo(root);
@@ -101,7 +131,12 @@ function targetOf(root: string, repoName: string, o: LinkOptions, deps: LinkDeps
   if (!deps.host && !onPath("gh")) return tree("gh is not on PATH, so no pull request can be opened");
   try {
     const base = remoteBase(root);
-    return { kind: "pr", base, reader: treeReader(root, base.sha), host: deps.host ?? ghHost() };
+    const host = deps.host ?? ghHost();
+    const seen = remoteBranch(root, LINK_BRANCH);
+    const open = seen ? await host.findPr(repoName, LINK_BRANCH) : undefined;
+    if (seen && open) ensureObject(root, seen, `refs/heads/${LINK_BRANCH}`);
+    const parent = seen && open ? seen : base.sha;
+    return { kind: "pr", base, parent, seen, open, reader: treeReader(root, parent), host };
   } catch (e) {
     return tree(`origin's default branch could not be read: ${(e instanceof Error ? e.message : String(e)).slice(0, 200)}`);
   }
@@ -151,6 +186,7 @@ export function registerLink(program: Command, deps: LinkDeps = {}): void {
     .option("--max-files <n>", "max files to digest in this run", "400")
     .option("--no-adopt", "leave Claude Code's memory notes and transcripts for this repository unread (relay adopt shows what adopting would do)")
     .option("--no-pr", "write relay's files into this checkout instead of proposing them as a pull request")
+    .option("--yes", "include what adoption found without asking: the notes go into the pull request and the preferences into relay's memory (relay adopt lists them first)")
     .option("--no-labels", "skip gh label creation")
     .option("--no-events", "skip the check that GitHub events for this repo reach the site (the GitHub App installation)")
     .option("--cwd <path>")
@@ -165,9 +201,15 @@ export function registerLink(program: Command, deps: LinkDeps = {}): void {
       const maxFiles = Math.max(0, Number(o.maxFiles) || 0);
       let failed = false;
 
-      const target = targetOf(root, repoName, o, deps);
+      const target = await targetOf(root, repoName, o, deps);
       const reader = target.reader;
-      log(target.kind === "pr" ? `repo: relay's files go into one pull request against ${target.base.branch} of ${repoName}; this checkout is left as it is` : `repo: relay's files are written into this checkout (${target.why})`);
+      log(
+        target.kind === "tree"
+          ? `repo: relay's files are written into this checkout (${target.why})`
+          : target.open
+            ? `repo: relay's files go into the open pull request ${target.open.url}, on top of what is on ${LINK_BRANCH} now; this checkout is left as it is`
+            : `repo: relay's files go into one pull request against ${target.base.branch} of ${repoName}; this checkout is left as it is`,
+      );
       // in a checkout the files are written as each stage makes them, so the digest stage hashes them; a pull request gets them all at the end
       const changes: TreeChange[] = [];
       const put = (batch: TreeChange[]): void => {
@@ -225,8 +267,20 @@ export function registerLink(program: Command, deps: LinkDeps = {}): void {
         else {
           try {
             const plan = await planAdoption({ root, project: slug, worktrees: worktreesOf(root), state: readAdoptState(), ...(target.kind === "pr" ? { fs: overlayAdoptFs(root, reader) } : {}) });
+            const fresh = { notes: plan.files.filter((f) => f.kind === "context"), profile: plan.files.some((f) => f.kind === "profile"), decisions: plan.decisions.filter((d) => d.action !== "same") };
+            const anything = fresh.notes.length > 0 || fresh.profile || fresh.decisions.length > 0;
+            // the one question: these were written for one person on one machine, and yes sends them to other people
+            let included = !anything || !!o.yes;
+            if (anything && !o.yes) {
+              const where = target.kind === "pr" ? `pushed to ${repoName} in the pull request` : "written into this checkout";
+              log(`adopt: Claude Code's memory for this repository holds ${plural(fresh.notes.length, "note")} that would be ${where}${fresh.decisions.length ? `, and ${plural(fresh.decisions.length, "preference")} that would go into relay's memory${h.mode === "site" ? ` on ${h.client.site}` : ""} and relay.md` : ""}${fresh.profile ? `, with a first ${PROFILE_PATH}` : ""}:`);
+              for (const f of fresh.notes) log(`adopt:   ${f.path}  ${f.about.slice(0, 110)}`);
+              for (const d of fresh.decisions) log(`adopt:   preference  ${d.text.slice(0, 110)}`);
+              included = await (deps.confirm ?? askTerminal)("Include them? Read the notes first if you have not (relay adopt prints them).");
+              if (!included) log(`adopt: left out. relay adopt shows each one; relay link --yes includes them, relay link --no-adopt stops asking`);
+            }
             if (!plan.found.dirs.length) log("adopt: Claude Code has no memory or transcripts for this repository on this machine");
-            else {
+            else if (included) {
               const result = await applyAdoption(plan, { client: h.client });
               put(result.files);
               adopted.decisions = result.recorded.length;
@@ -269,17 +323,25 @@ export function registerLink(program: Command, deps: LinkDeps = {}): void {
         if (target.kind === "tree") log(changes.length ? `repo: ${plural(changes.length, "file")} changed in this checkout (${changes.map((c) => c.path).join(", ")})` : "repo: every file is current");
         else {
           try {
-            const proposal = commitOnBase(root, target.base.sha, changes, `Link this repository to relay\n\nProposed by relay link for the project ${slug}: the agent rules section, relay.md, and what was adopted from\nClaude Code's memory on the machine that ran it. Nothing here takes effect until it is merged.`);
-            if (!proposal.changed.length) log(`pull request: none needed, ${target.base.branch} has every file`);
-            else {
+            const message = target.open
+              ? `Update relay's files\n\nAdded by relay link for the project ${slug}, on top of what the pull request already holds.`
+              : `Link this repository to relay\n\nProposed by relay link for the project ${slug}: the agent rules section, relay.md, and what was adopted from\nClaude Code's memory on the machine that ran it. Nothing here takes effect until it is merged.`;
+            const proposal = commitOnBase(root, target.parent, changes, message);
+            if (!proposal.changed.length) {
+              if (target.open) {
+                prUrl = target.open.url;
+                log(`pull request: ${target.open.url} already holds every file; nothing added`);
+              } else log(`pull request: none needed, ${target.base.branch} has every file`);
+            } else {
+              // on an open pull request this only adds a commit; a branch left from a merged or closed one is started again
+              pushProposal(root, proposal.sha, LINK_BRANCH, target.seen);
               const effective = changes.filter((c) => proposal.changed.includes(c.path));
-              const seen = remoteBranch(root, LINK_BRANCH);
-              const held = !!seen && branchHolds(root, LINK_BRANCH, seen, effective);
-              if (!held) pushProposal(root, proposal.sha, LINK_BRANCH, seen);
               const body = proposalBody(proposal.changed, effective.filter((c) => c.remove).map((c) => c.path), { project: slug, ...adopted });
-              const pr = (await target.host.findPr(repoName, LINK_BRANCH)) ?? (await target.host.createPr(repoName, { base: target.base.branch, head: LINK_BRANCH, title: "Link this repository to relay", body }));
+              const pr = target.open ?? (await target.host.createPr(repoName, { base: target.base.branch, head: LINK_BRANCH, title: "Link this repository to relay", body }));
+              // the description was written for the first proposal; what a later run adds is said where the reviewer will see it
+              if (target.open) await target.host.comment(repoName, pr.number, `relay link added a commit to this pull request.\n\n${body}`).catch((e: unknown) => log(`pull request: the commit is there, but the comment that describes it was not posted (${(e instanceof Error ? e.message : String(e)).slice(0, 160)})`));
               prUrl = pr.url;
-              log(`pull request: ${pr.url} (${plural(proposal.changed.length, "file")}: ${proposal.changed.join(", ")})${held ? "; already up to date" : ""}`);
+              log(`pull request: ${pr.url} (${target.open ? "one commit added" : "opened"}; ${plural(proposal.changed.length, "file")}: ${proposal.changed.join(", ")})`);
             }
           } catch (e) {
             failed = true;
