@@ -21,20 +21,17 @@
  * the site writes only after a signed-in person asked: never from a worker's profile.
  */
 import type { MessageView, ThreadView } from "@vercel/board";
+import { CLOUD_APPROVED, LABEL } from "../board/mapping.ts";
 import { GRANT_SCHEMA, isDecidingActor, trustedBlocks, withoutBlocks, type GrantBlock } from "../board/schemas.ts";
-import { SITE_PROFILE } from "../board/site.ts";
 import { taskDigest, toTask } from "../board/tasks.ts";
 
 /** How long a start has to come up and claim its task before it is no longer "being started". */
 export const CLOUD_START_GRACE_MS = 10 * 60_000;
 export const CLOUD_MAX_STARTS = 3;
 
-/**
- * On a task's root: a paid run was approved for it. Only a hint that narrows which threads the site reads when it
- * looks for runs to start; what counts is the grant in the thread.
- */
-export const CLOUD_LABEL = "cloud";
-export const CLOUD_APPROVED = "approved";
+/** The hint on a task's root that a paid run was granted for it (`LABEL.cloud` in board/mapping.ts). */
+export const CLOUD_LABEL = LABEL.cloud;
+export { CLOUD_APPROVED };
 
 export interface CloudMark {
   kind: "start" | "failed";

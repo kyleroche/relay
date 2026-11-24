@@ -46,7 +46,13 @@ export const LABEL = {
   model: "model",
   /** On a reply: which of relay's own messages it is (`RELAY_MESSAGE`). */
   relay: "relay",
+  /**
+   * On a task's root: `CLOUD_APPROVED` once a paid run was granted for it. Only a hint that narrows which threads a
+   * site reads when it looks for runs to start; what counts is the grant in the thread (cloud/start.ts).
+   */
+  cloud: "cloud",
 } as const;
+export const CLOUD_APPROVED = "approved";
 
 export { ANY_LANE } from "../tasks/lanes.ts";
 

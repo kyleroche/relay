@@ -27,7 +27,7 @@ import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
 import { PLAN_FILE, planOrder, planProblem, type Plan } from "./plan.ts";
-import { HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parsePlanHold, REPORT_REASON, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
+import { CLOUD_APPROVED, HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parsePlanHold, REPORT_REASON, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
 import { ASSET_SCHEMA, blocksOf, evalText, GRANT_SCHEMA, grantText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, trustedBlocks, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type GrantBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 
 /** A refusal with the HTTP status a route would answer: 400 bad input, 404 no such task, 409 wrong state, 502/503 GitHub. */
@@ -492,6 +492,8 @@ export async function grantTask(board: Board, id: string, grant: { set?: string;
   try {
     const said = `Granted${opts.by ? ` by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}` : ""}: ${what}, for this task's text as it stands.`;
     await (opts.own ?? board).reply(id, { text: `${said}\n\n${grantText({ ...(hasSet ? { set: grant.set! } : { cloud_cap_usd: grant.cloudCapUsd! }), digest: taskDigest(task) })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    // a hint for the site that starts paid runs, so it reads this thread now and not on its next wide look
+    if (hasCap) await (opts.own ?? board).label(id, { set: { [LABEL.cloud]: CLOUD_APPROVED } }).catch(() => undefined);
     return task;
   } catch (e) {
     throw asTaskError(e);

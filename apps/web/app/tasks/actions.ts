@@ -1,6 +1,6 @@
 "use server";
 
-import { ANY_LANE, board, capProblem, CLOUD_APPROVED, CLOUD_LABEL, CLOUD_LANE } from "@relay/core";
+import { ANY_LANE, board, capProblem, CLOUD_LANE } from "@relay/core";
 import { revalidatePath } from "next/cache";
 import { after } from "next/server";
 import { siteBoard } from "@/lib/board";
@@ -128,8 +128,6 @@ export async function approveCloudRunAction(taskId: string, capUsd: number): Pro
     if (profile.cloud === "never") return { ok: false, message: "This project's profile says cloud: never; its tasks wait for one of your own machines." };
     const cap = Math.round(capUsd * 100) / 100;
     await board.grantFor(board.deskFor(session, asker), taskId, { cloudCapUsd: cap });
-    // only tells the pool which threads to read; the grant above is what it acts on
-    await session.board.label(taskId, { set: { [CLOUD_LABEL]: CLOUD_APPROVED } }).catch(() => undefined);
     after(runApprovedQuietly);
     return { ok: true, state: task.state, message: `Approved up to $${cap.toFixed(2)}. A sandbox starts shortly, unless one of your workers takes the task first.` };
   });
