@@ -277,7 +277,7 @@ export function parseJudgeAnswer(r: Pick<LaneResult, "json" | "text">): { pass: 
 }
 
 /** git for a check's own repository: an identity of its own and none of the user's configuration, so a signing rule or a hook on this machine cannot fail a check. */
-function git(dir: string, args: string[], env: NodeJS.ProcessEnv = {}): string {
+function git(dir: string, args: string[], env: Record<string, string> = {}): string {
   return execFileSync("git", args, {
     cwd: dir,
     encoding: "utf8",
