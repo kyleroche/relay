@@ -631,7 +631,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         model: z.string().min(1).max(100).optional().describe("the model the lane should use; the lane's default without it"),
         needs: z.array(z.string().min(1)).max(20).optional().describe("task IDs that must complete first; the task waits for them"),
         base: z.string().min(1).max(200).optional().describe("start from this branch instead of the repository's default one"),
-        plan: z.boolean().optional().describe("open it as a planning task: a lane reads the repository and proposes tasks, and nothing is opened until a person approves the plan. Use it for an ask that needs breaking down."),
+        plan: z.boolean().optional().describe("open it as a planning task: a lane reads the repository and proposes tasks, and nothing is opened until the plan is approved, like any task in review. Use it for an ask that needs breaking down."),
         idempotency_key: z.string().min(1).max(200).optional().describe("repeat calls with the same key return the same task and open nothing"),
       },
     },
