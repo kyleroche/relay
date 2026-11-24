@@ -812,14 +812,18 @@ async function runCodeTask(j: Job): Promise<JobResult> {
   if (!answering || (await count(`origin/${branch}..HEAD`))) await j.host.push(j.dir, branch);
   const closes = task.issue && task.issue.repo === repo ? `\n\nCloses #${task.issue.number}` : "";
   const pr = (j.report.pr = (await j.host.findPr(repo, branch)) ?? (await j.host.createPr(repo, { base, head: branch, title: `${lane}: ${task.title || id}`, body: `relay task ${id}, ${lane} lane on ${j.opts.workerName}.${closes}` })));
+  // an after-pr step looks at the work before a person is asked: once per task, on a lane that did not do the work.
+  // A paid run's sandbox writes to the board only as its own profile, and a task opened that way is one no worker
+  // takes, so its work goes straight to a person and says so.
+  const afterStep = j.state.evaluated ? undefined : j.steps.enabled.find((x) => x.when === "after-pr");
+  if (afterStep && j.opts.paid) stepNotes.push(`${afterStep.name} not run: a paid run cannot open a task for another worker`);
+  const after = j.opts.paid ? undefined : afterStep;
   const checksText = checks.length ? `\n\nChecks the worker ran${failedChecks ? ` (${failedChecks} of ${checks.length} failed)` : " (all passed)"}:\n\n${checks.map((c) => `- ${c}`).join("\n")}` : "";
   const notesText = `${result.note ? `\n\nNote: ${result.note}.` : ""}${stepNotes.length ? `\n\nSteps: ${stepNotes.join("; ")}` : ""}${checksText}`;
   await j.host.comment(repo, pr.number, `## ${answering ? "Answer to the eval" : "Summary"} from the ${lane} lane\n\n${result.text.slice(0, 6000)}${notesText}`);
   const text = `${result.text.slice(0, 6000)}${notesText}\n\nPull request: ${pr.url}`;
   const produced = { branch, pr: { repo, number: pr.number, url: pr.url } };
 
-  // an after-pr step looks at the work before a person is asked: once per task, on a lane that did not do the work
-  const after = j.state.evaluated ? undefined : j.steps.enabled.find((x) => x.when === "after-pr");
   const judge = after ? await openJudge(j, after, pr.url, branch) : undefined;
   if (after && judge) {
     return j.finish(

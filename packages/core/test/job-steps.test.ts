@@ -9,7 +9,7 @@ import { join } from "node:path";
 import type { Board } from "@vercel/board";
 import { HOLD } from "../src/board/mapping.ts";
 import { evalText, runText } from "../src/board/schemas.ts";
-import { closeTask, getTask, listTasks, openTask, requeueTask } from "../src/board/tasks.ts";
+import { grantTask, closeTask, getTask, listTasks, openTask, requeueTask } from "../src/board/tasks.ts";
 import type { LaneRequest } from "../src/lanes/types.ts";
 import { connectBoard } from "../src/board/client.ts";
 import { runJob, runState, type JobOptions, type LaneRunner } from "../src/work/job.ts";
@@ -100,6 +100,17 @@ describe("an after-pr step", () => {
     expect(work.task).toMatchObject({ state: "blocked", lane: "claude", pr: { number: 1 }, hold: { kind: HOLD.eval, reason: `eval on the codex lane: task ${ev.id} on https://github.com/acme/demo/pull/1` } });
     expect(runState(work.thread, r.trusted)).toMatchObject({ evaluated: true, last: { outcome: "eval", branch: out.branch, eval_task: ev.id, pr: { number: 1 } } });
     expect(runState(work.thread, r.trusted).answer).toBeUndefined();
+  });
+
+  it("a paid run opens no task for another worker: its work goes straight to a person, and says the step was not run", async () => {
+    const r = await rig();
+    await grantTask(r.board, r.task.id, { cloudCapUsd: 3 });
+    const out = await runJob(await r.claim("claude", r.task.id), r.job("claude", { paid: { gateway: { baseUrl: "https://gateway.example", token: "gw" }, capUsd: 3 } }));
+    expect(out).toMatchObject({ outcome: "review", pr: { number: 1 } });
+    expect(await evalTaskOf(r.board, r.task.id)).toBeUndefined();
+    const work = await getTask(r.board, r.task.id);
+    expect(work.task).toMatchObject({ state: "review", hold: { kind: HOLD.review } });
+    expect(work.thread.replies.find((m) => m.labels.relay === "result")!.text).toContain("eval not run: a paid run cannot open a task for another worker");
   });
 
   it("the step's task reads the work read-only with the project's own instruction, posts its findings in the work's thread and wakes it", async () => {
