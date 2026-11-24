@@ -22,11 +22,11 @@ import { getSetting, putSetting } from "../db/settings.ts";
 import type { BoardSession } from "./client.ts";
 import type { LeadWake } from "../lead/client.ts";
 import { HOLD, isBranchOf, LABEL, parsePullUrl, projectOfChannel, RELAY_MESSAGE, splitTaskText, taskRef, WORK_SUBTREE } from "./mapping.ts";
-import { blocksOf, isTrustedActor, RELAY_PROFILE, RELEASE_SCHEMA, RUN_SCHEMA, TASK_SCHEMA, USAGE_SCHEMA, withoutBlocks, type ReleaseBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
+import { blocksOf, isTrustedActor, RELAY_PROFILE, RELEASE_SCHEMA, SITE_PROFILE, RUN_SCHEMA, TASK_SCHEMA, USAGE_SCHEMA, withoutBlocks, type ReleaseBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
 import { listTasks, settleTask, type BoardTask } from "./tasks.ts";
 
 /** The profile a site's own data goes out on (a gate release, an eval that could not run): one of relay's, so workers believe it. */
-export const SITE_PROFILE = `${RELAY_PROFILE}site`;
+export { SITE_PROFILE };
 /** The profile a site's brief is posted as. It is also the brief watcher's ID, so the watcher and the site are one author. */
 export const BRIEF_PROFILE = `${RELAY_PROFILE}brief`;
 /** The profile a site opens a task as when GitHub is what asked. No person's or bot's profile can be this (`actorProfile`). */

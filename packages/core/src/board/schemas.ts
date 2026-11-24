@@ -301,12 +301,31 @@ const LOCAL_CLIENT = "board:client";
 export const isTrustedActor = (actor: string, trusted: readonly string[]): boolean =>
   trusted.some((t) => actor === t || actor.startsWith(`${t}+${RELAY_PROFILE}`) || (t === LOCAL_CLIENT && actor.startsWith(`${t}:${RELAY_PROFILE}`)));
 
+/** The profile a hosted relay writes its own data as (board/site.ts). */
+export const SITE_PROFILE = `${RELAY_PROFILE}site`;
+
+/**
+ * Whether a decision may be believed from this actor: what a task may reach or spend (a grant), or that the gate's
+ * hold on it is lifted (a release). Only a trusted principal itself (a person at the CLI) or the site's own profile
+ * of one (which writes for a signed-in person, board/desk.ts). A worker's profile is relay's too and reports what a
+ * run did, but it never decides: a lane that got hold of its worker's board credential (a sandbox whose firewall
+ * signs every request, cloud/plan.ts) could otherwise grant its own task a set or release its own text. An entry of
+ * `trusted` that is itself a profile never decides either.
+ */
+export const isDecidingActor = (actor: string, trusted: readonly string[]): boolean =>
+  trusted.some((t) => isPrincipal(t) && (actor === t || actor === `${t}+${SITE_PROFILE}` || (t === LOCAL_CLIENT && actor === `${t}:${SITE_PROFILE}`)));
+
+/** A trusted entry that is a principal itself and not one of its profiles (a worker lists its own lane profiles as trusted, so it can read its other lanes' reports). */
+const isPrincipal = (t: string): boolean => !t.includes("+") && !t.startsWith(`${LOCAL_CLIENT}:`);
+
 /**
  * The blocks of one schema in a thread's replies that a trusted author wrote, oldest first, each with its reply's
- * place in the thread. A block anyone else posted is not relay's word, whatever it says.
+ * place in the thread. A block anyone else posted is not relay's word, whatever it says. With `deciding`, only the
+ * authors a decision is believed from (`isDecidingActor`).
  */
-export function trustedBlocks<T>(replies: ReadonlyArray<Pick<MessageView, "blocks" | "by" | "deleted">>, schema: string, trusted: readonly string[]): Array<{ data: T; index: number }> {
-  return replies.flatMap((m, index) => (m.deleted || !isTrustedActor(m.by.actor, trusted) ? [] : blocksOf<T>(m, schema).map((data) => ({ data, index }))));
+export function trustedBlocks<T>(replies: ReadonlyArray<Pick<MessageView, "blocks" | "by" | "deleted">>, schema: string, trusted: readonly string[], opts: { deciding?: boolean } = {}): Array<{ data: T; index: number }> {
+  const believed = opts.deciding ? isDecidingActor : isTrustedActor;
+  return replies.flatMap((m, index) => (m.deleted || !believed(m.by.actor, trusted) ? [] : blocksOf<T>(m, schema).map((data) => ({ data, index }))));
 }
 
 /** The blocks of one schema on a message, typed. */

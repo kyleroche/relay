@@ -469,7 +469,7 @@ export interface TaskGrants {
 /** What trusted people granted this task, for its text as it stands. A grant for an earlier wording counts for nothing. */
 export function grantsOf(thread: ThreadView, trusted: readonly string[]): TaskGrants {
   const digest = taskDigest(toTask(thread.message));
-  const grants = trustedBlocks<GrantBlock>(thread.replies, GRANT_SCHEMA, trusted).map((g) => g.data).filter((g) => g.digest === digest);
+  const grants = trustedBlocks<GrantBlock>(thread.replies, GRANT_SCHEMA, trusted, { deciding: true }).map((g) => g.data).filter((g) => g.digest === digest);
   const caps = grants.map((g) => g.cloud_cap_usd).filter((c): c is number => typeof c === "number");
   return { sets: [...new Set(grants.map((g) => g.set).filter((x): x is string => !!x))], cloudCapUsd: caps.length ? caps.at(-1)! : null };
 }

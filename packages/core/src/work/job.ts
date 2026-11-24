@@ -924,7 +924,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     // The injection gate (tasks/gate.ts): the task's text and what people added in the thread, as the lane would see
     // them, graded before anything runs. A release covers the text a person read: its digest, in a trusted block.
     const gate = await gateInput(board, thread);
-    if (trustedBlocks<ReleaseBlock>(thread.replies, RELEASE_SCHEMA, opts.trusted).some((r) => r.data.digest === gate.digest)) {
+    if (trustedBlocks<ReleaseBlock>(thread.replies, RELEASE_SCHEMA, opts.trusted, { deciding: true }).some((r) => r.data.digest === gate.digest)) {
       log(`${id}: a person released the gate's hold on this text; not grading it again`);
     } else {
       log(`${id}: grading the task text`);
