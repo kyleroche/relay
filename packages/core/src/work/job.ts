@@ -305,6 +305,13 @@ export interface LaneRunnerOptions {
    * with the allowlist alone, as the worker's OS user, and the worker says so in its labels (`NO_SANDBOX_LABEL`).
    */
   sandbox?: boolean;
+  /**
+   * Paid credits through a model gateway instead of the machine's login, with the most this run may spend: a sandbox
+   * started for a task whose spend a person approved (`relay work --task <id> --billing gateway --cap <usd>`). Only
+   * the Claude lane runs this way.
+   */
+  gateway?: { baseUrl: string; token: string };
+  budgetUsd?: number;
 }
 
 const CLAUDE_MODELS: readonly ClaudeModel[] = ["fable", "opus", "sonnet"];
@@ -326,9 +333,10 @@ export const laneRunner = (o: LaneRunnerOptions = {}): LaneRunner => async (req,
   if (lane === "claude") {
     const asked = claudeAlias(opts.model);
     const model = asked ?? (env.RELAY_MODEL_CLAUDE as ClaudeModel | undefined) ?? "opus";
-    const r = await runClaude(req, { model, allowedTools: [...CODE_TOOLS, ...(req.access?.tools ?? [])], disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS, sandbox: o.sandbox ?? true });
+    const r = await runClaude(req, { model, allowedTools: [...CODE_TOOLS, ...(req.access?.tools ?? [])], disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS, sandbox: o.sandbox ?? true, ...(o.gateway ? { gateway: o.gateway } : {}), ...(o.budgetUsd ? { maxBudgetUsd: o.budgetUsd } : {}) });
     return { tool: "claude", ...r, ...(opts.model && !asked ? { note: `the claude lane takes fable, opus or sonnet, not '${opts.model}'; it ran on ${model}` } : {}) };
   }
+  if (o.gateway) throw new Error(`a paid sandbox run uses the claude lane; '${lane}' has no gateway adapter`);
   const fake = env.RELAY_FAKE_LANES === "1";
   if (lane === "codex") {
     const model = opts.model ?? env.RELAY_MODEL_CODEX;

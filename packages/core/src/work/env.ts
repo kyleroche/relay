@@ -1,7 +1,7 @@
 /** The environment a job and its children run with (docs/SECURITY.md, "Workers"). */
 
 /** Variables no child of a job may inherit: API keys and CI tokens (the lane runs on the subscription; gh acts as the operator), and every credential the worker itself reaches the board or relay with. */
-export const JOB_ENV_STRIPPED = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RELAY_TOKEN", "RELAY_SITE", "RELAY_HOME", "BOARD_TOKEN", "BOARD_URL", "BOARD_PROFILE", "VERCEL_TOKEN", "VERCEL_AUTH_TOKEN", "VERCEL_OIDC_TOKEN"] as const;
+export const JOB_ENV_STRIPPED = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RELAY_TOKEN", "RELAY_SITE", "RELAY_HOME", "BOARD_TOKEN", "BOARD_URL", "BOARD_PROFILE", "VERCEL_TOKEN", "VERCEL_AUTH_TOKEN", "VERCEL_OIDC_TOKEN", "RELAY_GATEWAY_URL", "RELAY_GATEWAY_TOKEN"] as const;
 
 /**
  * The environment a job runs with. No API key or CI token may shadow the machine's logins (the lane runs on the

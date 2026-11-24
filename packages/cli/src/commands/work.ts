@@ -38,6 +38,8 @@ import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.
 interface WorkOptions {
   once?: boolean;
   task?: string;
+  billing?: string;
+  cap?: string;
   lanes?: string;
   jobs: string;
   name?: string;
@@ -231,6 +233,8 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     .enablePositionalOptions()
     .option("--once", "drain the queue once, then exit")
     .option("--task <id>", "run this one task and exit (what a sandbox started for an approved task does)")
+    .option("--billing <how>", "subscription (this machine's logins, the default) or gateway: paid credits through the model gateway named by RELAY_GATEWAY_URL and RELAY_GATEWAY_TOKEN, for a sandbox run a person approved; claude lane only")
+    .option("--cap <usd>", "with --billing gateway: the most the run may spend, in US dollars")
     .option("--lanes <list>", "force the lanes to serve (default: detected from logins), e.g. claude,codex")
     .option("--jobs <n>", "concurrent jobs (the lanes still serialize per vendor login)", "1")
     .option("--name <name>", "worker name (default: this host's short name)")
@@ -249,7 +253,21 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
       const isolation = isolationOf(o.isolation);
       if (o.install || o.uninstall) return isolation === "container" ? containerInstallOrRemove(o) : installOrRemove(o);
       if (isolation === "container") return containerForeground();
-      const lanes = o.lanes ? list(o.lanes) : undefined;
+      // a paid run: the gateway's address and credential come from the environment of whoever started this worker for
+      // one approved task, never from a flag, and only the claude lane has a gateway adapter
+      const billing = o.billing ?? "subscription";
+      if (billing !== "subscription" && billing !== "gateway") throw new Error("--billing is subscription or gateway");
+      const cap = o.cap === undefined ? undefined : Number(o.cap);
+      let gateway: { baseUrl: string; token: string } | undefined;
+      if (billing === "gateway") {
+        if (!o.task) throw new Error("--billing gateway runs one approved task: pass --task <id>");
+        if (!(cap !== undefined && Number.isFinite(cap) && cap > 0)) throw new Error("--billing gateway needs --cap <usd>: the most the run may spend");
+        const baseUrl = process.env.RELAY_GATEWAY_URL?.trim();
+        const token = process.env.RELAY_GATEWAY_TOKEN?.trim();
+        if (!baseUrl || !token) throw new Error("--billing gateway needs RELAY_GATEWAY_URL and RELAY_GATEWAY_TOKEN in the environment");
+        gateway = { baseUrl, token };
+      }
+      const lanes = gateway ? ["claude"] : o.lanes ? list(o.lanes) : undefined;
       if (lanes) assertBuiltinLanes(lanes);
       const jobs = Math.max(1, Number(o.jobs) || 1);
       const inside = inContainer();
@@ -306,7 +324,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), brief: memoryBrief, sandbox, secrets: vercelSecrets() },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox, ...(gateway ? { gateway, budgetUsd: cap! } : {}) }), ...(gateway ? { billing: "gateway" as const } : { brief: memoryBrief }), sandbox, secrets: vercelSecrets() },
         });
         const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
         const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("eval") ? [`${count("eval")} waiting for an eval`] : []), ...(count("done") ? [`${count("done")} step task${count("done") === 1 ? "" : "s"} done`] : []), ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];

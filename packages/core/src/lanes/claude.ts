@@ -41,6 +41,12 @@ export interface ClaudeOptions {
    * cannot sandbox fails (`failIfUnavailable`) and `error` starts with `SANDBOX_UNAVAILABLE`.
    */
   sandbox?: boolean | SandboxOptions;
+  /**
+   * Run on paid credits through a model gateway instead of the machine's subscription login: the one case where the
+   * CLI is handed a credential, and only because the caller said so (a sandbox started for a task whose spend a
+   * person approved). The result's `subscription` is then `gateway`.
+   */
+  gateway?: { baseUrl: string; token: string };
 }
 
 interface ClaudeJson {
@@ -157,6 +163,10 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     // the lane must run on the subscription, never on a stray API key
     delete env["ANTHROPIC_API_KEY"];
     delete env["ANTHROPIC_AUTH_TOKEN"];
+    if (opts.gateway) {
+      env["ANTHROPIC_BASE_URL"] = opts.gateway.baseUrl;
+      env["ANTHROPIC_AUTH_TOKEN"] = opts.gateway.token;
+    }
     let cwd = req.cwd;
     let scratch: string | undefined;
     if (utility) {
@@ -189,12 +199,12 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
       ok,
       text: j?.result ?? "",
       model,
-      subscription: "max",
+      subscription: opts.gateway ? "gateway" : "max",
       tokensIn,
       tokensOut,
       cacheRead,
       cacheWrite,
-      costEquiv: costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
+      costEquiv: costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: opts.gateway ? "gateway" : "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
       durationMs,
       raw: j ?? { stdout: stdout.slice(0, 2000), stderr: stderr.slice(0, 2000), code },
     };
