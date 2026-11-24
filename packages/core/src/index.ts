@@ -33,3 +33,4 @@ export * from "./rules/owned-section.ts";
 export * from "./hooks/index.ts";
 export * from "./memory/capture.ts";
 export * from "./steps/profile.ts";
+export * from "./adopt/index.ts";
