@@ -36,3 +36,4 @@ export * from "./steps/profile.ts";
 export * from "./steps/check.ts";
 export * from "./lead/client.ts";
 export * from "./adopt/index.ts";
+export * from "./cloud/index.ts";
