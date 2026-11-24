@@ -205,6 +205,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.32.2
         version: 1.32.2(zod@4.6.7)
+      '@relay/mcp':
+        specifier: workspace:*
+        version: link:../../packages/mcp
       '@types/node':
         specifier: ^26.6.6
         version: 26.6.6
@@ -229,9 +232,6 @@ importers:
       '@vercel/board':
         specifier: ^0.52.0
         version: 0.52.0
-      '@vercel/oidc':
-        specifier: ^4.0.9
-        version: 4.0.9
       '@vercel/sandbox':
         specifier: ^4.1.0
         version: 4.1.0

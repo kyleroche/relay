@@ -52,7 +52,12 @@ export const ALL_SCOPES: TokenScope[] = [...TOKEN_SCOPES];
 /** What an unauthenticated caller gets when the deployment allows public read. */
 export const PUBLIC_READ_SCOPES: TokenScope[] = ["feed:read", "memory:read"];
 
-/** Tool names with the scope each needs (null = always public). The web app's server card is built from this. */
+/**
+ * Tool names with the scope each needs (null = always public). This table is what the server enforces: every tool's
+ * gate reads its scope from here, and the web app's server card is built from it. Deciding a task (approve, close)
+ * is `tasks:decide`, apart from `tasks:write` (open, send back, requeue), so a bot that opens work can be given a
+ * token that cannot settle any.
+ */
 export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; description: string }> = [
   { name: "relay_get_info", scope: null, description: "Describe this relay deployment: name, version, data mode, projects and links. Public." },
   { name: "relay_get_methodology", scope: null, description: "The five rules and a task's life, as plain text, for briefing another agent. Public." },
@@ -73,10 +78,10 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_task_create", scope: "tasks:write", description: "Open a task: a thread in the project's queue on the team's Vercel Board, labelled with its lane (and model). Returns task_id (the board's message ID) and its state. Refused for a lane that is neither built in nor served by a worker. Idempotent on idempotency_key." },
   { name: "relay_task_get", scope: "tasks:read", description: "One task by ID with its state: waiting (a task it needs has not completed), queued, running, review (a pull request or outputs wait for a decision), held (the injection gate flagged the text), blocked (held for another reason, such as an eval looking at it), done, failed or closed. Plus the lane, model, pull request, the hold and its reason, who holds the claim, the last result, usage rows and the latest notes in its thread." },
   { name: "relay_task_list", scope: "tasks:read", description: "Tasks on the board, oldest first; filter by project and state. Default state=open (everything not done or closed). state=review is what waits for a decision; state=held is what the injection gate stopped and a person should read." },
-  { name: "relay_task_approve", scope: "tasks:write", description: "Approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task (or, for a task whose deliverable is its attached outputs, completes it). Only the pull request the runner's hold names is merged, and only when its branch is the task's own. A bot never approves a task it opened. GitHub's refusal comes back as an error and the task stays in review." },
+  { name: "relay_task_approve", scope: "tasks:decide", description: "Approve a task in review: relay squash-merges its pull request through GitHub, deletes the branch and completes the task (or, for a task whose deliverable is its attached outputs, completes it). Only the pull request the runner's hold names is merged, and only when its branch is the task's own. A bot never approves a task it opened. GitHub's refusal comes back as an error and the task stays in review." },
   { name: "relay_task_request_changes", scope: "tasks:write", description: "Send a task in review back with a note: the note goes in the task's thread and as a comment on the pull request, and the task is queued; the next run reads the note and pushes to the same pull request." },
   { name: "relay_task_release", scope: "tokens:write", description: "Release a task the injection gate held (state held) for the text as it stands: the task is queued and the gate does not grade that text again; anything added later is graded. Only for text a person has read and judged safe. A bot needs tokens:write and never releases a task whose text it wrote any part of (the task itself, or a note in its thread)." },
-  { name: "relay_task_close", scope: "tasks:write", description: "Close a task without a merge from any state but done or closed: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub (best effort). For a task opened by mistake, against a spec the repo does not match, or a duplicate." },
+  { name: "relay_task_close", scope: "tasks:decide", description: "Close a task without a merge from any state but done or closed: canceled on the board with the reason, which also stops a run in progress; its open pull request and branch and the issue it answers are closed on GitHub (best effort). For a task opened by mistake, against a spec the repo does not match, or a duplicate." },
   { name: "relay_task_requeue", scope: "tasks:write", description: "Put a failed, held or blocked task back in the queue, optionally on another lane or model; the next run starts over from the base branch. A running task is refused with who holds it; relay_task_close stops a run." },
   { name: "relay_event_log", scope: "events:write", description: "Log an external.* event in the feed (a bot's own note). The actor is always bot:<token name>; the client cannot choose it." },
   { name: "relay_whoami", scope: null, description: "Who this connection is: token name, granted scopes, expiry and how it authenticated. Public; anonymous callers learn how to get access." },
@@ -85,6 +90,8 @@ export const TOOL_SCOPES: Array<{ name: string; scope: TokenScope | null; descri
   { name: "relay_invite_create", scope: "tokens:write", description: "Mint an invite code for an agent or machine trusted in advance: a name, scopes, optional expiry (24h default) and uses (1 default). The code is returned once; redeeming it needs no approval. A bot can invite only to scopes it holds itself, and never tokens:write." },
   { name: "relay_invite_revoke", scope: "tokens:write", description: "Revoke a live invite by id or name; an unredeemed code stops working at once." },
 ];
+
+const TOOL_SCOPE = new Map(TOOL_SCOPES.map((t) => [t.name, t.scope]));
 
 /** Description lookup by tool name, so new tools do not depend on their position in TOOL_SCOPES. */
 export const toolDescription = (name: string): string => TOOL_SCOPES.find((t) => t.name === name)?.description ?? name;
@@ -229,14 +236,18 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   };
   const anonymous = !opts.canWrite && !opts.scopes?.length;
   const hint = anonymous && (opts.accessHint || opts.authorizationServer) ? ` ${opts.accessHint ?? `Get one through the authorization server: ${opts.authorizationServer}`}` : "";
-  const gate = (scope: TokenScope, tool: string) =>
-    granted.has(scope)
-      ? undefined
-      : fail(
-          scope === "memory:write" && !opts.scopes
-            ? `relay: writes need a bearer token with memory:write; this connection is read-only`
-            : `relay: ${tool} needs a bearer token with the ${scope} scope.${hint}`,
-        );
+  /** Undefined when this connection may call the tool; otherwise the refusal. The scope is the tool's row in TOOL_SCOPES. */
+  const gate = (tool: string) => {
+    const scope = TOOL_SCOPE.get(tool);
+    // a gated tool without a row has no scope that could grant it
+    if (!scope) return fail(`relay: ${tool} is not in this server's scope table and is refused.`);
+    if (granted.has(scope)) return undefined;
+    return fail(
+      scope === "memory:write" && !opts.scopes
+        ? `relay: writes need a bearer token with memory:write; this connection is read-only`
+        : `relay: ${tool} needs a bearer token with the ${scope} scope.${hint}`,
+    );
+  };
   const assetsHooks = opts.assets;
   const viewUrl = async (key: string | null, ttl?: number): Promise<string | null> => {
     if (!key || !assetsHooks) return null;
@@ -282,7 +293,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async (args) => {
-      const g = gate("feed:read", "relay_get_feed");
+      const g = gate("relay_get_feed");
       if (g) return g;
       const limit = args.limit ?? 50;
       if (opts.site?.feed) return json(await opts.site.feed({ ...args, limit }));
@@ -295,7 +306,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_get_project",
     { title: "Read a project", description: TOOL_SCOPES[3]!.description, inputSchema: { slug: z.string().min(1) } },
     async ({ slug }) => {
-      const g = gate("feed:read", "relay_get_project");
+      const g = gate("relay_get_project");
       if (g) return g;
       if (opts.site?.project) {
         const p = await opts.site.project(slug);
@@ -317,7 +328,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { query: z.string().describe("what you are about to do"), project: z.string().optional().describe("project slug; omit for global only") },
     },
     async ({ query, project }) => {
-      const g = gate("memory:read", "relay_recall");
+      const g = gate("relay_recall");
       if (g) return g;
       const parts: string[] = [];
       if (project) {
@@ -348,7 +359,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ text: t, project, source, supersedes_id, source_ref }) => {
-      const g = gate("memory:write", "relay_decide");
+      const g = gate("relay_decide");
       if (g) return g;
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'; run relay link in that repo first`);
       const src = source ?? actor.replace(/^(agent|human):/, "");
@@ -373,7 +384,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ key, value, scope, scope_id, reason }) => {
-      const g = gate("memory:write", "relay_prefer");
+      const g = gate("relay_prefer");
       if (g) return g;
       if (scope !== "global" && !scope_id) return fail(`scope '${scope}' needs scope_id`);
       await repo.upsertPreference(db, { key, value, scope, scope_id: scope === "global" ? null : scope_id!, reason: reason ?? null });
@@ -390,7 +401,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { model: z.string().describe("model id, e.g. bytedance/seedance-2.5"), query: z.string(), k: z.number().int().min(1).max(12).optional() },
     },
     async ({ model, query, k }) => {
-      const g = gate("memory:read", "relay_guidance");
+      const g = gate("relay_guidance");
       if (g) return g;
       const m = await repo.getModel(db, model);
       if (!m) return fail(`unknown model '${model}'`);
@@ -413,7 +424,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { project: z.string(), intent: z.string(), model: z.string().optional(), max_tokens: z.number().int().min(200).max(RESULT_TOKENS).optional() },
     },
     async ({ project, intent, model, max_tokens }) => {
-      const g = gate("memory:read", "relay_brief");
+      const g = gate("relay_brief");
       if (g) return g;
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'`);
       const b = await compileBrief(db, { project, intent, maxTokens: max_tokens ?? BRIEF_TOKENS, ...(model ? { model } : {}), ...(embed ? { embed } : {}) });
@@ -428,7 +439,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { project: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), kind: z.string().optional().describe("exact kind or a prefix ending in '.'") },
     },
     async ({ project, limit, kind }) => {
-      const g = gate("memory:read", "relay_feed");
+      const g = gate("relay_feed");
       if (g) return g;
       const rows = await repo.listEvents(db, { ...(project ? { project } : {}), ...(kind ? { kind } : {}), limit: limit ?? 25 });
       if (!rows.length) return text("No events.");
@@ -437,7 +448,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   );
 
   server.registerTool("relay_project", { description: TOOL_SCOPES[8]!.description, inputSchema: { slug: z.string() } }, async ({ slug }) => {
-    const g = gate("memory:read", "relay_project");
+    const g = gate("relay_project");
     if (g) return g;
     const p = await repo.getProject(db, slug);
     if (!p) {
@@ -468,7 +479,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async (args) => {
-      const g = gate("assets:read", "relay_asset_list");
+      const g = gate("relay_asset_list");
       if (g) return g;
       const rows = await repo.listAssets(db, { ...args, limit: args.limit ?? 50 });
       return json({ assets: rows.map(publicAsset), count: rows.length });
@@ -479,7 +490,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_asset_get",
     { description: TOOL_SCOPES[12]!.description, inputSchema: { id: z.string().min(1) } },
     async ({ id }) => {
-      const g = gate("assets:read", "relay_asset_get");
+      const g = gate("relay_asset_get");
       if (g) return g;
       const a = await repo.getAsset(db, id);
       if (!a) return fail(`asset ${id} not found`);
@@ -501,7 +512,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ project, filename, content_type, ttl }) => {
-      const g = gate("assets:write", "relay_asset_request_upload");
+      const g = gate("relay_asset_request_upload");
       if (g) return g;
       if (!assetsHooks) return noStore();
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'`);
@@ -539,7 +550,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ key, project, issue, pr, title, description, replaces, tags }) => {
-      const g = gate("assets:write", "relay_asset_finalize");
+      const g = gate("relay_asset_finalize");
       if (g) return g;
       if (!assetsHooks) return noStore();
       try {
@@ -564,7 +575,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ id, decision, note }) => {
-      const g = gate("assets:review", "relay_asset_review");
+      const g = gate("relay_asset_review");
       if (g) return g;
       const text = note?.trim() || null;
       if (decision === "rejected" && !text) return fail("relay: a rejection needs a note; it becomes the decision the next attempt reads");
@@ -607,8 +618,8 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     created_at: t.created_at,
   });
   /** One task tool: the scope gate, the board, and a refusal as one line. */
-  const taskTool = async (scope: TokenScope, tool: string, run: (desk: board.Desk) => Promise<ReturnType<typeof json>>) => {
-    const g = gate(scope, tool);
+  const taskTool = async (tool: string, run: (desk: board.Desk) => Promise<ReturnType<typeof json>>) => {
+    const g = gate(tool);
     if (g) return g;
     if (!opts.board) return fail(NO_BOARD);
     try {
@@ -636,7 +647,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     (args) =>
-      taskTool("tasks:write", "relay_task_create", async (desk) => {
+      taskTool("relay_task_create", async (desk) => {
         const project = await repo.getProject(db, args.project);
         if (!project) throw new board.TaskError(`no project '${args.project}'; relay_get_project lists the ones this relay knows`, 404);
         if (!project.repo) throw new board.TaskError(`project '${args.project}' has no repository to work in (relay project add ${args.project} --repo owner/name)`, 400);
@@ -661,7 +672,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   );
 
   server.registerTool("relay_task_get", { title: "Read a task", description: toolDescription("relay_task_get"), inputSchema: { task_id: TASK_ID } }, ({ task_id }) =>
-    taskTool("tasks:read", "relay_task_get", async (desk) => {
+    taskTool("relay_task_get", async (desk) => {
       const d = await board.getTask(desk.session.board, task_id.trim(), { trusted: desk.session.from });
       const results = d.thread.replies.filter((m) => !m.deleted && m.labels?.relay === board.RELAY_MESSAGE.result);
       return json({ ...taskView(d.task), body: d.task.body, last_result: results.length ? board.withoutBlocks(results.at(-1)!.text) : null, usage: d.usage, notes: d.notes.slice(-10) });
@@ -676,14 +687,14 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { project: z.string().optional(), state: z.enum(["open", "all", ...board.RELAY_STATES] as [string, ...string[]]).optional().describe("default open: everything not done or closed"), limit: z.number().int().min(1).max(200).optional() },
     },
     ({ project, state, limit }) =>
-      taskTool("tasks:read", "relay_task_list", async (desk) => {
+      taskTool("relay_task_list", async (desk) => {
         const rows = await board.listTasks(desk.session.board, { ...(project ? { project } : {}), state: (state ?? "open") as board.RelayState | "open" | "all", limit: limit ?? 50 });
         return json({ tasks: rows.map(taskView), count: rows.length });
       }),
   );
 
   server.registerTool("relay_task_approve", { title: "Approve and merge a task", description: toolDescription("relay_task_approve"), inputSchema: { id: TASK_ID } }, ({ id }) =>
-    taskTool("tasks:write", "relay_task_approve", async (desk) => {
+    taskTool("relay_task_approve", async (desk) => {
       const r = await board.approveFor(desk, opts.github, id.trim());
       return json({ ...taskView(r.task), pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted });
     }),
@@ -693,7 +704,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_task_request_changes",
     { title: "Request changes on a task", description: toolDescription("relay_task_request_changes"), inputSchema: { id: TASK_ID, note: z.string().min(1).max(6000).describe("what should change; written for the model that will address it") } },
     ({ id, note }) =>
-      taskTool("tasks:write", "relay_task_request_changes", async (desk) => {
+      taskTool("relay_task_request_changes", async (desk) => {
         const t = await board.requestChangesFor(desk, opts.github, id.trim(), note);
         return json({ ...taskView(t), next: "the next worker that serves the lane runs it again with the note in the thread and pushes to the same pull request" });
       }),
@@ -707,7 +718,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       inputSchema: { id: TASK_ID, lane: LANE.optional().describe("move the task to this lane; omitted keeps the lane it has"), model: z.string().min(1).max(100).optional().describe("ask for this model; omitted keeps what it has") },
     },
     ({ id, lane, model }) =>
-      taskTool("tasks:write", "relay_task_requeue", async (desk) => {
+      taskTool("relay_task_requeue", async (desk) => {
         const t = await board.requeueFor(desk, id.trim(), { ...(lane ? { lane } : {}), ...(model ? { model } : {}) });
         return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it and starts over from the base branch" });
       }),
@@ -717,14 +728,14 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
     "relay_task_close",
     { title: "Close a task", description: toolDescription("relay_task_close"), inputSchema: { id: TASK_ID, reason: z.string().max(900).optional().describe("why; it is the task's closing reason and a comment on its pull request and issue") } },
     ({ id, reason }) =>
-      taskTool("tasks:write", "relay_task_close", async (desk) => {
+      taskTool("relay_task_close", async (desk) => {
         const r = await board.closeFor(desk, opts.github, id.trim(), reason);
         return json({ ...taskView(r.task), github: r.github, canceled: r.canceled, to_review: r.to_review });
       }),
   );
 
   server.registerTool("relay_task_release", { title: "Release a held task", description: toolDescription("relay_task_release"), inputSchema: { id: TASK_ID } }, ({ id }) =>
-    taskTool("tokens:write", "relay_task_release", async (desk) => {
+    taskTool("relay_task_release", async (desk) => {
       const t = await board.releaseFor(desk, id.trim());
       return json({ ...taskView(t), next: "the next idle worker that serves the lane claims it; the gate is not run again on the text as it stands now, and is on anything added later" });
     }),
@@ -762,7 +773,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   };
 
   server.registerTool("relay_access_list", { title: "Pending access requests", description: toolDescription("relay_access_list"), inputSchema: {} }, async () => {
-    const g = gate("tokens:write", "relay_access_list");
+    const g = gate("relay_access_list");
     if (g) return g;
     const rows = await listRecentAccess(db, oauth);
     const pending = rows.filter((r) => r.state === "pending").map(accessView);
@@ -786,7 +797,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ user_code, decision }) => {
-      const g = gate("tokens:write", "relay_access_approve");
+      const g = gate("relay_access_approve");
       if (g) return g;
       try {
         const row = await decideDeviceRequest(db, user_code, decision ?? "approve", externalActor(actor), oauth, [...granted]);
@@ -817,7 +828,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ name, scopes, expires_in, uses }) => {
-      const g = gate("tokens:write", "relay_invite_create");
+      const g = gate("relay_invite_create");
       if (g) return g;
       const ttl = expires_in === undefined ? undefined : parseDuration(expires_in);
       if (expires_in !== undefined && !ttl) return fail("relay: expires_in must be a duration like 24h, 7d, or a number of seconds.");
@@ -838,7 +849,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
   );
 
   server.registerTool("relay_invite_revoke", { title: "Revoke an invite", description: toolDescription("relay_invite_revoke"), inputSchema: { id_or_name: z.string().min(1).describe("the invite's id or the name it was created for") } }, async ({ id_or_name }) => {
-    const g = gate("tokens:write", "relay_invite_revoke");
+    const g = gate("relay_invite_revoke");
     if (g) return g;
     const row = await revokeInvite(db, id_or_name.trim(), externalActor(actor), oauth);
     return row ? json({ revoked: row }) : fail(`relay: no live invite matches '${id_or_name}'; it may be spent, expired or already revoked.`);
@@ -859,7 +870,7 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
       },
     },
     async ({ kind, project, summary, url, cost_equiv, source }) => {
-      const g = gate("events:write", "relay_event_log");
+      const g = gate("relay_event_log");
       if (g) return g;
       if (project && !(await repo.getProject(db, project))) return fail(`relay: unknown project '${project}'`);
       const row = await repo.writeEvent(db, { kind, actor: externalActor(actor), project: project ?? null, summary, url: url ?? null, cost_equiv: cost_equiv ?? 0, payload: source ? { source } : {} });

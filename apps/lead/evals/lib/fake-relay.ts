@@ -8,8 +8,9 @@
  *
  * It is built on the same MCP server library and the same stateless transport as relay's own `/mcp`, so the lead's
  * connection speaks to it exactly as it will to a site. It also publishes the tools the lead must never reach
- * (approve, release, close): the allowlist in `agent/connections/relay.ts` is what keeps them from the model, and an
- * eval can prove no call arrived.
+ * (approve, release, close, and the two that write standing memory): the allowlist in `agent/connections/relay.ts`
+ * keeps them from the model, and an eval can prove no call arrived. A real relay also refuses them to the lead's
+ * token, which lacks their scopes; this fake has one token and no scopes, so here the allowlist stands alone.
  */
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
@@ -94,7 +95,6 @@ export async function startFakeRelay(): Promise<FakeRelay> {
     tool("relay_brief", "The compiled brief for a project and intent.", { project: z.string(), intent: z.string(), model: z.string().optional(), max_tokens: z.number().int().optional() }, () => text("Memory is empty for this project."));
     tool("relay_project", "A project's record: repo, path, stack, check command, summary and memory counts.", { slug: z.string() }, ({ slug }) => text(`slug: ${slug}\nrepo: example/${slug}\nstack: typescript\ncheck: pnpm test\ndecisions: 0 current\npreferences: 0 at project scope`));
     tool("relay_get_project", "One project by slug with current decisions, models and recent events.", { slug: z.string().min(1) }, ({ slug }) => json({ slug, repo: `example/${slug}`, check_cmd: "pnpm test", decisions: [], events: [] }));
-    tool("relay_decide", "Record a durable decision for a project.", { text: z.string().min(8), project: z.string(), source: z.string().optional(), supersedes_id: z.number().int().optional() }, () => text("recorded decision #1"));
     tool("relay_feed", "Recent feed events as compact lines, newest first.", { project: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), kind: z.string().optional() }, ({ project, kind, limit }) => {
       const rows = feed
         .filter((e) => (!project || e.project === project) && (!kind || (kind.endsWith(".") ? e.kind.startsWith(kind) : e.kind === kind)))
@@ -146,6 +146,9 @@ export async function startFakeRelay(): Promise<FakeRelay> {
     for (const name of ["relay_task_approve", "relay_task_release", "relay_task_close"] as const) {
       tool(name, "A person's decision on a task.", { id: z.string().min(1), reason: z.string().optional() }, () => fail(`relay: ${name} is not the lead's to call`));
     }
+    // Standing memory: what these write is in every later brief. The lead reads memory and never writes it.
+    tool("relay_decide", "Record a durable decision for a project.", { text: z.string().min(8), project: z.string(), source: z.string().optional(), supersedes_id: z.number().int().optional() }, () => fail("relay: relay_decide is not the lead's to call"));
+    tool("relay_prefer", "Set a preference (key = value) at a scope: global, project, lane or model.", { key: z.string().min(1), value: z.string(), scope: z.string(), scope_id: z.string().optional(), reason: z.string().optional() }, () => fail("relay: relay_prefer is not the lead's to call"));
     return server;
   };
 

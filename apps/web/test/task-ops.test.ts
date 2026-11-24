@@ -8,7 +8,7 @@ import { approveFor, closeFor, openTaskFor, releaseFor, requestChangesFor, reque
 
 const person: Asker = { actor: "human:kyle" };
 const bot: Asker = { actor: "bot:concierge", scopes: ["tasks:read", "tasks:write"] };
-const chief: Asker = { actor: "bot:chief", scopes: ["tasks:write", "tokens:write"] };
+const chief: Asker = { actor: "bot:chief", scopes: ["tasks:write", "tasks:decide", "tokens:write"] };
 
 let db: Db;
 let session: board.BoardSession;
@@ -93,7 +93,7 @@ describe("a bot and its own work", () => {
     expect(await refusal(releaseFor(session, person, "no-such-task"))).toMatchObject({ status: 404 });
   });
 
-  it("never approves a task it opened; another bot with tasks:write approves its outputs", async () => {
+  it("never approves a task it opened; another bot, one whose token the route let through with tasks:decide, approves its outputs", async () => {
     const opened = await openTaskFor(db, session, bot, { project: "demo", title: "Render the poster", lane: "claude" });
     const id = opened.task.id;
     const runner = session.board.as(board.actorProfile("bot:runner"));

@@ -65,10 +65,20 @@ export async function openFor(desk: Desk, input: OpenTaskInput, opts: { brief?: 
   return openServedTask(desk.words, input, opts.brief ? { beforeReady: briefBeforeReady(desk.session, opts.brief) } : {});
 }
 
+/**
+ * Approving and closing end a task, and a token ends one only with `tasks:decide`. The API route and the MCP gate
+ * check the scope before they get here; the desk checks it again, so a surface added later cannot forget to.
+ */
+function mayDecide(desk: Desk, what: "approve" | "close", id: string): void {
+  const asker = desk.asker;
+  if (isBot(asker) && asker.scopes && !asker.scopes.includes("tasks:decide")) throw new TaskError(`${asker.actor} cannot ${what} ${id}: its token lacks tasks:decide. A signed-in person, or a bot whose token holds that scope, decides.`, 403);
+}
+
 /** Approve a task in review: merge its pull request (or accept its outputs) and complete it. */
 export async function approveFor(desk: Desk, github: GitHubClient | undefined, id: string): Promise<ApproveResult> {
+  mayDecide(desk, "approve", id);
   if (isBot(desk.asker) && writtenAs((await desk.session.board.thread(id.trim())).message, desk.asker.actor)) {
-    throw new TaskError(`${desk.asker.actor} opened ${id} and cannot approve it: a bot never approves its own work. A signed-in person, or another bot with tasks:write, decides.`, 403);
+    throw new TaskError(`${desk.asker.actor} opened ${id} and cannot approve it: a bot never approves its own work. A signed-in person, or another bot with tasks:decide, decides.`, 403);
   }
   return approveTask(desk.words, github, id, { ...(desk.asker ? { by: desk.asker.actor } : {}) });
 }
@@ -105,6 +115,7 @@ export function requeueFor(desk: Desk, id: string, opts: RequeueOptions = {}): P
   return requeueTask(desk.words, id, opts);
 }
 
-export function closeFor(desk: Desk, github: GitHubClient | undefined, id: string, reason?: string): Promise<CloseResult> {
+export async function closeFor(desk: Desk, github: GitHubClient | undefined, id: string, reason?: string): Promise<CloseResult> {
+  mayDecide(desk, "close", id);
   return closeTask(desk.words, github, id, { ...(reason ? { reason } : {}), own: desk.own });
 }

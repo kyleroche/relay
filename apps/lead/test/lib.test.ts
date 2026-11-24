@@ -1,19 +1,63 @@
 /** The lead's pure modules: what it may call, when relay counts as connected, who may wake it, and what a turn cost. */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { relayStatus } from "../agent/lib/relay-env.ts";
+import { TOOL_SCOPES } from "@relay/mcp";
+import { LEAD_WAKE_SIGNATURE_HEADER, LEAD_WAKE_TIMESTAMP_HEADER, signLeadWake } from "@relay/core/lead/client.ts";
+import wakeChannel from "../agent/channels/wake.ts";
+import { LEAD_SCOPES, relayStatus } from "../agent/lib/relay-env.ts";
 import { RELAY_TOOLS, RELAY_TOOLS_NEVER } from "../agent/lib/relay-tools.ts";
 import { turnSpend, usageEvent } from "../agent/lib/usage.ts";
-import { projectOfAddress, wakeAddress, wakeCallerProblem, wakeCallers, wakeMessage, WAKE_MARKER } from "../agent/lib/wake.ts";
+import { admitWake, MAX_WAKE_BYTES, projectOfAddress, wakeAddress, WAKE_CALLER, wakeMessage, WAKE_MARKER } from "../agent/lib/wake.ts";
 
+/**
+ * The lead's list against relay's own table of tools and the scope each needs (`TOOL_SCOPES`, which the server's
+ * gate reads). The list is what the lead offers its model; the token's scopes are what relay's server lets that
+ * token do if the list is ever wrong. These fail when a tool is renamed or re-scoped on the server, when a tool is
+ * added to the list without its scope (or a scope without a tool), and when a tool the lead must never reach comes
+ * within the token's scopes.
+ */
 describe("the relay tools the lead may call", () => {
-  it("are the twelve a planner needs, and nothing that decides, publishes or grants", () => {
-    expect([...RELAY_TOOLS].sort()).toEqual(
-      ["relay_brief", "relay_decide", "relay_event_log", "relay_feed", "relay_get_project", "relay_project", "relay_recall", "relay_task_create", "relay_task_get", "relay_task_list", "relay_task_request_changes", "relay_task_requeue"].sort(),
-    );
-    const allowed: readonly string[] = RELAY_TOOLS;
-    for (const never of RELAY_TOOLS_NEVER) expect(allowed).not.toContain(never);
-    // by shape too, so a tool added to relay later is not let in by a name nobody listed
-    expect(allowed.filter((t) => /approve|release|close|asset|token|invite|access/.test(t))).toEqual([]);
+  const serverScope = new Map(TOOL_SCOPES.map((t) => [t.name, t.scope]));
+  const held: readonly string[] = LEAD_SCOPES;
+  const allowed: readonly string[] = RELAY_TOOLS;
+
+  it("all exist on relay's server, each under a scope the lead's token carries", () => {
+    for (const tool of RELAY_TOOLS) {
+      expect(serverScope.has(tool), `${tool} is not a tool of relay's server`).toBe(true);
+      const scope = serverScope.get(tool);
+      // null is a public tool, which needs no scope
+      if (scope) expect(held, `${tool} needs ${scope}, which the lead's token does not carry`).toContain(scope);
+    }
+  });
+
+  it("need every scope the token carries, and none that decides, grants or writes memory", () => {
+    const needed = new Set(RELAY_TOOLS.map((t) => serverScope.get(t)).filter((s) => !!s));
+    expect([...needed].sort()).toEqual([...LEAD_SCOPES].sort());
+    for (const scope of ["tasks:decide", "tokens:write", "memory:write", "assets:read", "assets:write", "assets:review", "projects:write"]) expect(held).not.toContain(scope);
+  });
+
+  it("leave out every tool the lead must never have, and relay's server refuses each of those to the lead's token", () => {
+    for (const never of RELAY_TOOLS_NEVER) {
+      expect(allowed).not.toContain(never);
+      const scope = serverScope.get(never);
+      expect(scope, `${never} is not a scoped tool of relay's server`).toBeTruthy();
+      expect(held, `${never} needs ${scope}, which the lead's token must not carry`).not.toContain(scope);
+    }
+  });
+
+  it("leave the token nothing to reach beyond the list but reads", () => {
+    // what the server would let the token call if the list were bypassed: public tools and two more reads
+    const reachable = TOOL_SCOPES.filter((t) => t.scope === null || held.includes(t.scope)).map((t) => t.name);
+    expect(reachable.filter((t) => !allowed.includes(t)).sort()).toEqual(["relay_get_feed", "relay_get_info", "relay_get_methodology", "relay_guidance", "relay_whoami"]);
+  });
+
+  it("are the scopes the README and the instructions tell the operator and the model", () => {
+    const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    const readme = read("../README.md");
+    expect(readme).toContain(`\n${LEAD_SCOPES.join(",")}\n`);
+    expect(readme).toContain(`relay token create --name lead --scopes ${LEAD_SCOPES.join(",")}\n`);
+    const listed = /^- Your relay tools are these \w+ and no others: (.+)\.$/m.exec(read("../agent/instructions.md"))?.[1] ?? "";
+    expect([...listed.matchAll(/`(relay_[a-z_]+)`/g)].map((m) => m[1]).sort()).toEqual([...RELAY_TOOLS].sort());
   });
 });
 
@@ -34,28 +78,116 @@ describe("relayStatus", () => {
 });
 
 describe("who may wake the lead", () => {
-  it("names nobody until a team is set, then the site's production deployment", () => {
-    expect(wakeCallers({})).toEqual({ subjects: [] });
-    expect(wakeCallers({ RELAY_SITE_TEAM: "acme", RELAY_SITE_PROJECT: "relay-site" })).toEqual({ subjects: ["owner:acme:project:relay-site:environment:production"] });
-    expect(wakeCallers({ RELAY_SITE_TEAM: "acme" })).toEqual({ subjects: ["owner:acme:project:*:environment:production"] });
-    expect(wakeCallers({ RELAY_SITE_TEAM: "acme", RELAY_SITE_PROJECT_ID: "prj_site" })).toEqual({ subjects: ["owner:acme:project:*:environment:production"], projectId: "prj_site" });
+  const SECRET = "s".repeat(40);
+  const NOW = 1_800_000_000_000;
+  const env = { RELAY_LEAD_WAKE_SECRET: SECRET, RELAY_SITE: "https://relay.example.test", RELAY_TOKEN: "t" };
+  const body = { project: "site", task: { id: "msg_1", title: "Add dark mode", lane: "codex" }, event: { kind: "failed", cursor: "c_1", reason: "codex: rate limited" }, idempotencyKey: "relay-wake:c_1" };
+  const raw = JSON.stringify(body);
+  const seconds = (ms: number) => String(Math.floor(ms / 1000));
+  /** A wake request as the site sends it, with anything overridden: the secret it was signed with, when, and what arrived. */
+  const request = (over: { secret?: string; signedAt?: number; sent?: string; headers?: Record<string, string>; drop?: string[] } = {}) => {
+    const timestamp = seconds(over.signedAt ?? NOW);
+    const headers = new Headers({ "content-type": "application/json", [LEAD_WAKE_TIMESTAMP_HEADER]: timestamp, [LEAD_WAKE_SIGNATURE_HEADER]: signLeadWake(over.secret ?? SECRET, timestamp, raw), ...over.headers });
+    for (const name of over.drop ?? []) headers.delete(name);
+    return new Request("https://lead.example.test/relay/wake", { method: "POST", headers, body: over.sent ?? raw });
+  };
+
+  it("admits a request the site signed with the shared secret, and hands on the body relay defines", async () => {
+    expect(await admitWake(request(), env, NOW)).toEqual({ ok: true, body });
+    // the edge of the window, either way: a clock four minutes off is still the site
+    expect(await admitWake(request({ signedAt: NOW - 299_000 }), env, NOW)).toMatchObject({ ok: true });
+    expect(await admitWake(request({ signedAt: NOW + 299_000 }), env, NOW)).toMatchObject({ ok: true });
   });
 
-  it("fails closed on a value that would widen the pattern, and says which", () => {
-    expect(wakeCallers({ RELAY_SITE_TEAM: "*" })).toEqual({ subjects: [], problem: "RELAY_SITE_TEAM is not a Vercel team slug" });
-    expect(wakeCallers({ RELAY_SITE_TEAM: "acme", RELAY_SITE_PROJECT: "site:environment:preview" })).toEqual({ subjects: [], problem: "RELAY_SITE_PROJECT is not a Vercel project name" });
-    expect(wakeCallers({ RELAY_SITE_PROJECT: "relay-site" })).toMatchObject({ subjects: [], problem: expect.stringContaining("RELAY_SITE_TEAM") });
+  it("refuses a signature made with another secret, a body changed after signing, and a request with no signature", async () => {
+    const refused = { ok: false, status: 401, code: "wake_unauthorized" };
+    expect(await admitWake(request({ secret: "x".repeat(40) }), env, NOW)).toMatchObject(refused);
+    expect(await admitWake(request({ sent: raw.replace("msg_1", "msg_2") }), env, NOW)).toMatchObject(refused);
+    // the timestamp is signed too: moving it forward does not revive an old signature
+    expect(await admitWake(request({ signedAt: NOW - 3_600_000, headers: { [LEAD_WAKE_TIMESTAMP_HEADER]: seconds(NOW) } }), env, NOW)).toMatchObject(refused);
+    expect(await admitWake(request({ drop: [LEAD_WAKE_SIGNATURE_HEADER] }), env, NOW)).toMatchObject(refused);
+    expect(await admitWake(request({ drop: [LEAD_WAKE_TIMESTAMP_HEADER] }), env, NOW)).toMatchObject(refused);
+    expect(await admitWake(request({ headers: { [LEAD_WAKE_SIGNATURE_HEADER]: "sha256=00" } }), env, NOW)).toMatchObject(refused);
+    // a bearer token is not a way in: the route does not read one
+    expect(await admitWake(request({ drop: [LEAD_WAKE_SIGNATURE_HEADER, LEAD_WAKE_TIMESTAMP_HEADER], headers: { authorization: `Bearer ${SECRET}` } }), env, NOW)).toMatchObject(refused);
   });
 
-  it("holds a verified caller to the site's project ID when one is set", () => {
-    const caller = (attributes: Record<string, string>, authenticator = "oidc") => ({ attributes, authenticator, principalId: "p", principalType: "service" });
-    const pinned = { subjects: [], projectId: "prj_site" };
-    expect(wakeCallerProblem(caller({ project_id: "prj_site" }), pinned)).toBeUndefined();
-    expect(wakeCallerProblem(caller({ project_id: "prj_other" }), pinned)).toMatch(/not the relay site/);
-    // no claim to read is a refusal, never a pass
-    expect(wakeCallerProblem(caller({}), pinned)).toMatch(/not the relay site/);
-    expect(wakeCallerProblem(caller({}, "local-dev"), pinned)).toBeUndefined();
-    expect(wakeCallerProblem(caller({ project_id: "prj_other" }), { subjects: [] })).toBeUndefined();
+  it("refuses a correctly signed request whose timestamp is more than five minutes off, old or early", async () => {
+    for (const signedAt of [NOW - 301_000, NOW + 301_000, NOW - 86_400_000]) {
+      expect(await admitWake(request({ signedAt }), env, NOW)).toMatchObject({ ok: false, status: 401, code: "wake_unauthorized", error: expect.stringMatching(/5 minutes/) });
+    }
+  });
+
+  it("answers 503 to everyone while it has no secret, or one too short to trust", async () => {
+    const { RELAY_LEAD_WAKE_SECRET: _unset, ...without } = env;
+    expect(await admitWake(request(), without, NOW)).toMatchObject({ ok: false, status: 503, code: "wake_not_configured", error: expect.stringContaining("RELAY_LEAD_WAKE_SECRET is not set") });
+    const short = "s".repeat(31);
+    // signed with the very secret the lead holds: it is still refused, because the lead will not use it
+    expect(await admitWake(request({ secret: short }), { ...env, RELAY_LEAD_WAKE_SECRET: short }, NOW)).toMatchObject({ ok: false, status: 503, code: "wake_not_configured", error: expect.stringContaining("at least 32 characters") });
+  });
+
+  it("tells only a signed caller that relay is not connected, and refuses a body that is too large or not a wake-up", async () => {
+    const { RELAY_TOKEN: _unset, ...unconnected } = env;
+    expect(await admitWake(request(), unconnected, NOW)).toMatchObject({ ok: false, status: 503, code: "relay_not_connected", error: expect.stringContaining("RELAY_TOKEN") });
+    expect(await admitWake(request({ secret: "x".repeat(40) }), unconnected, NOW)).toMatchObject({ ok: false, status: 401 });
+
+    const big = JSON.stringify({ ...body, padding: "p".repeat(MAX_WAKE_BYTES) });
+    const signedBig = (sent: string) => {
+      const timestamp = seconds(NOW);
+      return new Request("https://lead.example.test/relay/wake", { method: "POST", headers: { [LEAD_WAKE_TIMESTAMP_HEADER]: timestamp, [LEAD_WAKE_SIGNATURE_HEADER]: signLeadWake(SECRET, timestamp, sent) }, body: sent });
+    };
+    expect(await admitWake(signedBig(big), env, NOW)).toMatchObject({ ok: false, status: 413 });
+    expect(await admitWake(signedBig("not json"), env, NOW)).toMatchObject({ ok: false, status: 400, code: "invalid_wake" });
+    expect(await admitWake(signedBig(JSON.stringify({ ...body, project: "Not A Slug" })), env, NOW)).toMatchObject({ ok: false, status: 400, error: expect.stringMatching(/project/) });
+  });
+});
+
+/** The route itself, with a session that records what it was sent in place of eve's. */
+describe("POST /relay/wake", () => {
+  const SECRET = "r".repeat(48);
+  const body = { project: "site", task: { id: "msg_1" }, event: { kind: "review", cursor: "c_7" }, idempotencyKey: "relay-wake:c_7" };
+  const route = wakeChannel.routes.find((r) => r.transport === "http" && r.method === "POST" && r.path === "/relay/wake");
+  type Handler = (request: Request, args: never) => Promise<Response>;
+
+  async function post(secretOnLead: string | undefined, signedWith: string) {
+    const sent: Array<{ address: string; message: unknown; options: unknown }> = [];
+    const args = { from: (address: string) => ({ send: async (message: unknown, options: unknown) => (sent.push({ address, message, options }), { sessionId: "wrun_1", deliveryId: "delivery_1" }) }) };
+    const raw = JSON.stringify(body);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const request = new Request("https://lead.example.test/relay/wake", { method: "POST", headers: { [LEAD_WAKE_TIMESTAMP_HEADER]: timestamp, [LEAD_WAKE_SIGNATURE_HEADER]: signLeadWake(signedWith, timestamp, raw) }, body: raw });
+    const before = { ...process.env };
+    Object.assign(process.env, { RELAY_SITE: "https://relay.example.test", RELAY_TOKEN: "t" });
+    if (secretOnLead === undefined) delete process.env.RELAY_LEAD_WAKE_SECRET;
+    else process.env.RELAY_LEAD_WAKE_SECRET = secretOnLead;
+    try {
+      const res = await (route!.handler as unknown as Handler)(request, args as never);
+      return { res, json: (await res.json()) as Record<string, unknown>, sent };
+    } finally {
+      for (const name of ["RELAY_SITE", "RELAY_TOKEN", "RELAY_LEAD_WAKE_SECRET"]) {
+        if (before[name] === undefined) delete process.env[name];
+        else process.env[name] = before[name];
+      }
+    }
+  }
+
+  it("starts one turn in the project's session for a signed wake-up, as the site and under the event's key", async () => {
+    expect(route).toBeDefined();
+    const { res, json, sent } = await post(SECRET, SECRET);
+    expect(res.status).toBe(202);
+    expect(json).toEqual({ ok: true, sessionId: "wrun_1", deliveryId: "delivery_1" });
+    expect(sent).toEqual([{ address: "project:site", message: wakeMessage(body as never), options: { auth: WAKE_CALLER, idempotencyKey: "relay-wake:c_7" } }]);
+    expect(WAKE_CALLER).toMatchObject({ principalType: "service", principalId: "relay-site" });
+  });
+
+  it("starts nothing for a wrong secret (401) or with no secret set on the lead (503)", async () => {
+    const wrong = await post(SECRET, "w".repeat(48));
+    expect(wrong.res.status).toBe(401);
+    expect(wrong.json).toMatchObject({ ok: false, code: "wake_unauthorized" });
+    expect(wrong.sent).toEqual([]);
+    const unset = await post(undefined, SECRET);
+    expect(unset.res.status).toBe(503);
+    expect(unset.json).toMatchObject({ ok: false, code: "wake_not_configured" });
+    expect(unset.sent).toEqual([]);
   });
 });
 

@@ -1,5 +1,5 @@
 import { board } from "@relay/core";
-import { api, callerGrant, json, problem } from "@/lib/api";
+import { api, callerGrant, json, problem, type Scope } from "@/lib/api";
 import { siteBoard } from "@/lib/board";
 import { needsDb, readJson, siteGitHub, str, writerActor } from "@/lib/integrations";
 import { approveFor, closeFor, releaseFor, requestChangesFor, requeueFor } from "@/lib/task-ops";
@@ -18,6 +18,14 @@ function parts(raw: string[]): { id: string; action: string | null } | undefined
   if (segs.length === 2 && ACTIONS.has(segs[1]!)) return { id: segs[0]!, action: segs[1]! };
   return undefined;
 }
+
+/**
+ * The scope each action needs. Settling a task (approve, close) is `tasks:decide`; sending one back or requeueing it
+ * is `tasks:write`, the scope that opens tasks, so a bot that opens work can hold a token that settles none. Release
+ * is `tokens:write`, as on the MCP server. A path that names no action is answered by the handler (400 or 405) once
+ * the caller has shown the scope that reads this far.
+ */
+const ACTION_SCOPE: Record<string, Scope> = { approve: "tasks:decide", close: "tasks:decide", "request-changes": "tasks:write", requeue: "tasks:write", release: "tokens:write" };
 
 const BAD_PATH = "The path is /api/v1/tasks/{id} or /api/v1/tasks/{id}/{approve|request-changes|requeue|close|release}, where id is the task's ID on the board.";
 
@@ -41,8 +49,10 @@ export const GET = api<Ctx>(
  * operationId: approveTask (`…/approve`), requestTaskChanges (`…/request-changes`, `{ "note" }`), requeueTask
  * (`…/requeue`, `{ "lane"?, "model"? }`; `"model": null` goes back to the lane's default), closeTask (`…/close`,
  * `{ "reason"? }`) and releaseTask (`…/release`). Each is the board's own task function (packages/core/src/board/
- * tasks.ts), made as the caller's profile, and answers with the updated task. A signed-in person is unrestricted; a
- * token needs `tasks:write`, and to release needs `tokens:write` and must not have opened the task (lib/task-ops.ts).
+ * tasks.ts), made as the caller's profile, and answers with the updated task. A signed-in person is unrestricted. A
+ * token needs `tasks:decide` to approve or close and never approves a task it opened, `tasks:write` to send back or
+ * requeue, and `tokens:write` to release, never a task whose text it wrote any part of (`ACTION_SCOPE` above; the
+ * rules about whose work it is are core's desk, through lib/task-ops.ts).
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
@@ -78,5 +88,5 @@ export const POST = api<Ctx>(
       return taskProblem(e, instance);
     }
   },
-  { scope: "tasks:write" },
+  { scope: async (_req, ctx) => ACTION_SCOPE[parts((await ctx.params).id)?.action ?? ""] ?? "tasks:write" },
 );

@@ -82,7 +82,7 @@ describe("classifyRoute", () => {
     expect(classifyRoute("/api/v1/access/RLAY-4F7Q/approve", { hasBearer: false, publicRead: false, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/invites", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/whoami", { hasBearer: true, publicRead: false })).toBe("public");
-    // approving a task: a tasks:write bearer, or the signed-in person
+    // approving a task: a tasks:decide bearer, or the signed-in person
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/approve", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/request-changes", { hasBearer: false, publicRead: true, method: "POST" })).toBe("session");
     expect(classifyRoute("/api/v1/tasks/acme/site%2342/requeue", { hasBearer: true, publicRead: false, method: "POST" })).toBe("public");

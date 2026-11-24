@@ -154,8 +154,12 @@ export async function requireScope(req: Request, scope: Scope, instance: string,
 
 type Handler<C> = (req: NextRequest, ctx: C, rate: RateState) => Promise<NextResponse> | NextResponse;
 
-/** Wrap a route handler: rate limit, uniform headers, errors as problem+json. */
-export function api<C>(handler: Handler<C>, opts: { scope?: Scope } = {}) {
+/**
+ * Wrap a route handler: rate limit, uniform headers, errors as problem+json. `scope` is the scope the route needs, or
+ * a function of the request for a route whose path names the action (a task's approve and close need another scope
+ * than its requeue); either way it is checked before the handler runs.
+ */
+export function api<C>(handler: Handler<C>, opts: { scope?: Scope | ((req: NextRequest, ctx: C) => Scope | Promise<Scope>) } = {}) {
   return async (req: NextRequest, ctx: C): Promise<NextResponse> => {
     const instance = new URL(req.url).pathname;
     const rate = takeToken(clientKey(req));
@@ -165,11 +169,12 @@ export function api<C>(handler: Handler<C>, opts: { scope?: Scope } = {}) {
         "Retry-After": String(rate.resetSeconds),
       });
     }
-    if (opts.scope) {
-      const denied = await requireScope(req, opts.scope, instance, rate);
-      if (denied) return denied;
-    }
     try {
+      if (opts.scope) {
+        const scope = typeof opts.scope === "function" ? await opts.scope(req, ctx) : opts.scope;
+        const denied = await requireScope(req, scope, instance, rate);
+        if (denied) return denied;
+      }
       const res = await handler(req, ctx, rate);
       for (const [k, v] of Object.entries(rateHeaders(rate))) res.headers.set(k, v);
       if (!res.headers.has("cache-control")) res.headers.set("cache-control", "no-store");

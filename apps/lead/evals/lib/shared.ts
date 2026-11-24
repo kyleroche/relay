@@ -16,6 +16,8 @@ export const relay = {
   approve: qualified("relay_task_approve"),
   release: qualified("relay_task_release"),
   close: qualified("relay_task_close"),
+  decide: qualified("relay_decide"),
+  prefer: qualified("relay_prefer"),
 } as const;
 
 /** Everything the lead may call: its relay tools, `no_reply`, and eve's own catalog tools for finding and calling them. */

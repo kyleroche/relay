@@ -8,8 +8,13 @@ export type RelayStatus =
   /** `missing` names the unset variables; `invalid` says what is wrong with one that is set. */
   | { connected: false; missing: string[]; invalid?: string };
 
-/** The scopes the lead's token needs, in the order the operator is told them. */
-export const LEAD_SCOPES = ["tasks:read", "tasks:write", "memory:read", "memory:write", "feed:read", "events:write"] as const;
+/**
+ * The scopes the lead's token needs, in the order the operator is told them: one for each relay tool on its list
+ * (`relay-tools.ts`) and no other. Not `tasks:decide` (approve, close), not `tokens:write` (release, access), not
+ * `memory:write` (decisions and preferences): relay's server refuses those tools to a token without the scope,
+ * whatever the lead asks for.
+ */
+export const LEAD_SCOPES = ["tasks:read", "tasks:write", "memory:read", "feed:read", "events:write"] as const;
 
 /** The site's origin without a trailing slash, or undefined when it is not somewhere the token may be sent. */
 function siteOrigin(raw: string): string | undefined {

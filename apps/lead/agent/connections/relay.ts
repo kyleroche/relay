@@ -19,9 +19,9 @@ export default defineDynamic(() => {
       "relay, the owner's task system for their coding agents. Use it to open a task or a plan task (relay_task_create), " +
       "read how tasks stand (relay_task_get, relay_task_list), put a failed task back in the queue or send one in review back with a note " +
       "(relay_task_requeue, relay_task_request_changes), read the owner's standing decisions and preferences and a project's record " +
-      "(relay_recall, relay_brief, relay_project, relay_get_project), record a decision the owner states (relay_decide), " +
+      "(relay_recall, relay_brief, relay_project, relay_get_project), " +
       "read the feed (relay_feed) and log your own actions (relay_event_log). " +
-      "Not here: approving, releasing or closing a task. Those are a person's decisions.",
+      "Not here: approving, releasing or closing a task, and recording a decision or a preference. Those are a person's.",
     // required on an authenticated dynamic connection: which relay this is, and never the token
     instanceKey: relay.site,
     auth: { principalType: "app", getToken: async () => ({ token: relay.token }) },

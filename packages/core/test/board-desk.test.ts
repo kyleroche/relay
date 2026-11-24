@@ -17,8 +17,8 @@ import { fakeGitHub, relayBoard } from "./helpers/board.ts";
 const REPO = "acme/demo";
 const PR = `https://github.com/${REPO}/pull/9`;
 const person: Asker = { actor: "human:kyleroche" };
-const grok: Asker = { actor: "bot:oauth:grok-bot", scopes: ["tasks:read", "tasks:write", "tokens:write"] };
-const chief: Asker = { actor: "bot:chief", scopes: ["tasks:write", "tokens:write"] };
+const grok: Asker = { actor: "bot:oauth:grok-bot", scopes: ["tasks:read", "tasks:write", "tasks:decide", "tokens:write"] };
+const chief: Asker = { actor: "bot:chief", scopes: ["tasks:write", "tasks:decide", "tokens:write"] };
 const input = (over: Partial<OpenTaskInput> = {}): OpenTaskInput => ({ project: "demo", repo: REPO, title: "Add dark mode", body: "Toggle in the header.", lane: "claude", ...over });
 
 async function site() {
@@ -76,8 +76,11 @@ describe("two rules for a bot", () => {
     expect(own).toMatchObject({ status: 403 });
     expect(own.message).toMatch(/opened .* and cannot approve it/);
     // the same bot under the name a hand-minted token of it would have
-    expect(await refusal(approveFor(s.desk({ actor: "bot:grok-bot", scopes: ["tasks:write"] }), gh, task.id))).toMatchObject({ status: 403 });
+    expect(await refusal(approveFor(s.desk({ actor: "bot:grok-bot", scopes: ["tasks:write", "tasks:decide"] }), gh, task.id))).toMatchObject({ status: 403, message: expect.stringMatching(/opened .* and cannot approve it/) });
     expect(gh.calls.filter((c) => c[0] === "mergePullRequest")).toEqual([]);
+    // and a bot that did not open it still needs the scope that ends a task
+    expect(await refusal(approveFor(s.desk({ actor: "bot:lead", scopes: ["tasks:read", "tasks:write"] }), gh, task.id))).toMatchObject({ status: 403, message: expect.stringMatching(/lacks tasks:decide/) });
+    expect(await refusal(closeFor(s.desk({ actor: "bot:lead", scopes: ["tasks:read", "tasks:write"] }), gh, task.id, "no"))).toMatchObject({ status: 403, message: expect.stringMatching(/lacks tasks:decide/) });
     expect((await approveFor(s.desk(chief), gh, task.id)).task.state).toBe("done");
 
     const mine = await openFor(s.desk(person), input({ title: "A person's own" }));
