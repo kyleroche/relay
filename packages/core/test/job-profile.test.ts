@@ -107,6 +107,8 @@ describe("the profile", () => {
     expect(from({ tools: [{ name: "t", run: "node t.mjs", needs: "missing" }] }).problems[0]).toMatch(/needs the set 'missing'/);
     expect(from({ skills: ["../../etc/passwd"] })).toMatchObject({ skills: [] });
     expect(from({ cloud: "ok" }).problems[0]).toMatch(/cloud must be ask or never/);
+    // a misspelt key is named, so a check that would silently never run is seen
+    expect(from({ verfy: ["npm test"] })).toMatchObject({ verify: [], problems: [expect.stringMatching(/'verfy' is not a key of the profile/)] });
     expect(readProfile(diskFiles("/nonexistent"))).toMatchObject({ setup: [], verify: [], problems: [] });
   });
 });

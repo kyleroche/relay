@@ -47,6 +47,9 @@ export interface ProjectProfile {
   problems: string[];
 }
 
+/** Every key the file may hold; `steps` is read by the step loader (steps/index.ts). */
+export const PROFILE_KEYS = ["steps", "setup", "verify", "tools", "skills", "sets", "vercel", "cloud"] as const;
+
 export const EMPTY_PROFILE: ProjectProfile = { setup: [], verify: [], tools: [], skills: [], sets: {}, vercel: null, cloud: "ask", problems: [] };
 
 export const SET_NAME = /^[a-z][a-z0-9-]{0,47}$/;
@@ -75,6 +78,8 @@ export function readProfile(files: StepFiles): ProjectProfile {
   }
   const problems: string[] = [];
   const bad = (what: string): void => void problems.push(`${at}: ${what}`);
+  // a key relay does not know is most often a misspelt one, and a misspelt `verify` is a check that silently never runs
+  for (const key of Object.keys(j)) if (!(PROFILE_KEYS as readonly string[]).includes(key)) bad(`'${key.slice(0, 40)}' is not a key of the profile (${PROFILE_KEYS.join(", ")}); it is ignored`);
   const commands = (key: "setup" | "verify"): string[] => {
     const v = j[key];
     if (v === undefined) return [];
