@@ -32,3 +32,4 @@ export * from "./brief/index.ts";
 export * from "./rules/owned-section.ts";
 export * from "./hooks/index.ts";
 export * from "./memory/capture.ts";
+export * from "./steps/profile.ts";

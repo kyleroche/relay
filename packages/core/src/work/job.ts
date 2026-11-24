@@ -42,6 +42,9 @@ import type { LaneRequest, LaneResult } from "../lanes/types.ts";
 import { gradeTask, type GateVerdict } from "../tasks/gate.ts";
 import { ManifestError, parseNodesManifest, type NodesManifest } from "../tasks/manifest.ts";
 import { type Log, noopLog } from "../util.ts";
+import { cleanEnv } from "./env.ts";
+
+export { cleanEnv, JOB_ENV_STRIPPED } from "./env.ts";
 
 export const DEFAULT_JOB_TIMEOUT_MS = 60 * 60_000;
 export const DEFAULT_MAX_TURNS = 40;
@@ -208,23 +211,6 @@ async function must(bin: string, args: string[], opts: Parameters<typeof run>[2]
   const r = await run(bin, args, opts);
   if (r.code !== 0) throw new Error(`${bin} ${args.slice(0, 3).join(" ")} failed: ${(r.stderr || r.stdout).trim().split("\n")[0]?.slice(0, 300) ?? `exit ${r.code}`}`);
   return r.stdout;
-}
-
-/** Variables no child of a job may inherit: API keys and CI tokens (the lane runs on the subscription; gh acts as the operator), and every credential the worker itself reaches the board or relay with. */
-export const JOB_ENV_STRIPPED = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GH_TOKEN", "GITHUB_TOKEN", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "RELAY_TOKEN", "RELAY_SITE", "RELAY_HOME", "BOARD_TOKEN", "BOARD_URL", "BOARD_PROFILE", "VERCEL_TOKEN", "VERCEL_AUTH_TOKEN", "VERCEL_OIDC_TOKEN"] as const;
-
-/**
- * The environment a job runs with. No API key or CI token may shadow the machine's logins (the lane runs on the
- * subscription; gh acts as the operator), the lane cannot reach the board, relay's site or `~/.harness` through the
- * environment, and git never prompts.
- */
-export function cleanEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  const env = { ...base };
-  for (const k of JOB_ENV_STRIPPED) delete env[k];
-  env["GIT_TERMINAL_PROMPT"] = "0";
-  env["FX_NO_OPEN_BROWSER"] = "1";
-  env["FX_AUTO_UPGRADE"] = "0";
-  return env;
 }
 
 let identityCache: { name: string; email: string } | undefined;
