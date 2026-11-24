@@ -14,7 +14,6 @@
  *   vercel   the Vercel project whose development environment a granted set's values are read from, with the
  *            worker's own `vercel login`
  *   cloud    whether a task of this project may ever run in a paid sandbox: `ask` (the default) or `never`
- *   review_limit   how many tasks may wait for review before workers stop taking new ones for this project
  */
 import { JOB_ENV_STRIPPED } from "../work/env.ts";
 import { PROFILE_PATH, type StepFiles } from "./index.ts";
@@ -45,11 +44,10 @@ export interface ProjectProfile {
   sets: Record<string, CapabilitySet>;
   vercel: { project: string; team?: string } | null;
   cloud: CloudPolicy;
-  review_limit: number | null;
   problems: string[];
 }
 
-export const EMPTY_PROFILE: ProjectProfile = { setup: [], verify: [], tools: [], skills: [], sets: {}, vercel: null, cloud: "ask", review_limit: null, problems: [] };
+export const EMPTY_PROFILE: ProjectProfile = { setup: [], verify: [], tools: [], skills: [], sets: {}, vercel: null, cloud: "ask", problems: [] };
 
 export const SET_NAME = /^[a-z][a-z0-9-]{0,47}$/;
 const ENV_NAME = /^[A-Z][A-Z0-9_]{0,95}$/;
@@ -135,13 +133,7 @@ export function readProfile(files: StepFiles): ProjectProfile {
     else cloud = j.cloud;
   }
 
-  let review_limit: number | null = null;
-  if (j.review_limit !== undefined) {
-    if (typeof j.review_limit !== "number" || !Number.isInteger(j.review_limit) || j.review_limit < 1 || j.review_limit > 1000) bad("review_limit must be a whole number from 1 to 1000");
-    else review_limit = j.review_limit;
-  }
-
-  return { setup: commands("setup"), verify: commands("verify"), tools, skills, sets, vercel, cloud, review_limit, problems };
+  return { setup: commands("setup"), verify: commands("verify"), tools, skills, sets, vercel, cloud, problems };
 }
 
 /** What a granted set adds to a job: the names of the variables to carry and the hosts to allow. A set the profile does not define adds nothing. */
