@@ -38,7 +38,7 @@ import { runGrok } from "../lanes/grok.ts";
 import { runNodes, type NodesRequest, type NodesResult } from "../lanes/nodes.ts";
 import { SANDBOX_UNAVAILABLE } from "../lanes/sandbox.ts";
 import { runtimePaths } from "../runtime.ts";
-import { gitFiles, otherLane, projectSteps, respondStep, stepBody, type ProjectSteps, type Step } from "../steps/index.ts";
+import { gitFiles, otherLane, projectSteps, respondStep, stepBody, type ProjectSteps, type Step, type StepFiles } from "../steps/index.ts";
 import { grantedAccess, profileToolPatterns, readProfile, type ProjectProfile } from "../steps/profile.ts";
 import type { LaneRequest, LaneResult } from "../lanes/types.ts";
 import { GATE_BUDGET_USD, gradeTask, type GateVerdict } from "../tasks/gate.ts";
@@ -194,6 +194,12 @@ export interface JobOptions {
   stepsDir?: string;
   /** The lanes some worker serves, for a step that runs on another lane (default: the board's workers). */
   served?: () => Promise<string[]>;
+  /**
+   * False only where something else is the boundary and the sandbox runtime cannot start inside it: relay's container
+   * without a nested sandbox, or a paid run's microVM. On a host, the project's own commands (the profile's setup and
+   * verify) run under the sandbox runtime whatever `sandbox` says: `--no-sandbox` is about the Claude lane's Bash.
+   */
+  commandSandbox?: boolean;
   /** False when the operator turned the OS sandbox off (`relay work --no-sandbox`, or the container tier, where the container is the boundary). */
   sandbox?: boolean;
   /** Runs the project's own setup and verify commands (work/exec.ts); the default runs them in the OS sandbox. */
@@ -347,8 +353,17 @@ export function paidRun(
     spend,
     lane: (inner) => async (req, lane, o = {}) => {
       if (left() < PAID_FLOOR_USD) throw new Error(`the run's cap of $${capUsd.toFixed(2)} is spent ($${spent.toFixed(2)} so far); no further model call was made`);
-      const r = await inner(req, lane, { ...o, paid: call() });
-      spend(r.costEquiv);
+      const budget = call();
+      let r: Awaited<ReturnType<LaneRunner>>;
+      try {
+        r = await inner(req, lane, { ...o, paid: budget });
+      } catch (e) {
+        // it may have spent anything up to what it was allowed, and nothing came back to say
+        spend(budget.budgetUsd);
+        throw e;
+      }
+      // a call that ended badly and reports no cost is counted as having used what it was allowed
+      spend(!r.ok && !(r.costEquiv > 0) ? budget.budgetUsd : r.costEquiv);
       return r;
     },
   };
@@ -521,12 +536,29 @@ interface JobAccess {
   unknown: string[];
 }
 
-/** One line a skill file says about itself, from its frontmatter. */
-function skillAbout(dir: string, path: string): string {
-  const file = path.endsWith(".md") ? join(dir, path) : join(dir, path, "SKILL.md");
-  if (!existsSync(file)) return "";
-  const head = readFileSync(file, "utf8").slice(0, 4000);
+/**
+ * One line a skill file says about itself, from its frontmatter. Read from the default branch like the profile that
+ * names it: the line goes into the prompt as relay's own words, and a task's branch must not be able to write it.
+ */
+function skillAbout(trunk: StepFiles, path: string): string {
+  const head = (trunk.read(path.endsWith(".md") ? path : `${path.replace(/\/+$/, "")}/SKILL.md`) ?? "").slice(0, 4000);
   return /^description:\s*(.+)$/m.exec(head)?.[1]?.trim().replace(/^["']|["']$/g, "").slice(0, 300) ?? "";
+}
+
+/** A value shorter than this is not taken out of text: it would match ordinary words, and it is no secret worth the name. */
+const REDACT_MIN = 6;
+
+/**
+ * Takes granted values out of text before it leaves the job: a command that fails prints its environment, a test
+ * runner prints the connection string it could not reach, a lane quotes what it saw. Each value becomes its
+ * variable's name in brackets. Applied where text comes in (a command's output, a lane's words) and again where it
+ * goes out (the thread, the pull request, the task's reason), so a path added later is covered by one of the two.
+ */
+export function redactor(values: Record<string, string>): (text: string) => string {
+  // longest first, so a value that contains another is taken out whole
+  const pairs = Object.entries(values).filter(([, v]) => v.length >= REDACT_MIN).sort((a, b) => b[1].length - a[1].length);
+  if (!pairs.length) return (text) => text;
+  return (text) => pairs.reduce((t, [name, value]) => (t.includes(value) ? t.split(value).join(`[${name}]`) : t), text);
 }
 
 /**
@@ -581,6 +613,10 @@ interface Job {
   /** The project's profile as its default branch has it, and what this task was granted from it. */
   profile: ProjectProfile;
   access: JobAccess;
+  /** The repository's files on its default branch: where the profile, the steps and what they name are read. */
+  trunk: StepFiles;
+  /** Takes this run's granted values out of text (`redactor`). */
+  redact: (text: string) => string;
   exec: ProjectExec;
   rules: { rules?: string };
   timeoutMs: number;
@@ -721,7 +757,7 @@ async function runCodeTask(j: Job): Promise<JobResult> {
   const own = task.step ? j.steps.library.get(task.step) : undefined;
   const reports = own?.when === "task" && own.mode === "read-only" ? own : undefined;
   const { profile, access } = j;
-  const about = projectSection({ profile, access, skills: profile.skills.map((path) => ({ path, about: skillAbout(j.dir, path) })) });
+  const about = projectSection({ profile, access, skills: profile.skills.map((path) => ({ path, about: skillAbout(j.trunk, path) })) });
   const prompt = composeJobPrompt({ repo, task: { id, title: task.title, body: j.body }, lane, ...j.rules, ...(brief ? { brief } : {}), ...(about ? { project: about } : {}), notes: j.notes, ...(respond ? { step: { name: respond.name, text: stepBody(respond, { base }) } } : reports ? { step: { name: reports.name, text: stepBody(reports, { base }) } } : {}) });
 
   log(`${id}: running the ${lane} lane${answering ? " to answer the eval" : ""}`);
@@ -807,6 +843,14 @@ async function runCodeTask(j: Job): Promise<JobResult> {
   // ask the board, not a flag: a task closed or taken over while the lane ran must not be pushed
   await j.keeper.fence();
   if (j.keeper.lost()) return j.finish("lost", undefined);
+
+  // a granted value written into the change would be published by the push: the one place redaction cannot reach
+  const leaked = Object.entries(access.values).filter(([, v]) => v.length >= REDACT_MIN);
+  if (leaked.length) {
+    const change = await j.git(["diff", "--no-color", `origin/${base}...HEAD`]);
+    const names = leaked.filter(([, v]) => change.includes(v)).map(([n]) => n);
+    if (names.length) return j.fail(`the change contains the value of ${names.join(", ")}, which was granted to this run and must not be committed; nothing was pushed`);
+  }
 
   // an answer that declined every finding has nothing new to push
   if (!answering || (await count(`origin/${branch}..HEAD`))) await j.host.push(j.dir, branch);
@@ -904,7 +948,9 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   let verdict: GateVerdict | undefined;
   const keeper = keepClaim(claim, { ...(opts.renewMs ? { everyMs: opts.renewMs } : {}), log });
   /** Words in the thread: a log line, a lane's summary. Never data: `prose` sees to that. */
-  const say = (text: string, kind: (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE], sync = false) => board.reply(id, { text: prose(text.slice(0, 9_000)), labels: { [LABEL.relay]: kind }, ...(sync ? {} : { noSync: true }) });
+  // set once the run's granted values are known; until then there is nothing to take out
+  let redact = (text: string): string => text;
+  const say = (text: string, kind: (typeof RELAY_MESSAGE)[keyof typeof RELAY_MESSAGE], sync = false) => board.reply(id, { text: prose(redact(text).slice(0, 9_000)), labels: { [LABEL.relay]: kind }, ...(sync ? {} : { noSync: true }) });
   const usageOf: Job["usageOf"] = (r, kind) => ({ kind, lane: kind === "gate" ? "gate" : lane, tool: r.tool, model: r.model ?? null, subscription: r.subscription ?? null, billing, tokens_in: r.tokensIn, tokens_out: r.tokensOut, cache_read: r.cacheRead, cache_write: r.cacheWrite, cost_equiv: r.costEquiv, duration_ms: Math.round(r.durationMs), worker: opts.workerName });
 
   /** Report how the job ended: the words for people, then the run and its usage as data, then the task's own state. */
@@ -938,7 +984,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   let passOn: ((why: string) => Promise<void>) | undefined;
   const fail: Job["fail"] = async (error, text) => {
     await passOn?.(error);
-    return finish("failed", () => claim.fail(error.slice(0, 900)), { error: error.slice(0, 300), ...(text ? { text } : {}) });
+    const why = redact(error);
+    return finish("failed", () => claim.fail(why.slice(0, 900)), { error: why.slice(0, 300), ...(text ? { text } : {}) });
   };
 
   try {
@@ -971,7 +1018,8 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const steps = projectSteps({ relayDir: opts.stepsDir ?? runtimePaths().stepsDir, userDir: join(home, "steps"), project: gitFiles(dir, `origin/${trunk}`) });
     for (const problem of steps.problems) log(`${id}: steps: ${problem}`);
     // the profile too is the default branch's, so a task cannot grant itself a host, a variable or a command
-    const profile = readProfile(gitFiles(dir, `origin/${trunk}`));
+    const trunkFiles = gitFiles(dir, `origin/${trunk}`);
+    const profile = readProfile(trunkFiles);
     for (const problem of profile.problems) log(`${id}: profile: ${problem}`);
 
     // A paid run is a person's decision about this task's text, read from the thread: without it, or against the
@@ -1010,9 +1058,27 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const found = want.env.length ? await (opts.secrets ?? envSecrets)({ project, names: want.env, vercel: profile.vercel }).catch((e: unknown) => (log(`${id}: could not read the granted variables (${e instanceof Error ? e.message : String(e)})`), {} as Record<string, string>)) : {};
     const values = Object.fromEntries(want.env.flatMap((n) => (typeof found[n] === "string" && found[n] !== "" ? [[n, found[n]!]] : [])));
     const access: JobAccess = { sets: granted.sets.filter((name) => profile.sets[name]), hosts: want.hosts, values, withheld: lane === "claude" ? [] : Object.keys(values), missing: want.env.filter((n) => !(n in values)), unknown: want.unknown };
+    redact = redactor(values);
+    // where text comes in: what a command printed and what a lane said never carry a granted value past this point
+    const innerExec = opts.exec ?? projectExec({ sandbox: opts.commandSandbox !== false });
+    const exec: ProjectExec = async (command, at) => {
+      const r = await innerExec(command, at);
+      return { ...r, output: redact(r.output) };
+    };
+    const innerLane = paid ? paid.lane(opts.laneRunner ?? defaultLaneRunner) : (opts.laneRunner ?? defaultLaneRunner);
+    const laneRun: LaneRunner = async (req, on, o) => {
+      try {
+        const r = await innerLane(req, on, o);
+        return { ...r, text: redact(r.text), ...(r.error ? { error: redact(r.error) } : {}), ...(r.note ? { note: redact(r.note) } : {}) };
+      } catch (e) {
+        throw new Error(redact(e instanceof Error ? e.message : String(e)));
+      }
+    };
+    // and where it goes out to GitHub
+    const quietHost: GitHost = { ...host, createPr: (r, i) => host.createPr(r, { ...i, title: redact(i.title), body: redact(i.body) }), comment: (r, n, body) => host.comment(r, n, redact(body)) };
 
     const rulesPath = join(dir, "relay.md");
-    const job: Job = { opts, claim, board, host, laneRun: paid ? paid.lane(opts.laneRunner ?? defaultLaneRunner) : (opts.laneRunner ?? defaultLaneRunner), log, id, lane, dir, repo, project, base, thread, task, body: gate.body, notes: gate.notes, state: runState(thread, opts.trusted), steps, profile, access, exec: opts.exec ?? projectExec({ sandbox: opts.sandbox !== false }), rules: existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, keeper, report, usageOf, git, finish, fail };
+    const job: Job = { opts, claim, board, host: quietHost, laneRun, log, id, lane, dir, repo, project, base, thread, task, body: gate.body, notes: gate.notes, state: runState(thread, opts.trusted), steps, profile, access, trunk: trunkFiles, redact, exec, rules: existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, keeper, report, usageOf, git, finish, fail };
     await say(`Running on ${opts.workerName} (${lane}${task.model ? `, model ${task.model}` : ""}) from \`${base}\`.`, RELAY_MESSAGE.log);
     if (granted.sets.length) {
       // names only: which sets, how many hosts, which variables are missing here. A value is never written anywhere.

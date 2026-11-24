@@ -196,6 +196,8 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     const cacheRead = u.cache_read_input_tokens ?? 0;
     const cacheWrite = u.cache_creation_input_tokens ?? 0;
     const ok = !!j && !j.is_error && code === 0;
+    // on paid credits Claude Code's own figure is what was charged; the price table is an estimate for a subscription
+    const charged = opts.gateway && typeof j?.total_cost_usd === "number" && Number.isFinite(j.total_cost_usd) && j.total_cost_usd >= 0 ? j.total_cost_usd : undefined;
     const res: LaneResult = {
       ok,
       text: j?.result ?? "",
@@ -205,7 +207,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
       tokensOut,
       cacheRead,
       cacheWrite,
-      costEquiv: costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: opts.gateway ? "gateway" : "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
+      costEquiv: charged ?? costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: opts.gateway ? "gateway" : "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
       durationMs,
       raw: j ?? { stdout: stdout.slice(0, 2000), stderr: stderr.slice(0, 2000), code },
     };

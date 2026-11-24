@@ -5,9 +5,11 @@
  * inside the clone and the package caches, may not read the credential paths, and may reach only the allowed hosts.
  * `npm ci` runs every dependency's install script, so this is not optional on a machine that holds the owner's logins.
  *
- * A worker that was told to run without the sandbox (`--no-sandbox`, or the container tier, where the container is
- * the boundary) runs them directly. A worker that should sandbox and cannot find the runtime fails the command with
- * the fix; it never falls back to running it unguarded.
+ * `--no-sandbox` on a host does not turn this off: it is about the Claude lane's Bash. The commands run directly only
+ * where something else is the boundary and the runtime cannot start inside it: relay's container without a nested
+ * sandbox, and a paid run's microVM, each of which holds only the logins made in it (the worker says so when it
+ * starts). Anywhere else a worker that cannot find or start the runtime fails the command with the fix; it never
+ * falls back to running it unguarded.
  */
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";

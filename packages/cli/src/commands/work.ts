@@ -300,14 +300,17 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
         const probe = sandbox ? await bwrapProbe() : { ok: false, detail: "--no-sandbox" };
         if (!probe.ok) {
           sandbox = false;
-          out(`nested sandbox off (${probe.detail}): the Claude lane's Bash runs with the allowlist alone inside this container, which is the boundary; advertised as ${CONTAINER_SANDBOX_LABEL}`);
+          out(`nested sandbox off (${probe.detail}): the Claude lane's Bash runs with the allowlist alone, and a project's setup and verify commands run directly, inside this container, which is the boundary: they can reach the logins made in it. Advertised as ${CONTAINER_SANDBOX_LABEL}`);
           if (!labels.includes(CONTAINER_SANDBOX_LABEL)) labels.push(CONTAINER_SANDBOX_LABEL);
         } else if (!labels.includes(SANDBOX_ON_LABEL)) labels.push(SANDBOX_ON_LABEL);
       } else if (!sandbox) {
         // loud on purpose: this machine's Claude jobs run Bash with the rights of this OS user, boxed by the allowlist alone
-        out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers").`);
+        out(`WARNING: --no-sandbox: the Claude lane's Bash runs WITHOUT Claude Code's OS sandbox on ${name}. A fooled lane can read this user's files and reach any host; only the tool allowlist stands. Advertised as label ${NO_SANDBOX_LABEL} (docs/SECURITY.md, "Workers"). A project's own setup and verify commands still run under the sandbox runtime${gateway ? ", except in this paid run, where the microVM is the boundary" : "; where it cannot start, they fail and do not run"}.`);
         if (!labels.includes(NO_SANDBOX_LABEL)) labels.push(NO_SANDBOX_LABEL);
       }
+      // a project's own commands: under the sandbox runtime on any host; directly only where the container (with no
+      // nested sandbox) or a paid run's microVM is the boundary and holds nothing but what was put in it
+      const commandSandbox = inside ? sandbox : !gateway;
       const { session, where } = await openWorkBoard();
       out(`relay work ${version}: ${name} serving ${serving.join(", ")} from ${where}; jobs=${jobs}, ${o.once ? "once" : `waiting on the board, looking again every ${Math.round(IDLE_WAIT_MS / 60_000)}m`}, sandbox ${sandbox ? "on" : inside ? "container" : "OFF"}, log ${workLogPath()}`);
       try {
@@ -324,7 +327,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), ...(gateway ? { paid: { gateway, capUsd: cap! } } : { brief: memoryBrief }), sandbox, secrets: vercelSecrets({ log: out }) },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), ...(gateway ? { paid: { gateway, capUsd: cap! } } : { brief: memoryBrief }), sandbox, commandSandbox, secrets: vercelSecrets({ log: out }) },
         });
         const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
         const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("eval") ? [`${count("eval")} waiting for an eval`] : []), ...(count("done") ? [`${count("done")} step task${count("done") === 1 ? "" : "s"} done`] : []), ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];
