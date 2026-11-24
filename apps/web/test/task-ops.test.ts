@@ -102,8 +102,9 @@ describe("a bot and its own work", () => {
     await runner.reply(id, { text: board.assetText({ node: "End Flow", parameter: "image", index: 1, version: 1, workflow: "workflows/poster.py", mime: "image/png", bytes: 3, attachment: file.id }), attachments: [file], labels: { relay: "asset" } });
     await claim.block("1 output attached", { kind: board.HOLD.review });
 
-    // the bot that opened it does not approve it
-    expect(await refusal(approveFor(session, undefined, bot, id))).toMatchObject({ status: 403, message: expect.stringMatching(/opened .* and cannot approve it/) });
+    // a token without the scope that ends a task approves nothing, and one that has it still does not approve what it opened
+    expect(await refusal(approveFor(session, undefined, bot, id))).toMatchObject({ status: 403, message: expect.stringMatching(/lacks tasks:decide/) });
+    expect(await refusal(approveFor(session, undefined, { ...bot, scopes: [...bot.scopes!, "tasks:decide"] }, id))).toMatchObject({ status: 403, message: expect.stringMatching(/opened .* and cannot approve it/) });
     const approved = await approveFor(session, undefined, chief, id);
     expect(approved).toMatchObject({ pr_url: null, task: { state: "done", result: "approved 1 output by bot:chief" } });
     expect(await refusal(approveFor(session, undefined, person, id))).toMatchObject({ status: 409 });

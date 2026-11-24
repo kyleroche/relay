@@ -456,9 +456,6 @@ export async function skipStep(board: Board, id: string, stepTask: string, why: 
   }
 }
 
-/** The digest of a task's own words, title and body. */
-export const taskDigest = (t: Pick<BoardTask, "title" | "body">): string => sha256(`${t.title}\n\n${t.body}`);
-
 /**
  * What a grant names: the digest of everything a lane is given as the task, which is its title, its body (the
  * `task.md` file by its ID when the body is one) and every note people added in the thread. A grant covers that text
