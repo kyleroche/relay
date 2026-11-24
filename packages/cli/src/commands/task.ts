@@ -60,11 +60,12 @@ export function registerTask(program: Command): void {
     .option("--model <id>", "the model the lane should use (fable, gpt-6-astra, …); the lane's default without it")
     .option("--needs <ids>", "tasks that must complete first, comma separated")
     .option("--base <branch>", "start from this branch instead of the repository's default one")
+    .option("--plan", "open it as a planning task: a lane reads the repository and proposes tasks, and approving the plan (relay task approve) is what opens them")
     .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
     .option("--cwd <path>")
     .option("--json")
     .description("Open a task in the project's queue, labelled with its lane")
-    .action(async (o: { title: string; lane: string; project?: string; repo?: string; body?: string; bodyFile?: string; manifest?: string; model?: string; needs?: string; base?: string; key?: string; cwd?: string; json?: boolean }) => {
+    .action(async (o: { title: string; lane: string; project?: string; repo?: string; body?: string; bodyFile?: string; manifest?: string; model?: string; needs?: string; base?: string; plan?: boolean; key?: string; cwd?: string; json?: boolean }) => {
       if (!isLaneName(o.lane)) throw new Error(`--lane: ${laneNameProblem(o.lane)}`);
       const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
       if (!ref.slug) throw new Error("no project: pass --project or run relay link in the repo");
@@ -88,6 +89,7 @@ export function registerTask(program: Command): void {
           ...(o.model ? { model: o.model } : {}),
           ...(o.needs ? { needs: o.needs.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
           ...(o.base ? { base: o.base } : {}),
+          ...(o.plan ? { step: "plan" } : {}),
           ...(o.key ? { idempotencyKey: o.key } : {}),
         });
         if (o.json) console.log(JSON.stringify(t, null, 2));
@@ -165,6 +167,22 @@ export function registerTask(program: Command): void {
         const r = await board.closeTask(openBoard(), detectGitHub(), id, { ...(o.reason ? { reason: o.reason } : {}) });
         if (o.json) console.log(JSON.stringify(r, null, 2));
         else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.to_review ? `; ${r.to_review} goes to review without it` : ""}${r.canceled.length ? `; called off ${r.canceled.join(", ")}, which was looking at it` : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
+      }),
+    );
+
+  task
+    .command("grant")
+    .argument("<task-id>", "the task's ID on the board")
+    .option("--set <name>", "a capability set of the project's profile (.relay/project.json): its hosts and its environment variables, by name")
+    .option("--cloud <usd>", "a paid sandbox run of this task, up to this many US dollars")
+    .option("--json")
+    .description("Let one task use what no task has by default, for its text as it stands: a capability set, or a paid sandbox run up to a cap. A grant given before the task's text was edited counts for nothing")
+    .action((id: string, o: { set?: string; cloud?: string; json?: boolean }) =>
+      act(async () => {
+        if ((o.set === undefined) === (o.cloud === undefined)) throw new board.TaskError("say what to grant: --set <name>, or --cloud <usd>", 400);
+        const t = await board.grantTask(openBoard(), id, o.set !== undefined ? { set: o.set } : { cloudCapUsd: Number(o.cloud) });
+        if (o.json) console.log(JSON.stringify(t, null, 2));
+        else log(`granted ${id} ${o.set !== undefined ? `the set ${o.set}` : `a paid sandbox run of up to $${Number(o.cloud).toFixed(2)}`}; a worker that takes your tasks will use it on its next run`);
       }),
     );
 

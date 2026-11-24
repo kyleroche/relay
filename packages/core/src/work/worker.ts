@@ -43,6 +43,8 @@ export interface WorkerLoopOptions {
   jobs?: number;
   /** Drain the queue once, then stop (no waiting). */
   once?: boolean;
+  /** Run this one task and stop: a sandbox started for a task someone approved. Its owner must still be one this worker takes tasks from. */
+  only?: string;
   idleWaitMs?: number;
   heartbeatMs?: number;
   retryMs?: number;
@@ -123,6 +125,7 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   // (a local one), this worker's lane profiles would otherwise read as strangers to each other
   const trusted = [...new Set([...from, ...(await Promise.all(lanes.map((l) => handle(l).me()))).map((m) => m.actor)])];
   const results: JobResult[] = [];
+  const once = !!opts.once || !!opts.only;
   const running = new Map<Promise<void>, string>();
   let stopped = false;
   let retry = retryMs;
@@ -142,7 +145,19 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
   opts.signal?.addEventListener("abort", onAbort, { once: true });
 
   /** The oldest ready task this worker may take on a lane that is free: its own lanes first, then `any` on a free code lane. */
+  let took = false;
   const claimNext = async (): Promise<{ claim: ClaimedTask; lane: string } | undefined> => {
+    if (opts.only) {
+      if (took) return undefined;
+      took = true;
+      const root = (await board.thread(opts.only)).message;
+      // a claim by ID asks nobody whose task it is, so the worker's own rule is checked here
+      if (!root.task || !from.includes(root.task.owner)) throw new Error(`${opts.only} is not a task of an owner this worker takes tasks from`);
+      const want = root.labels?.[LABEL.lane];
+      const lane = want === ANY_LANE ? lanes.find(isCodeLane) : lanes.find((l) => l === want);
+      if (!lane) throw new Error(`this worker does not serve the lane of ${opts.only} (${want ?? "none"})`);
+      return { claim: await handle(lane).tasks.claim(opts.only), lane };
+    }
     const busy = new Set(running.values());
     const free = lanes.filter((l) => !busy.has(l));
     for (const lane of free) {
@@ -167,18 +182,18 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
       let next: { claim: ClaimedTask; lane: string } | undefined;
       try {
         // note the place before looking: a task that becomes ready while this pass looks still wakes the wait below
-        if (!opts.once) cursor = (await board.poll({ channel: WORK_SUBTREE, wait: 0 })).cursor;
+        if (!once) cursor = (await board.poll({ channel: WORK_SUBTREE, wait: 0 })).cursor;
         next = await claimNext();
         retry = retryMs;
       } catch (e) {
         log(`could not look for work: ${claimAdvice(e)}`);
-        if (opts.once) break;
+        if (once) break;
         await sleep(retry, opts.signal);
         retry = Math.min(retry * 2, idleWaitMs);
         continue;
       }
       if (!next) {
-        if (opts.once) break;
+        if (once) break;
         await beat();
         debug(`nothing to take; waiting on ${WORK_SUBTREE} for up to ${Math.round(idleWaitMs / 1000)}s`);
         try {

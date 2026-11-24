@@ -668,7 +668,7 @@ async function runCodeTask(j: Job): Promise<JobResult> {
   const reports = own?.when === "task" && own.mode === "read-only" ? own : undefined;
   const { profile, access } = j;
   const about = projectSection({ profile, access, skills: profile.skills.map((path) => ({ path, about: skillAbout(j.dir, path) })) });
-  const prompt = composeJobPrompt({ repo, task: { id, title: task.title, body: j.body }, lane, ...j.rules, ...(brief ? { brief } : {}), ...(about ? { project: about } : {}), notes: j.notes, ...(respond ? { step: { name: respond.name, text: stepBody(respond, { base }) } } : {}) });
+  const prompt = composeJobPrompt({ repo, task: { id, title: task.title, body: j.body }, lane, ...j.rules, ...(brief ? { brief } : {}), ...(about ? { project: about } : {}), notes: j.notes, ...(respond ? { step: { name: respond.name, text: stepBody(respond, { base }) } } : reports ? { step: { name: reports.name, text: stepBody(reports, { base }) } } : {}) });
 
   log(`${id}: running the ${lane} lane${answering ? " to answer the eval" : ""}`);
   // the lane's git identity comes from the environment: inside the sandbox ~/.gitconfig is unreadable by design

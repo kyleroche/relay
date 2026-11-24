@@ -185,6 +185,27 @@ describe("the workers on a board", () => {
     expect((await listWorkers(b))[0]!.meters[0]!.used_percentage).toBeGreaterThan(10);
   });
 
+  it("with one task named, runs that task and stops, and not a task of an owner it does not take tasks from", async () => {
+    const b = await relayBoard();
+    const jobs = fakeJobs();
+    const older = await open(b, "claude", "older, left alone");
+    const wanted = await open(b, "any", "the one that was approved");
+    const { opts } = await loop(b, { only: wanted.id, runJob: jobs.run });
+    const r = await runWorker(opts);
+    expect(jobs.ran.map((j) => [j.task, j.lane])).toEqual([[wanted.id, "claude"]]);
+    expect(r.ran).toBe(1);
+    expect((await getTask(b, older.id)).task.state).toBe("queued");
+
+    // a task someone else opened is nobody's to run by naming it
+    const theirs = await openTask(b.as("someone-else"), { project: "demo", repo: "acme/demo", title: "theirs", lane: "claude" });
+    const refused = await loop(b, { only: theirs.id, runJob: jobs.run });
+    expect((await runWorker(refused.opts)).ran).toBe(0);
+    expect((await getTask(b, theirs.id)).task.state).toBe("queued");
+    // and a lane this worker does not serve
+    const nodes = await open(b, "nodes");
+    expect((await runWorker((await loop(b, { only: nodes.id, runJob: jobs.run })).opts)).ran).toBe(0);
+  });
+
   it("does not start on a board without relay's schemas when its login cannot register them", async () => {
     const bare = memoryBoard();
     const narrowed = bare.as("guest", { can: { "*": ["read", "post", "react", "label"] } });

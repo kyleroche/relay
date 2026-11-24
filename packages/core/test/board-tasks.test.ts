@@ -326,6 +326,23 @@ describe("what relay believes, and what it will not post", () => {
   });
 });
 
+describe("an approval by someone who cannot settle the task", () => {
+  it("is refused before anything merges", async () => {
+    const b = await relayBoard();
+    const t = await open(b);
+    await toReview(b, t.id);
+    const gh = fakeGitHub(pull(t.id));
+    // a site without its grant: it may read, post and label in the queues, and did not open this task
+    const narrowed = b.as("human-kyle", { can: { "*": ["read", "post", "react", "label"] } });
+    await expect(approveTask(narrowed, gh, t.id)).rejects.toMatchObject({ status: 403, message: expect.stringMatching(/does not manage work\/valor-store.*--site-project/) });
+    expect(gh.calls.filter((c) => c[0] === "mergePullRequest")).toEqual([]);
+    expect((await getTask(b, t.id)).task).toMatchObject({ state: "review", lane: "any" });
+    // with the grant it goes through
+    const granted = b.as("human-kyle", { can: { "*": ["read", "post", "react", "label"], "work/": ["read", "post", "react", "label", "manage"] } });
+    expect((await approveTask(granted, gh, t.id)).task.state).toBe("done");
+  });
+});
+
 describe("an approval that meets the merge again", () => {
   it("is a success when GitHub's own word of the merge settled the task first", async () => {
     const b = await relayBoard();

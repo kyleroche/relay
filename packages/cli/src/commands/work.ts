@@ -31,12 +31,13 @@ import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSy
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { homedir, hostname } from "node:os";
 import { dirname, join } from "node:path";
-import { CONTAINER_CPUS, CONTAINER_CREDENTIALS, CONTAINER_HOME, CONTAINER_IMAGE, CONTAINER_LOGIN_COMMAND, CONTAINER_LOGIN_COMMAND_WHY, CONTAINER_MEMORY, CONTAINER_NAME, CONTAINER_PASSTHROUGH_ENV, CONTAINER_RELAY_HOME, CONTAINER_SANDBOX_LABEL, CONTAINER_VOLUME, CONTAINER_WORKER_HOST_ENV, CONTAINER_WORKER_NAME_ENV, containerLoginSteps, containerPlan, containerSettingsFrom, containerStateFrom, containerWorkerName, imageStatus, isLoginProvider, lanesFromDoctorOutput, loginDonePage, loginStatesFromDoctorOutput, manualLoginSteps, parseLoginCallback, parseLoginUrl, replayUrl, tokenNameFromDoctorOutput, board, IDLE_WAIT_MS, ISOLATION_LABEL, ISOLATIONS, laneRunner, loadConfig, LOGIN_CALLBACK_PORTS, WORKER_LANES, LOGIN_PROVIDERS, LOGIN_TIMEOUT_MS, NO_SANDBOX_LABEL, readSiteConfig, relayHome, runtimePaths, runWorker, stableNodePath, SANDBOX_ON_LABEL, servicePlan, type BriefSource, type ContainerPlan, type Isolation, type LoginProvider, type LoginRedirect } from "@relay/core";
+import { CONTAINER_CPUS, CONTAINER_CREDENTIALS, CONTAINER_HOME, CONTAINER_IMAGE, CONTAINER_LOGIN_COMMAND, CONTAINER_LOGIN_COMMAND_WHY, CONTAINER_MEMORY, CONTAINER_NAME, CONTAINER_PASSTHROUGH_ENV, CONTAINER_RELAY_HOME, CONTAINER_SANDBOX_LABEL, CONTAINER_VOLUME, CONTAINER_WORKER_HOST_ENV, CONTAINER_WORKER_NAME_ENV, containerLoginSteps, containerPlan, containerSettingsFrom, containerStateFrom, containerWorkerName, imageStatus, isLoginProvider, lanesFromDoctorOutput, loginDonePage, loginStatesFromDoctorOutput, manualLoginSteps, parseLoginCallback, parseLoginUrl, replayUrl, tokenNameFromDoctorOutput, board, IDLE_WAIT_MS, ISOLATION_LABEL, ISOLATIONS, laneRunner, loadConfig, LOGIN_CALLBACK_PORTS, WORKER_LANES, LOGIN_PROVIDERS, LOGIN_TIMEOUT_MS, NO_SANDBOX_LABEL, readSiteConfig, relayHome, runtimePaths, runWorker, stableNodePath, SANDBOX_ON_LABEL, servicePlan, vercelSecrets, type BriefSource, type ContainerPlan, type Isolation, type LoginProvider, type LoginRedirect } from "@relay/core";
 import { log, onPath, openReady } from "./_common.ts";
 import { bwrapProbe, containerReport, detectLanes, inContainer } from "./probes.ts";
 
 interface WorkOptions {
   once?: boolean;
+  task?: string;
   lanes?: string;
   jobs: string;
   name?: string;
@@ -229,6 +230,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
     // `work --yes` is this command's; `work container rm --yes` is the subcommand's (needs the whole chain positional)
     .enablePositionalOptions()
     .option("--once", "drain the queue once, then exit")
+    .option("--task <id>", "run this one task and exit (what a sandbox started for an approved task does)")
     .option("--lanes <list>", "force the lanes to serve (default: detected from logins), e.g. claude,codex")
     .option("--jobs <n>", "concurrent jobs (the lanes still serialize per vendor login)", "1")
     .option("--name <name>", "worker name (default: this host's short name)")
@@ -300,10 +302,11 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           version,
           jobs,
           ...(o.once ? { once: true } : {}),
+          ...(o.task ? { only: o.task } : {}),
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), brief: memoryBrief },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), brief: memoryBrief, sandbox, secrets: vercelSecrets() },
         });
         const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
         const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("eval") ? [`${count("eval")} waiting for an eval`] : []), ...(count("done") ? [`${count("done")} step task${count("done") === 1 ? "" : "s"} done`] : []), ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];
