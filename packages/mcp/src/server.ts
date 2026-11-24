@@ -344,14 +344,16 @@ export function createRelayServer(db: Db, opts: RelayServerOptions): McpServer {
         project: z.string().describe("project slug"),
         source: z.string().optional().describe("claude | codex | grok | human (default from the connection)"),
         supersedes_id: z.number().int().optional(),
+        source_ref: z.string().max(200).optional().describe("where the decision came from, for whoever recorded it (a file name, a session)"),
       },
     },
-    async ({ text: t, project, source, supersedes_id }) => {
+    async ({ text: t, project, source, supersedes_id, source_ref }) => {
       const g = gate("memory:write", "relay_decide");
       if (g) return g;
       if (!(await repo.getProject(db, project))) return fail(`unknown project '${project}'; run relay link in that repo first`);
       const src = source ?? actor.replace(/^(agent|human):/, "");
-      const row = supersedes_id ? await repo.supersedeDecision(db, supersedes_id, { text: t, source: src }) : await repo.addDecision(db, { project, text: t, source: src });
+      const ref = source_ref ? { sourceRef: source_ref } : {};
+      const row = supersedes_id ? await repo.supersedeDecision(db, supersedes_id, { text: t, source: src, ...ref }) : await repo.addDecision(db, { project, text: t, source: src, ...ref });
       await repo.writeEvent(db, { kind: "decision.captured", actor, project, summary: t.slice(0, 200), payload: { decision_id: row.id, source: src, superseded: supersedes_id ?? null } });
       afterWrite(project);
       return text(`recorded decision #${row.id}${supersedes_id ? ` (supersedes #${supersedes_id})` : ""}`);

@@ -165,7 +165,7 @@ export function httpClient(opts: HttpClientOptions): RelayClient {
     },
     async decide(d) {
       if (!d.project) throw new SiteModeError("a global decision", "pass --project <slug>; the site's relay_decide tool is project-scoped");
-      const out = await tool("relay_decide", { text: d.text, project: d.project, source: d.source, ...(d.supersedesId ? { supersedes_id: d.supersedesId } : {}) });
+      const out = await tool("relay_decide", { text: d.text, project: d.project, source: d.source, ...(d.supersedesId ? { supersedes_id: d.supersedesId } : {}), ...(d.sourceRef ? { source_ref: d.sourceRef.slice(0, 200) } : {}) });
       const m = /#(\d+)/.exec(out);
       return { id: m ? Number(m[1]) : 0 };
     },
