@@ -1,6 +1,7 @@
 /**
  * The real `relay link` flow against a throwaway git repo, with RELAY_FAKE_LANES=1 so the Claude lane returns canned
- * JSON instead of spawning `claude` (no network, no login). --no-labels keeps gh out (the caller workflows are opt-in since --workflows).
+ * JSON instead of spawning `claude` (no network, no login). --no-labels keeps gh out, and --no-pr writes the files
+ * into the checkout (link-pr.test.ts covers the pull request).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
@@ -34,6 +35,8 @@ beforeAll(async () => {
   git(["remote", "add", "origin", "https://github.com/acme/demo.git"]);
   // RELAY_HOME is read when @relay/core loads, so both go into the environment before the first import
   process.env.RELAY_HOME = home;
+  // adoption looks under the user's home for Claude Code's files; the test has its own, empty one
+  process.env.RELAY_USER_HOME = join(tmp, "userhome");
   process.env.RELAY_FAKE_LANES = "1";
   core = await import("@relay/core");
   ({ registerLink } = await import("../src/commands/link.ts"));
@@ -46,7 +49,7 @@ afterAll(() => {
 async function link(...extra: string[]): Promise<void> {
   const program = new Command().exitOverride();
   registerLink(program);
-  await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", ...extra], { from: "user" });
+  await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-pr", ...extra], { from: "user" });
 }
 
 async function inspect() {

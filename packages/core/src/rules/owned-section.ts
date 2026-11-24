@@ -21,7 +21,7 @@ export interface RulesState {
   /** owner/name */
   repo?: string;
   /** sha256 of the section body relay last wrote, per file. */
-  sections: Partial<Record<OwnedFile, { hash: string; updated_at: string }>>;
+  sections: Partial<Record<OwnedFile, { hash: string }>>;
   [k: string]: unknown;
 }
 
@@ -60,21 +60,26 @@ export function isIncludeOnly(text: string): boolean {
   return lines.length === 1 && /^@\.?\/?AGENTS\.md$/.test(lines[0]!);
 }
 
-export function readRulesState(root: string): RulesState {
-  const p = join(root, STATE_FILE);
-  if (!existsSync(p)) return { version: 1, sections: {} };
+/** The state `.relay/rules.json` holds, from its text; an absent or unreadable file is the empty state. */
+export function parseRulesState(text: string | undefined): RulesState {
+  if (text === undefined) return { version: 1, sections: {} };
   try {
-    const j = JSON.parse(readFileSync(p, "utf8")) as Partial<RulesState>;
+    const j = JSON.parse(text) as Partial<RulesState>;
     return { ...j, version: 1, sections: j.sections ?? {} };
   } catch {
     return { version: 1, sections: {} };
   }
 }
 
+export function readRulesState(root: string): RulesState {
+  const p = join(root, STATE_FILE);
+  return parseRulesState(existsSync(p) ? readFileSync(p, "utf8") : undefined);
+}
+
 export function writeRulesState(root: string, state: RulesState): void {
   const p = join(root, STATE_FILE);
   mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(state, null, 2) + "\n");
+  writeFileSync(p, rulesStateText(state));
 }
 
 export type SectionAction = "created" | "appended" | "updated" | "unchanged" | "skipped-include" | "refused-local-edit" | "removed" | "absent";
@@ -98,37 +103,49 @@ export interface InstallOptions {
   createClaudeMd?: boolean;
 }
 
+export interface SectionPlan {
+  results: SectionResult[];
+  /** The files whose text changes, whole. */
+  files: Array<{ file: OwnedFile; content: string }>;
+  /** The state after the plan; `stateText` is `.relay/rules.json` as it would be written. */
+  state: RulesState;
+  stateText: string;
+  stateChanged: boolean;
+}
+
+export const rulesStateText = (state: RulesState): string => JSON.stringify(state, null, 2) + "\n";
+
 /**
- * Install or update the owned section in AGENTS.md and CLAUDE.md under `root`.
+ * What installing the owned section would do to AGENTS.md and CLAUDE.md, given their text (`read`) and the state
+ * that was recorded. Writes nothing, so the same rules serve a working tree (`installOwnedSection`) and a tree that
+ * exists only in git (`relay link`, which proposes its files as a pull request).
  * - missing file: created with the section (CLAUDE.md only when createClaudeMd or it already exists)
  * - markers missing: section appended at the end
  * - markers present, body matches the recorded hash: rewritten (or unchanged)
  * - markers present, body differs from the recorded hash and from the new body: refused unless force
  * - CLAUDE.md that is a one-line `@AGENTS.md` include: left alone
  */
-export function installOwnedSection(root: string, opts: InstallOptions = {}): SectionResult[] {
+export function planOwnedSection(read: (file: OwnedFile) => string | undefined, prior: RulesState, opts: InstallOptions = {}): SectionPlan {
   const body = opts.body ?? renderOwnedSection(opts.project ? { project: opts.project } : {});
   const newHash = sha256(body);
-  const state = readRulesState(root);
+  const state: RulesState = { ...prior, sections: { ...prior.sections } };
   if (opts.project) state.project = opts.project;
   if (opts.repo) state.repo = opts.repo;
   const results: SectionResult[] = [];
-  const now = new Date().toISOString();
+  const files: SectionPlan["files"] = [];
 
   for (const file of opts.files ?? OWNED_FILES) {
-    const path = join(root, file);
-    const exists = existsSync(path);
-    if (!exists) {
+    const text = read(file);
+    if (text === undefined) {
       if (file === "CLAUDE.md" && !opts.createClaudeMd) {
         results.push({ file, action: "absent", detail: "not created; AGENTS.md carries the section" });
         continue;
       }
-      writeFileSync(path, `# ${file === "AGENTS.md" ? "AGENTS.md" : "CLAUDE.md"}\n\n${wrap(body)}\n`);
-      state.sections[file] = { hash: newHash, updated_at: now };
+      files.push({ file, content: `# ${file}\n\n${wrap(body)}\n` });
+      state.sections[file] = { hash: newHash };
       results.push({ file, action: "created" });
       continue;
     }
-    const text = readFileSync(path, "utf8");
     if (file === "CLAUDE.md" && isIncludeOnly(text)) {
       results.push({ file, action: "skipped-include", detail: "CLAUDE.md includes AGENTS.md; left as is" });
       continue;
@@ -136,14 +153,14 @@ export function installOwnedSection(root: string, opts: InstallOptions = {}): Se
     const split = findOwnedSection(text);
     if (!split) {
       const sep = text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
-      writeFileSync(path, `${text}${sep}${wrap(body)}\n`);
-      state.sections[file] = { hash: newHash, updated_at: now };
+      files.push({ file, content: `${text}${sep}${wrap(body)}\n` });
+      state.sections[file] = { hash: newHash };
       results.push({ file, action: "appended" });
       continue;
     }
     const currentHash = sha256(split.inner);
     if (currentHash === newHash) {
-      if (state.sections[file]?.hash !== newHash) state.sections[file] = { hash: newHash, updated_at: now };
+      if (state.sections[file]?.hash !== newHash) state.sections[file] = { hash: newHash };
       results.push({ file, action: "unchanged" });
       continue;
     }
@@ -157,12 +174,20 @@ export function installOwnedSection(root: string, opts: InstallOptions = {}): Se
       results.push({ file, action: "refused-local-edit", detail: "a relay section exists that relay did not write; re-run with --force to take it over" });
       continue;
     }
-    writeFileSync(path, `${split.before}${wrap(body)}${split.after}`);
-    state.sections[file] = { hash: newHash, updated_at: now };
+    files.push({ file, content: `${split.before}${wrap(body)}${split.after}` });
+    state.sections[file] = { hash: newHash };
     results.push({ file, action: "updated" });
   }
-  writeRulesState(root, state);
-  return results;
+  const stateText = rulesStateText(state);
+  return { results, files, state, stateText, stateChanged: stateText !== rulesStateText(prior) };
+}
+
+/** Install or update the owned section in AGENTS.md and CLAUDE.md under `root` (`planOwnedSection`, then the writes). */
+export function installOwnedSection(root: string, opts: InstallOptions = {}): SectionResult[] {
+  const plan = planOwnedSection((file) => (existsSync(join(root, file)) ? readFileSync(join(root, file), "utf8") : undefined), readRulesState(root), opts);
+  for (const f of plan.files) writeFileSync(join(root, f.file), f.content);
+  writeRulesState(root, plan.state);
+  return plan.results;
 }
 
 /** Remove the owned section (markers included) from both files and forget the hashes. Files are never deleted. */
