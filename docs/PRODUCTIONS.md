@@ -81,7 +81,7 @@ The task's thread has every step of the worker: the line that says where it runs
 
 ## The agents
 
-Nothing here needs a person at a keyboard except the decision, and even that can be delegated to a bot with `tasks:write`.
+Nothing here needs a person at a keyboard except the decision, and even that can be delegated to a bot with `tasks:decide`.
 
 - **A script or story agent** (Claude, Codex, Grok through a `relay link`-ed checkout of the tracker, or a bot over MCP) writes `script.md` and `shots.md` and opens one task per character pass and per shot, with the prompt in the manifest. It reads the production's memory first (`relay_brief` / `relay brief`): the decisions and preferences, and the vendor guidance for the model it is prompting (`relay onboard bytedance/seedance-2.5`, `relay_guidance`).
 - **The nodes workers** do the rendering: the Mac with the engine, the mini, a machine with a local model; a machine serves the lane when `relay doctor` shows `nodes` and the keys the workflow needs are in its environment. Nothing of the workflow's keys leaves that machine.

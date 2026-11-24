@@ -526,12 +526,15 @@ workspace-write`; Grok and fx run under their permission modes with no OS sandbo
 **The project's own commands.** The `setup` and `verify` commands of the profile run without a model, and `npm ci`
 runs every dependency's install script. Each one runs under Anthropic's sandbox runtime (`srt`, the npm package
 `@anthropic-ai/sandbox-runtime`; `packages/core/src/work/exec.ts`) with the limits of the table above: writes inside
-the clone and the package caches, the same denied paths, the same default hosts plus the granted ones. With
-`--no-sandbox`, or in the container tier when the nested sandbox cannot start, they run directly with `sh -c`. A
-worker that should sandbox and cannot find the runtime does not run the command: it fails with exit 127 and the
-reason, and never falls back to running it unguarded. The runtime is a dependency of relay, installed with it, and
+the clone and the package caches, the same denied paths, the same default hosts plus the granted ones. On a host
+that holds whatever `--no-sandbox` says: the flag is about the Claude lane's Bash. They run directly with `sh -c`
+only in the container tier when the nested sandbox cannot start, and in a paid run's microVM. A worker that should
+sandbox and cannot find or start the runtime does not run the command: it fails with exit 127 and the reason, and
+never falls back to running it unguarded. The runtime is a dependency of relay, installed with it, and
 `relay doctor`'s `sandbox` line warns when it is missing. The values of a granted capability set are in the
 environment of these commands, and of the lane when the lane is `claude`, and nowhere else (`docs/PROFILE.md`).
+What a command prints and what a lane says are stripped of those values before they are posted anywhere, and a
+change that contains one is not pushed.
 
 The allowlist is a permission policy, the second layer: it decides which tool calls the CLI accepts, the sandbox
 decides what the accepted commands can reach. `pnpm test` still runs whatever the repository's `package.json` says,
@@ -730,7 +733,8 @@ matter, what is out of scope, and the command that proves it is done.
 With `--push` the uncommitted work goes along. The working tree is made a commit on top of `HEAD` in a temporary
 index and pushed to origin as the branch `relay/handoff/<8 hex of the commit>`, and the task starts from that branch
 (its `base`), so the worker's pull request is against it. The working tree, the index and the current branch stay as
-they are. New files git does not ignore are included. `--push` is refused when the checkout's origin is not the
+they are. New files git does not ignore are included, so the command names every file it sends and pushes
+nothing when one of them holds what looks like a secret (the same check as adoption's). `--push` is refused when the checkout's origin is not the
 project's repository, since the worker clones the project's repository, and a lane no worker serves is refused
 before anything is pushed. Without `--push` the task starts from the default branch: the uncommitted work is not
 part of it, and neither are commits that are not on the default branch. The command says which files it did not
@@ -755,7 +759,7 @@ task's thread (`paidRun` in `packages/core/src/work/job.ts`):
 | the lane | `claude` only: a task on `claude` or `any` runs on it, and a task on another lane is refused, since no other lane has a gateway adapter |
 | a person's grant | the thread must hold a `relay-grant@1` block with `cloud_cap_usd` for the task's text as it stands, from who may decide ("The board" above). Without one the worker hands the task back untouched |
 | the project's profile | `cloud: never` refuses the run, and the task is handed back the same way |
-| the cap | one for the whole job: the smaller of `--cap` and the grant. Each model call may spend what is left, and what it cost comes off before the next. With less than 0.02 US dollars left, no further call is made |
+| the cap | one for the whole job: the smaller of `--cap` and the grant. Each model call relay starts may spend what is left, and what it cost comes off before the next. With less than 0.02 US dollars left, no further call is made. It is relay's own count, not a limit at the gateway: anything else that can use the gateway's credential is not held to it |
 | the injection gate | its model call goes through the gateway too, within the same cap and at most 0.25 US dollars |
 | steps | `before-pr` steps run within the cap. An `after-pr` step is not run: the work goes straight to review, and the thread says so |
 | the brief | the thread's `brief.md`; a gateway run does not compile one from the machine's memory |
@@ -772,8 +776,16 @@ the one repository, the model gateway) are put on its requests by the sandbox's 
 inside, and the worker there registers as `cloud-<ref>`. `docs/PROFILE.md`, "Paid sandbox runs", has when a run is
 offered, what the sandbox is and when it starts; `docs/HOSTING.md` has what the deployment needs.
 
+That path is experimental, and a worker there is not like one on your machine. It runs with `--no-sandbox`, so the
+lane can run any code in the microVM, and that code can use what the firewall signs: push to the task's repository,
+call the gateway past the cap, and write in the task's own queue on the board as the site. What bounds each of
+those, and what does not, is in `docs/SECURITY.md`, "What a paid run's lane can reach". Two of the bounds are yours
+to set and relay checks only the first: a rule on the repository's default branch that requires an approved pull
+request (no run starts without it), and a budget on the gateway's key.
+
 None of this has been run against a real sandbox or a real gateway yet. The sandbox installs the version of
-`@kyleroche/relay` in `packages/cli/package.json`, which must be on npm with `--task` and `--billing` in it first.
+`@kyleroche/relay` in `packages/cli/package.json`, which must be on npm with `--task` and `--billing` in it first,
+and one exact version of Claude Code.
 
 ## No cloud lanes
 

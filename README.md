@@ -13,7 +13,7 @@ relay turns Claude Code, Codex, and Grok Build into a team that shares memory, p
 - **Plans before work.** `relay task create --plan` opens a planning task: a lane reads the repository and proposes the tasks, and nothing is opened until the plan is approved. A read-only step that ends without a plan is a report you read and accept.
 - **A second opinion before yours.** A project lists the steps its tasks run: comment cleanup before the PR opens, a second lane that judges the finished work and the first lane's answer to each finding, a cleanup pass on demand. Steps are Markdown files you can replace ([docs/STEPS.md](docs/STEPS.md)).
 - **A profile per project.** `.relay/project.json` on the default branch names the commands a worker runs before and after the work, the project's tools and skills, and the capability sets a task may be granted: environment variable names and hosts, never values. A task gets a set only when a person grants it ([docs/PROFILE.md](docs/PROFILE.md)).
-- **Your machines first, paid credits only on your word.** Waiting for one of your own workers is the default. A hosted relay can offer a queued task that none of them can take a run in a Vercel Sandbox on paid credits; nothing starts or spends until you approve a cap for that one task, and the credentials it needs never enter the sandbox. This path has not been run against a real sandbox yet.
+- **Your machines first, paid credits only on your word.** Waiting for one of your own workers is the default. A hosted relay can offer a queued task that none of them can take a run in a Vercel Sandbox on paid credits; nothing starts or spends until you approve a cap for that one task. The credentials it needs cannot be read inside the sandbox, but code a fooled model runs there can use them: push to that one repository, call the model gateway past the cap, write in that project's queue. So a run starts only where the repository's default branch requires an approved pull request, and the gateway's key should carry a budget ([docs/SECURITY.md](docs/SECURITY.md), "What a paid run's lane can reach"). Experimental: this path has not been run against a real sandbox yet.
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
 
@@ -73,8 +73,10 @@ is merged.
 `relay link` also adds the GitHub labels, and on a hosted relay it checks that the site's GitHub App is installed on
 the repo and prints the install link when it is not (without it the repo's issues, labels, PRs and previews never
 reach the site). It prints each stage and one cost line, then a `left:` line for each thing only you can do (merge the
-pull request, install the App), or `done:` when nothing is left. A second run with nothing changed makes no model
-calls and opens no second pull request. `--refresh` rewrites the summary after memory changes; `--no-digest` skips the
+pull request, install the App), or `done:` when nothing is left. It asks one question: before the notes it adopted
+are pushed and the preferences recorded, it lists them and waits for a yes (`--yes` answers in advance). A second run
+with nothing changed makes no model calls and opens no second pull request; while the pull request is open, a later
+run adds a commit on top of whatever a reviewer pushed there and never replaces it. `--refresh` rewrites the summary after memory changes; `--no-digest` skips the
 model steps; `--no-adopt` skips adoption; `--no-labels` and `--no-events` skip the labels and the GitHub App check.
 `relay adopt` prints what adoption would take from this machine and writes nothing.
 

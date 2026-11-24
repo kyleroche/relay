@@ -33,7 +33,7 @@ Zero-browser path: an operator runs `relay invite create --for <you> --scopes â€
 - [Agent readiness](docs/AGENT-READINESS.md): what the hosted site serves so agents can find, read, and use it
 - [Versioning](docs/VERSIONING.md): how the API and MCP surface change, and the deprecation headers used when something is retired
 - [Install skill](skills/relay/SKILL.md): the agent skill for installing and operating relay
-- [The lead](apps/lead/README.md): an optional agent on Vercel's eve framework that takes an ask in plain language and opens tasks through the site's MCP server; it has no approve, release or close tool, and its model calls are billed per token
+- [The lead](apps/lead/README.md): an optional agent on Vercel's eve framework that takes an ask in plain language and opens tasks through the site's MCP server; it has no approve, release or close tool and no token scope for them, and its model calls are billed per token
 
 ## Reference
 

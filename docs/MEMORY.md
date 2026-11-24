@@ -141,12 +141,17 @@ merge. It runs the whole pipeline, printing a line per stage:
    Purpose, Stack and layout, Commands, Conventions and Gotchas; a rejected answer is re-requested once, a second
    rejection fails the stage (the old summary is kept) and link exits non-zero;
 5. adoption: what Claude Code knows about the repository on this machine, with no model call ("Adoption" below;
-   `--no-adopt` skips it). The decisions go to memory now, so `relay.md` is rendered with them;
+   `--no-adopt` skips it). When it found anything new, link lists the notes and preferences and asks once before
+   including them: a yes pushes the notes to the repository's host and sends the preferences to relay's memory.
+   `--yes` answers in advance; with no terminal and no `--yes` they are left out and named. The decisions go to
+   memory now, so `relay.md` is rendered with them;
 6. render `relay.md` from the real summary (rewritten whenever its content changed);
 7. the pull request: every repository file from the stages above (the owned sections, `.relay/rules.json`,
    `relay.md`, the adopted notes under `docs/context/`, a drafted `.relay/project.json`) as one commit on top of
    origin's default branch, pushed to the branch `relay/link` and opened as one pull request titled "Link this
-   repository to relay". A caller workflow relay itself wrote into the repository is removed in the same commit;
+   repository to relay". A caller workflow relay itself wrote into the repository is removed in the same commit.
+   While that pull request is open, a later run reads the branch as it stands, a reviewer's commits included, adds
+   one commit on top and says what it added in a comment; it never replaces what is there;
 8. GitHub labels (`--no-labels`);
 9. in site mode, the upload of the project, its digests and the summary, then the `events` stage: is the site's
    GitHub App installed on this repo (`GET /api/v1/projects/{slug}/github`)? `ok` with the installation id, or `warn`
@@ -158,8 +163,9 @@ merge. It runs the whole pipeline, printing a line per stage:
 
 **The checkout is not written.** `relay link` reads the files it would change from the default branch as origin has
 it and builds the commit in a temporary index (`packages/cli/src/commands/_tree.ts`), so the working tree, the index
-and the current branch stay as they are. A later run updates the same branch and pull request, and opens none when
-the default branch already has every file. Workers read `relay.md`, the steps and the profile from the default
+and the current branch stay as they are. A later run adds to the open pull request, and opens none when the default
+branch already has every file; only a branch left over from a pull request that was merged or closed is started
+again from the default branch. Workers read `relay.md`, the steps and the profile from the default
 branch, so nothing takes effect until the pull request is merged.
 
 **Without a pull request.** With `--no-pr`, when the checkout has no origin or its origin is not the repository

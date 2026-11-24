@@ -31,7 +31,10 @@ as the site reads it).
 ```
 
 Every key is optional. The file holds names and never a value: a set lists the names of environment variables, and
-the values stay wherever the worker finds them ("Where the values come from" below).
+the values stay wherever the worker finds them ("Where the values come from" below). A key the file does not have is
+named as a problem and ignored, so a misspelt `verify` is seen. A set may not name a variable that steers the run
+instead of carrying a secret: relay's own (`RELAY_*`), git's (`GIT_*`), a proxy, `NODE_OPTIONS`, `PATH`, `HOME` and
+the like (`STEERING_ENV` in `packages/core/src/steps/profile.ts`).
 
 | Key | Shape | Meaning |
 |---|---|---|
@@ -105,13 +108,16 @@ On the board a grant is a `relay-grant@1` block in a reply to the task:
 |---|---|
 | `set` | the name of a capability set |
 | `cloud_cap_usd` | or: the most a paid sandbox run of this task may cost, in US dollars, above 0 and at most 1000 |
-| `digest` | the SHA-256 of the task's title and body as they stood when the grant was given |
+| `digest` | the SHA-256 of what a lane is given as the task when the grant was given: its title, its body and every note people added in the thread (`grantDigest`) |
 
 A grant holds exactly one of `set` and `cloud_cap_usd`. The rules:
 
-- **A grant is for the text as it stands.** A worker counts a grant only when its `digest` matches the task's title
-  and body at the time of the run. A grant given before the text was edited counts for nothing, and the person
-  grants again after reading the new text.
+- **A grant is for the text as it stands.** A worker counts a grant only when its `digest` matches the task's title,
+  body and notes at the time of the run. A grant given before the text was edited, or before somebody added a note
+  to the thread, counts for nothing, and the person grants again after reading the new text. This is the same rule
+  as a release of the gate's hold.
+- **A grant that was edited is none.** An edit keeps its author's name whoever made it, and relay never edits a
+  grant, so a grant or a release on an edited message is not believed.
 - **A grant is believed only from who may decide** (`isDecidingActor`): a trusted principal itself (the worker's own
   login, an owner in `board.from`: a person at the CLI) or the site's own profile of one, `relay-site`, which the site
   writes only after a signed-in person asked. A worker's profile (`relay-<worker>-<lane>`) reports what a run did and
@@ -124,8 +130,11 @@ A grant holds exactly one of `set` and `cloud_cap_usd`. The rules:
 - **A set the profile does not define adds nothing.** The run says so in the thread.
 
 At the start of a run with granted sets, the worker posts one line in the thread: the sets, how many hosts, how many
-of the variables it found, and the names of the ones it did not. Names only. A value is never written to the thread,
-the log, a prompt or a file.
+of the variables it found, and the names of the ones it did not. Names only. relay itself never writes a value to
+the thread, the log, a prompt or a file, and it takes granted values out of text that could carry one: what a
+command printed and what a lane said are stripped of every granted value (each becomes its variable's name in
+brackets) before they reach the thread, the pull request or the task's reason, and a change that contains a granted
+value is not pushed: the task fails and says which variable. A value shorter than 6 characters is not looked for.
 
 A granted set does two things for that run:
 
@@ -174,8 +183,9 @@ user only, and deleted when the command ends. Each command has 20 minutes.
 | Worker | How the commands run |
 |---|---|
 | `relay work` (the default) | under the sandbox runtime |
-| `relay work --no-sandbox` | directly, with `sh -c`, as the worker's OS user |
-| the container tier, when the nested sandbox cannot start | directly, inside the container, which is the boundary |
+| `relay work --no-sandbox` on a host | still under the sandbox runtime: the flag is about the Claude lane's Bash. Where the runtime cannot start, the command fails and does not run |
+| the container tier, when the nested sandbox cannot start | directly, inside the container, which is the boundary and holds the logins made in it |
+| a paid run's microVM | directly, inside the microVM |
 
 The runtime is a dependency of relay and is installed with it. `relay doctor`'s `sandbox` line warns when it is not
 found beside relay. A worker that should sandbox and cannot find it does not run the command: it fails with exit 127
@@ -188,6 +198,10 @@ Every lane runs on your subscriptions, on your machines, and waiting for one of 
 can offer to run one queued task in a Vercel Sandbox on paid credits instead. Nothing starts and nothing is spent
 until a person approves a cap for that one task. `cloud` in the profile says whether a task of the project may ever
 run that way: `ask` (the default) or `never`.
+
+**Experimental.** No paid run has been made against a real sandbox or a real gateway. A deployment offers none
+unless `RELAY_GATEWAY_TOKEN` is set. Read "What a paid run's lane can reach" in `docs/SECURITY.md` before you set it:
+inside the sandbox the lane can run any code, and what the sandbox's firewall signs for it, that code can use.
 
 **The offer.** The site computes it each time it renders a queued task, on the board's card and on the task's page,
 and writes nothing to make it (`cloudOffer` in `packages/core/src/cloud/offer.ts`). A task is offered a run only
@@ -210,6 +224,32 @@ nothing else. "Run in cloud" opens a sheet with an estimate and a cap to edit:
 | estimate | the median cost of the project's past runs on the Claude lane, from the feed; "no history yet" with fewer than 3 |
 | the cap shown first | twice the estimate, at least 1 US dollar, at most the deployment's limit |
 | the deployment's limit | `RELAY_CLOUD_MAX_CAP_USD`, 10 US dollars by default, never above 1000 |
+
+**What the cap is.** relay stops its own model calls at the cap: each call relay starts gets what is left of it. It
+is not a limit the gateway keeps. The sandbox's firewall adds the site's gateway key to any request for the gateway's
+coding endpoint, whichever process in the sandbox sent it, so code a fooled lane runs there can call the gateway
+outside relay's count and spend more. The only limit on that is the budget set on the key itself, at the gateway
+(`docs/HOSTING.md`, 8c). The sheet says this beside the amount (`CLOUD_CAP_NOTE` in
+`packages/core/src/cloud/offer.ts`).
+
+**The branch rule.** A run is approved, and later started, only for a repository whose default branch takes changes
+through a pull request that someone else approved (`apps/web/lib/cloud/guard.ts`). The site asks GitHub, as its
+GitHub App, each time:
+
+| GitHub must say | Why |
+|---|---|
+| a pull request is required | else the lane could `git push` its work straight to the default branch |
+| with at least 1 approval | the run's token opened the pull request, and GitHub lets nobody approve their own |
+| of the most recent push | else the lane could push onto someone else's open pull request, approve that one as relay's App, and merge it |
+| and relay's GitHub App may not bypass the rule | the run's token is the App's |
+
+Without it the sheet says what to turn on and Approve is off; the approve action and the pool refuse the same way.
+Use a ruleset (Settings, Rules, Rulesets). Classic branch protection is believed only when the App may read its
+settings, which takes the Administration permission relay's App does not ask for. When GitHub does not say whether
+the App may bypass a ruleset, the run is allowed and the sheet says that it is not known.
+
+The rule has a cost, and it is the price of this design: relay's own Approve merges as the same GitHub App, so on
+such a repository it merges a pull request only after a person approved it on GitHub.
 
 **The approval is a grant.** Approving posts a `relay-grant@1` block with `cloud_cap_usd` in the task's thread, under
 the rules of every grant: a signed-in person only, for the task's text as it stands. `relay task grant <task-id>
@@ -237,14 +277,20 @@ your own workers that claims the task first wins: the task has left the queue an
 |---|---|
 | image and size | Vercel's `vercel/sandbox/universal` image, 2 vCPUs, not persistent |
 | lifetime | 10 minutes plus 10 per dollar of the cap, at least 15 minutes and at most 60, and never past the life of the credentials at its firewall |
-| network | deny by default. Allowed: the board, the model gateway's coding endpoint, `github.com` for the task's one repository, `api.github.com`, `registry.npmjs.org`, and the hosts of the capability sets granted to the task |
-| credentials | three, all added to requests by the sandbox's firewall and none readable inside: the board as the site's deployment under the worker's profile, held to the queues and the workers channel; an installation token of the site's GitHub App for the one repository; the gateway's key. The variables inside hold a placeholder, and the launcher refuses to start if a credential would be readable there |
-| what runs | it checks Node 24, git and gh, installs `@kyleroche/relay` at the site's own version and Claude Code, then runs `relay work --task <id> --billing gateway --cap <usd> --no-sandbox` as the worker `cloud-<ref>`. The microVM is the isolation, so Claude Code's own OS sandbox is off there |
+| network | deny by default. Allowed: the board, the model gateway's coding endpoint, GitHub as the next rows say, `registry.npmjs.org`, and the hosts of the capability sets granted to the task. A set's wildcard that takes in the board's, the gateway's or GitHub's host (`*.github.com`) is refused, and the run does not start |
+| `github.com` | git over https for the task's one repository: `info/refs`, `git-upload-pack`, `git-receive-pack`. Every other path on the host is answered 403 by the firewall, so no other repository is reachable, public ones included (a project whose install fetches git dependencies from GitHub cannot run this way) |
+| `api.github.com` | `GET /`, `POST /graphql`, and reads under `/repos/<repo>`. Every other request is answered 403 by the firewall; the REST paths that merge, that move or delete a ref, and those of branch protection and rulesets are refused by name, for any repository |
+| credentials | three, all added to requests by the sandbox's firewall and none readable inside. The board: the site's deployment under the worker's profile, held to the task's own queue `work/<project>` and the workers channel. GitHub: an installation token of the site's GitHub App for the one repository, minted with `contents: write`, `pull_requests: write` and `metadata: read` and nothing else the App holds. The gateway: the site's key. The variables inside hold a placeholder. The launcher refuses to start if a credential would be readable there, if GitHub's token may do more than those three permissions, or if the board's policy names another queue or another profile |
+| what runs | it checks Node 24, git and gh, installs `@kyleroche/relay` at the site's own version and Claude Code at one exact version (`CLOUD_CLAUDE_CODE_VERSION` in `packages/core/src/cloud/plan.ts`, changed only on purpose), then runs `relay work --task <id> --billing gateway --cap <usd> --no-sandbox` as the worker `cloud-<ref>`. The microVM is the isolation, so Claude Code's own OS sandbox is off there, and the lane can run any code in it |
+
+What the firewall cannot do. `gh` opens and comments on a pull request through `/graphql`, and a firewall rule sees
+a path, not a request's body: a merge sent as a GraphQL mutation is signed like any other request there. A push to
+the default branch is the same request as a push of the run's own branch. The branch rule above is what stops both.
 
 **The job decides again** (`paidRun` in `packages/core/src/work/job.ts`; `docs/WORKERS.md`, "One task on paid
 credits"). The worker inside runs on paid credits only when the thread holds a person's grant for the text as it
 stands and the profile does not say `cloud: never`. Otherwise it hands the task back untouched. The run has one cap
-for all its model calls: the smaller of the grant and `--cap`.
+for all the model calls relay makes: the smaller of the grant and `--cap`.
 
 What a paid run does not do:
 
@@ -253,9 +299,10 @@ What a paid run does not do:
 - An `after-pr` step is not run: the sandbox cannot open a task another worker takes. The work goes straight to
   review and the thread says so.
 
-Nothing here has been run against a real sandbox or a real gateway yet. The sandbox installs the version of
-`@kyleroche/relay` in `packages/cli/package.json`, so that version must be published to npm, with `relay work
---task` and `--billing` in it, before a paid run can work.
+Nothing here has been run against a real sandbox or a real gateway yet: not the firewall's rules, not `gh` and
+`git` behind them, not the narrowed token. The sandbox installs the version of `@kyleroche/relay` in
+`packages/cli/package.json`, so that version must be published to npm, with `relay work --task` and `--billing` in
+it, before a paid run can work.
 
 ## A first profile from adoption
 

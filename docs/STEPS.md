@@ -175,10 +175,12 @@ default branch's layers over the task's text, so a project can replace it with `
 | `project`, `repo`, `base` | optional: another project's queue, its repository and a base branch, for work that crosses repositories. A task for another project must name the repository |
 
 The worker checks the plan, posts it in the thread as the attachment `plan.json` with a numbered summary a person
-can read, and holds the task. Nothing is opened yet.
+can read, and holds the task. Nothing is opened yet. The summary shows each task by its first line only and says so:
+the whole text of each task, which is what a lane will be given, is in `plan.json`.
 
 **Approving a plan.** `relay task approve <id>` reads `plan.json` from the reply the hold names, compares its SHA-256
-with the one in the hold, checks the plan again, and opens each task as the approver, in an order that puts every
+with the one in the hold, checks the plan again, refuses it whole when one of its tasks names a lane no worker
+serves, and opens each task as the approver, in an order that puts every
 task after the ones it needs, with `needs` set to the board IDs of those tasks. Each task is opened under the
 idempotency key `plan:<the planning task's ID>:<key>`, so approving twice opens nothing twice. A reply in the thread
 lists the opened tasks by key and ID, and the planning task completes with `plan approved: opened N tasks`.

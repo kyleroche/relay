@@ -83,11 +83,12 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
 | `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with contents, pull requests and issues write on the managed repos | the fallback when no app is configured, for the same merges, comments and closes |
 | `RELAY_ALLOWED_SENDERS` | comma-separated logins | whose `agent:<lane>` label on an issue opens a task on the board (else the repository's Actions variable of the same name; with neither, nobody) |
-| `RELAY_GATEWAY_TOKEN` | optional: the model gateway's key (Vercel AI Gateway → API keys) | paid sandbox runs (step 8c). Without it no run is offered or started. The sandbox's firewall adds it to requests; it never enters the sandbox |
+| `RELAY_GATEWAY_TOKEN` | optional: the model gateway's key (Vercel AI Gateway → API keys). Make it a key of its own, with a budget (step 8c) | paid sandbox runs (step 8c), experimental. Without it no run is offered or started. The sandbox's firewall adds it to requests for the gateway's coding endpoint, from any process in the sandbox; it cannot be read there, and it can be used there |
 | `RELAY_GATEWAY_URL` | optional: an https URL | the gateway endpoint Claude Code is pointed at in a paid run; unset means Vercel AI Gateway's Claude Code endpoint |
 | `RELAY_CLOUD_AFTER_MINUTES` | optional: a positive number | how long a task waits in the queue before a paid run is offered; unset means 15 |
 | `RELAY_CLOUD_MAX_CAP_USD` | optional: a positive number | the most a person may approve for one paid run, in US dollars; unset means 10, and never above 1000 |
 | `RELAY_LEAD_URL` | optional: the origin of relay's lead (step 8b) | when set, the site wakes the lead about a task that failed, was held at the gate or reached review; unset means no lead |
+| `RELAY_LEAD_WAKE_SECRET` | with `RELAY_LEAD_URL`: at least 32 characters (`openssl rand -hex 32`), the same value as on the lead's project | signs each wake-up (HMAC-SHA256) so the lead knows the site sent it; used for nothing else. Unset or shorter means no wake-up is sent |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
 | `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
@@ -269,40 +270,82 @@ Releases are staged, not published, by the workflow: pushing a `v<version>` tag 
 
 The lead (`apps/lead`) is a separate Vercel project on the same team as the site, with its own environment, token
 and deployment steps: `apps/lead/README.md`. It reaches this site only through `/mcp` with a scoped token minted on
-the Access page (`tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read`, `events:write`). Its model
-calls are billed per token through Vercel AI Gateway to the team that owns its project. The site runs without it.
+the Access page (`tasks:read`, `tasks:write`, `memory:read`, `feed:read`, `events:write`; never `tasks:decide`,
+`tokens:write` or `memory:write`). Its model calls are billed per token through Vercel AI Gateway to the team that
+owns its project. The site runs without it.
 
-To have the site wake the lead, set `RELAY_LEAD_URL` on the site's project to the lead's origin (https) and deploy.
-The site then posts to the lead's `/relay/wake` when a task failed, was held at the gate or reached review, signed
-with the site deployment's own Vercel OIDC token; no secret is shared between the two. On the lead's project, set
-`RELAY_SITE_TEAM` and `RELAY_SITE_PROJECT` so it accepts that token and no other project's. The `lead` watcher
-exists only where the variable is set, and only the board wakes it: a site the board does not wake (local
-development, a board at `BOARD_URL`) wakes no lead.
+To have the site wake the lead, make one secret of at least 32 characters (`openssl rand -hex 32`), set it as
+`RELAY_LEAD_WAKE_SECRET` on both projects, set `RELAY_LEAD_URL` on the site's project to the lead's origin (https),
+and deploy both. The site then posts to the lead's `/relay/wake` when a task failed, was held at the gate or reached
+review, with a timestamp and an HMAC-SHA256 signature over the timestamp and the body. It sends no token: the site
+deployment's own Vercel OIDC token is its identity on the team's board and goes nowhere else. With the URL set and no
+usable secret the site sends nothing and says why once in its log; a lead without the secret answers 503. The
+`lead` watcher exists only where `RELAY_LEAD_URL` is set, and only the board wakes it: a site the board does not
+wake (local development, a board at `BOARD_URL`) wakes no lead.
+
+The wake-up carries no Vercel credential, so Vercel's Deployment Protection does not let it through. `RELAY_LEAD_URL`
+must be an address of the lead that protection leaves open, normally its production domain; behind protection the
+wake-up gets Vercel's 401 and is dropped (`apps/lead/README.md`, "Deploy").
 
 ## 8c. Paid sandbox runs (optional)
 
 A queued task that none of your workers can take can be offered a run in a Vercel Sandbox on paid credits. Nothing
 starts or spends until a signed-in person approves a cap for that one task (`docs/PROFILE.md`, "Paid sandbox runs").
+
+This is experimental: no paid run has been made against a real sandbox or a real gateway. It stays off unless
+`RELAY_GATEWAY_TOKEN` is set. Before you set it, read `docs/SECURITY.md`, "What a paid run's lane can reach": the
+lane can run any code in the sandbox, and that code can use what the sandbox's firewall signs.
+
 The deployment needs:
 
 | Need | Why |
 |---|---|
-| `RELAY_GATEWAY_TOKEN` | the model gateway's key; without it the offer is never shown |
-| the site's GitHub App (step 4b), installed on the task's repository | the site mints an installation token for that one repository for each start; `GITHUB_TOKEN` alone is not enough |
-| nothing for the board | the sandbox reaches it as the site's deployment, under the worker's profile, with its rights narrowed to the queues and the workers channel |
+| `RELAY_GATEWAY_TOKEN` | the model gateway's key; without it the offer is never shown. Give it a budget (below) |
+| the site's GitHub App (step 4b), installed on the task's repository | the site mints an installation token for that one repository for each start, with `contents: write`, `pull_requests: write` and `metadata: read` only; `GITHUB_TOKEN` alone is not enough |
+| a rule on the default branch of each repository that may run this way | a pull request with at least 1 approval, "Require approval of the most recent reviewable push" on, and relay's GitHub App not on the bypass list. The site asks GitHub before a run is approved and before it starts, and refuses without it (below) |
+| nothing for the board | the sandbox reaches it as the site's deployment, under the worker's profile, with its rights narrowed to the task's own queue (`work/<project>`) and the workers channel |
 | nothing for the sandbox itself on Vercel | it is created with the deployment's own OIDC token; locally, `vercel env pull` provides one |
+
+**A budget on the gateway's key.** The cap a person approves is kept by relay's own model calls. The firewall adds
+this key to any request for the gateway's coding endpoint, whichever process in the sandbox sent it, so code a
+fooled lane runs there can spend past the cap. What it can spend at most is the budget on the key. Make a key for
+paid runs alone and give it one:
+
+```bash
+vercel ai-gateway api-keys create --name relay-paid-runs --amount 50 --refresh-period monthly
+```
+
+Or add one to a key you have (`vercel ai-gateway budgets set api-key relay-paid-runs --amount 50 --refresh-period
+monthly`), or use the key's Edit dialog in the dashboard. Three things to know, from Vercel's own documentation: a
+budget is at least 1 US dollar; it is a soft cap, checked when a request starts, so the request that crosses it
+still completes; and a new budget may not count requests for its first minute or two. A key with no budget of its
+own, and no default budget for the team's keys, is limited only by the team's budget, if there is one. relay does not make a key per run: Vercel's API for that takes a person's
+Vercel access token, which the deployment does not hold and should not.
+
+**The rule on the default branch.** In the repository: Settings, Rules, Rulesets, New branch ruleset, target the
+default branch, "Require a pull request before merging" with 1 required approval and "Require approval of the most
+recent reviewable push", bypass list empty. Why each part is needed is in `docs/PROFILE.md`, "The branch rule". Two
+consequences:
+
+- relay's own Approve merges as the same GitHub App, so on that repository it merges a pull request only after a
+  person approved it on GitHub. Do not put the App on the bypass list to get around that: every paid run's token
+  would bypass the rule too, and the site refuses a run when GitHub says the App may bypass.
+- Classic branch protection does not count unless the App may read its settings (the Administration permission,
+  which relay's App does not ask for). Use a ruleset.
 
 `RELAY_CLOUD_AFTER_MINUTES` and `RELAY_CLOUD_MAX_CAP_USD` set when a run is offered and the most a person may
 approve. A project opts out with `"cloud": "never"` in its profile.
 
 The sandbox installs `@kyleroche/relay` from npm at the version in `packages/cli/package.json` the site was built
-with. That version must be published (section 8), with `relay work --task` and `--billing` in it, before a paid run
+with, and Claude Code at the one version named in `packages/core/src/cloud/plan.ts` (`CLOUD_CLAUDE_CODE_VERSION`).
+The relay version must be published (section 8), with `relay work --task` and `--billing` in it, before a paid run
 can work. Nothing here has been run against a real sandbox or a real gateway yet.
 
 ## 9. Checklist
 
-- [ ] Optional: `RELAY_GATEWAY_TOKEN` set and the deployed CLI version published, if paid sandbox runs are wanted;
-      `RELAY_LEAD_URL` set, if the lead is deployed
+- [ ] Optional, experimental: `RELAY_GATEWAY_TOKEN` set to a key with a budget, the deployed CLI version published
+      and a ruleset on each repository's default branch (step 8c), if paid sandbox runs are wanted;
+      `RELAY_LEAD_URL` set, and the same `RELAY_LEAD_WAKE_SECRET` on the site and on the lead, if the lead is deployed
 
 - [ ] Project imported with root directory `apps/web`
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview

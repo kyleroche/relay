@@ -180,20 +180,26 @@ a plan into calls on `@vercel/sandbox` (`apps/web/lib/cloud/`).
   label `cloud=approved` as a hint.
 - *The pool* (`runApproved` in `apps/web/lib/cloud/pool.ts`) is the only thing that starts a sandbox. It runs after
   an approval and with the throttled feed sync of a page load. It starts one for each queued task that carries a
-  grant for its text as it stands, from who may decide, within the deployment's limit, and whose profile still
-  allows it. A start is marked in the thread as `relay-site` before the sandbox is made, so two instances start one;
+  grant for its text as it stands, from who may decide, within the deployment's limit, whose profile still
+  allows it, and whose repository's default branch requires an approved pull request. A start is marked in the thread as `relay-site` before the sandbox is made, so two instances start one;
   a start that did not come up is tried again, 3 times at most; a start that may have run is never followed by
   another.
-- *The sandbox* (`cloudRunPlan`, `apps/web/lib/cloud/launch.ts`) gets no credential. The board (as the deployment,
-  under the worker's profile, narrowed to the queues and the workers channel), an installation token of the site's
-  GitHub App for the one repository and the gateway's key are set on its requests by its firewall; the environment
-  inside holds placeholders. Every other host is blocked except the npm registry and the hosts of the capability
-  sets granted to the task. The worker inside is `cloud-<ref>` and does not count as a worker that could take the
-  next task.
+- *The sandbox* (`cloudRunPlan`, `apps/web/lib/cloud/launch.ts`) gets no credential it can read. The board (as the
+  deployment, under the worker's profile, narrowed to the task's own queue and the workers channel), an installation
+  token of the site's GitHub App for the one repository (push and pull requests only) and the gateway's key are set
+  on its requests by its firewall; the environment inside holds placeholders. Every other host is blocked except
+  the npm registry and the hosts of the capability sets granted to the task, and GitHub is held to that repository's
+  git endpoints, `/graphql` and reads. The worker inside is `cloud-<ref>` and does not count as a worker that could
+  take the next task.
+- *What the lane can use.* The lane runs without the OS sandbox in there, so code it runs can send whatever the
+  firewall signs. The firewall cannot keep a GraphQL merge or a push off the default branch, so the site starts a
+  run only where GitHub's own rule requires an approved pull request (`apps/web/lib/cloud/guard.ts`). The cap is
+  relay's count of its own model calls, not a limit at the gateway: a budget on the gateway's key is. The full list
+  is in `docs/SECURITY.md`, "What a paid run's lane can reach".
 - *The job* decides once more (`paidRun`): no grant in the thread, or `cloud: never`, and the task is handed back.
 
-None of it has been run against a real sandbox or a real gateway yet, and the sandbox installs the version of
-`@kyleroche/relay` in `packages/cli/package.json`, which must be published first.
+Experimental: none of it has been run against a real sandbox or a real gateway yet, and the sandbox installs the
+version of `@kyleroche/relay` in `packages/cli/package.json`, which must be published first.
 
 **What the board wakes it for.** Watchers on every project's queue (`work/`), served at `/api/board`
 (`apps/web/lib/board-watch.ts`); the board verifies its own wake-ups, so the route needs no session.
@@ -231,8 +237,10 @@ None of it has been run against a real sandbox or a real gateway yet, and the sa
   `board.from`, and only a brief from an author it believes is used.
 - `lead` exists only where `RELAY_LEAD_URL` names relay's lead. For a task that failed, was held at the gate or
   reached review (`leadWakeOf`; a step's own task and anything an untrusted principal did wake nobody), the site
-  posts what happened to the lead's `/relay/wake`, signed with the deployment's own Vercel OIDC token
-  (`apps/web/lib/lead.ts`). A wake-up that fails is logged and dropped; the task is on the board either way.
+  posts what happened to the lead's `/relay/wake`, signed with a secret the two deployments share
+  (`RELAY_LEAD_WAKE_SECRET`; `apps/web/lib/lead.ts`). No token is sent, and never the deployment's own Vercel
+  identity, which is its credential on this board. Without the secret nothing is sent. A wake-up that fails is
+  logged and dropped; the task is on the board either way.
 
 **GitHub.** Two deliveries act on the board (`apps/web/lib/webhooks/board.ts`). An issue opened with, or given, an
 `agent:<lane>` label by an allowed sender (`RELAY_ALLOWED_SENDERS`) opens a task in the queue of the project
@@ -258,17 +266,18 @@ planning task, so a worker that has read the repository proposes the pieces and 
 | | |
 |---|---|
 | How it reaches relay | only through the site's MCP server at `<site>/mcp`, with a scoped token, like any other bot. It imports nothing from relay's packages except the wire of its own wake route (`packages/core/src/lead/client.ts`) |
-| Its token's scopes | `tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read`, `events:write`. Never `tokens:write` |
-| What it can do | open, read and list tasks, requeue one, send one back with a note, recall memory and record decisions, read the feed and log its own `external.*` events (`RELAY_TOOLS` in `apps/lead/agent/lib/relay-tools.ts`) |
-| What it cannot do | approve, release or close a task, claim one, grant anything, or edit a repository: it has no tool for any of it, and none of eve's default tools (no shell, file or web tools) |
+| Its token's scopes | `tasks:read`, `tasks:write`, `memory:read`, `feed:read`, `events:write`. Never `tasks:decide`, `tokens:write` or `memory:write` |
+| What it can do | open, read and list tasks, requeue one, send one back with a note, recall memory, read the feed and log its own `external.*` events (`RELAY_TOOLS` in `apps/lead/agent/lib/relay-tools.ts`) |
+| What it cannot do | approve, release or close a task, record a decision or a preference, claim a task, grant anything, or edit a repository. Its own tool list has none of it, and none of eve's default tools (no shell, file or web tools). The server holds the same line without the lead's help: approve and close need `tasks:decide`, release `tokens:write`, memory writes `memory:write`, and its token has none of the three |
 | What it costs | its model calls go through Vercel AI Gateway and are billed per token to the Vercel team that owns its project. It is the one part of relay that is not a subscription. After each turn it writes one `external.lead.usage` row to the feed |
 | What shows on the board | what it does shows under its token's name, and the desk's rules for a bot apply to it |
 
 A site wakes the lead about a task that failed, was held at the gate or reached review, when `RELAY_LEAD_URL` is
 set on the site ("What the board wakes it for" above). `packages/core/src/lead/client.ts` is the wire both ends
-share: `wakeLead` sends the request with the site deployment's Vercel OIDC token, and the lead's route
-`POST /relay/wake` validates it with `parseLeadWake` and checks that token against the site's team and project
-(`apps/lead/README.md`, "Environment"). `leadWakeOf` in `packages/core/src/board/site.ts` says which board events are
+share: `wakeLead` signs the request (`signLeadWake`: HMAC-SHA256 over `<unix seconds>.<raw body>` with
+`RELAY_LEAD_WAKE_SECRET`, sent as `x-relay-wake-timestamp` and `x-relay-wake-signature`) and sends no token, and the
+lead's route `POST /relay/wake` checks the signature in constant time, refuses a timestamp more than 5 minutes off
+(`verifyLeadWake`), then validates the body with `parseLeadWake` (`apps/lead/README.md`, "Wake-ups"). `leadWakeOf` in `packages/core/src/board/site.ts` says which board events are
 such a wake-up. There is one session per relay project, and a redelivered event starts no second turn.
 
 The lead's behavior evals (`apps/lead/evals`) are written and have not been run against a model.

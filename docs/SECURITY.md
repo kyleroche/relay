@@ -168,6 +168,14 @@ any part of: the task itself or a note in its thread, since the gate grades both
 approving a task it opened. Both are judged from who the board says wrote a message, and `bot:oauth:<name>` and
 `bot:<name>` are the same bot.
 
+Settling a task has a scope of its own. Approving one (which merges its pull request) and closing one take
+`tasks:decide`; `tasks:write` opens tasks, sends one in review back and requeues one, and nothing more. The scope is
+checked on relay's server for every call (`TOOL_SCOPES` in `packages/mcp/src/server.ts` for the MCP tools,
+`ACTION_SCOPE` in `apps/web/app/api/v1/tasks/[...id]/route.ts` for the API), so a bot that opens work can hold a
+token that cannot settle any, and that does not depend on the bot's own tool list. This is a change for bot tokens
+that already exist: one minted with `tasks:write` before `tasks:decide` existed can no longer approve or close a task
+until it is replaced by one that carries `tasks:decide`. A signed-in person is not affected.
+
 ## Workers (`relay work`)
 
 A worker is the operator's own machine running the vendor CLIs under the operator's own logins (`docs/WORKERS.md`).
@@ -256,15 +264,28 @@ granted (`docs/PROFILE.md`). What keeps that safe:
   dependency's install script. Each runs under Anthropic's sandbox runtime with the Claude lane's limits: writes
   inside the clone and the package caches, the credential paths unreadable, the network allowlist. The runtime is a
   dependency of relay, and `relay doctor`'s `sandbox` line warns when it is missing. A worker that should sandbox
-  and cannot find it fails the command and never runs it unguarded. With `--no-sandbox`, or
-  in a container whose nested sandbox cannot start, they run directly (`packages/core/src/work/exec.ts`).
+  and cannot find it fails the command and never runs it unguarded. `--no-sandbox` on a host does not change this:
+  the flag is about the Claude lane's Bash. They run directly only in relay's container when its nested sandbox
+  cannot start, and in a paid run's microVM, where the container or the VM is the boundary and holds only the
+  logins made in it (`packages/core/src/work/exec.ts`).
+- **A granted value is taken out of what leaves the job.** A failing check prints its environment and a lane quotes
+  what it saw. What a command printed and what a lane said are stripped of every granted value before they reach
+  the thread, the pull request or the task's reason, and a change that contains one is not pushed (`redactor` in
+  `packages/core/src/work/job.ts`). A set may not name a variable that steers the run (`STEERING_ENV`).
+- **A grant covers what the lane is given.** Its digest is over the task's title, body and the thread's notes, so a
+  note added after a grant voids it, and a grant or a release on an edited message is not believed.
 
 ### Grants and paid runs
 
 One task can run on paid credits instead of a subscription, in a Vercel Sandbox a hosted relay starts
 (`docs/PROFILE.md`, "Paid sandbox runs"; `docs/WORKERS.md`, "One task on paid credits"). The owner's rule is that
 nothing spends money without the owner saying yes first, and waiting for one of their own machines is the default
-and needs no action. What holds that:
+and needs no action.
+
+Paid runs are experimental. They stay off unless `RELAY_GATEWAY_TOKEN` is set on the deployment, and none has been
+run against a real sandbox or a real gateway. Read "What a paid run's lane can reach" below before setting it.
+
+What holds the owner's rule:
 
 - **An offer is only a question.** The site computes it when it renders a queued task and writes nothing. It is
   never shown for a project whose profile says `cloud: never`, or on a deployment without the gateway's key.
@@ -275,42 +296,97 @@ and needs no action. What holds that:
 - **One grant, one run.** The site marks a start in the thread as `relay-site` before the sandbox exists, under a
   key made from the task, the grant and the try, so two instances start one sandbox. Only a start that is known not
   to have come up is tried again, 3 times at most. A start that may have run is never followed by another.
-- **No credential enters the sandbox.** The board's credential, an installation token of the site's GitHub App for
-  the task's one repository and the gateway's key are set on requests by the sandbox's firewall. The environment
-  inside holds placeholders, and the launcher refuses to start when a credential would be readable there. The
-  network is deny by default: the board, the gateway's coding endpoint, GitHub for that repository, the npm
-  registry, and the hosts of the capability sets granted to the task. A failure's text has the credentials removed
-  before it is written to the thread or the log.
+- **No credential can be read in the sandbox.** The board's credential, an installation token of the site's GitHub
+  App for the task's one repository and the gateway's key are set on requests by the sandbox's firewall. The
+  environment inside holds placeholders, and the launcher refuses to start when a credential would be readable
+  there. The network is deny by default: the board, the gateway's coding endpoint, GitHub for that repository, the
+  npm registry, and the hosts of the capability sets granted to the task. A failure's text has the credentials
+  removed before it is written to the thread or the log. Not readable is not the same as not usable: see "What a
+  paid run's lane can reach" below.
 - **The sandbox is held on the board.** It writes as the worker's profile only, and its rights there are narrowed
-  to the queues and the workers channel. What it posts counts as a report and never as a decision.
+  to the task's own queue, `work/<project>`, and the workers channel. What it posts counts as a report and never as
+  a decision. The launcher does not start a sandbox whose board policy names another queue or another profile.
+- **The default branch is GitHub's to guard.** A run is approved and started only when GitHub says the repository's
+  default branch requires a pull request with an approval of the most recent push, under a rule relay's GitHub App
+  may not bypass (`apps/web/lib/cloud/guard.ts`; `docs/PROFILE.md`, "The branch rule"). Nothing in relay or in the
+  sandbox's firewall can keep the run's token from merging or pushing there; that rule can.
 - **The job checks again.** `relay work --task <id> --billing gateway --cap <usd>` runs on paid credits only when
   the thread holds that grant and the profile does not say `cloud: never`; otherwise it hands the task back. The
   cap is one for the whole job, the smaller of the grant and the flag, across the lane, its steps and the gate's
   grade. Only the Claude lane runs this way.
+- **The cap is relay's own count.** It limits the model calls relay starts. It is not a limit at the gateway, and
+  code the lane runs in the sandbox is not held to it (below).
 - **The gateway's address and credential** come from the environment of whoever starts the worker
   (`RELAY_GATEWAY_URL`, `RELAY_GATEWAY_TOKEN`), never from a flag, a task or the board. No child of the job inherits
   them by name; the Claude Code process gets them as its endpoint and credential for that run. In a sandbox the
   credential's variable holds a placeholder.
 - **Inside the sandbox the lane runs without Claude Code's OS sandbox.** The microVM and its network policy are the
   boundary there. The values of a granted capability set are not in it; only the set's hosts are allowed.
+- **The tools are pinned.** The sandbox installs relay at the site's own version and Claude Code at one exact
+  version (`CLOUD_CLAUDE_CODE_VERSION`), never whatever was published last.
 
 None of this has been run against a real sandbox or a real gateway yet.
+
+#### What a paid run's lane can reach
+
+The lane is a model that reads the task's text, the repository and whatever it fetches. Assume it can be fooled. In
+a paid run it works without the OS sandbox, so it can run any code in the microVM, and that code can send any
+request the firewall signs. It cannot read a credential. It can use each one for this:
+
+| Credential | What code in the sandbox can do with it | What it cannot |
+|---|---|---|
+| GitHub: an installation token of the site's App for the task's one repository, with `contents: write`, `pull_requests: write`, `metadata: read` | Push, force-push or delete any branch or tag of that repository that no rule protects. Open, edit, close, comment on, approve and merge pull requests there through `/graphql`, as far as the repository's rules allow. Read the repository | Reach any other repository, or any path on GitHub outside git's three endpoints, `/graphql` and reads under `/repos/<repo>`. Use the REST merge, ref and branch-protection paths (403 at the firewall). Touch issues, Actions, deployments, workflow files, settings or rulesets (the token lacks the permission, on REST and GraphQL alike). Change the default branch except through a pull request someone else approved, since no run starts without that rule |
+| The model gateway: the site's one key, on the coding endpoint | Call the gateway from any process, outside relay's count, for as long as the sandbox lives (60 minutes at most). What that can cost is limited only by the budget on the key at the gateway | Reach any other path on the gateway's host |
+| The board: the site's deployment as the worker's profile, in `work/<project>` and `relay/workers` | What any worker can in that project's queue: read every task and thread, post in them, label them, claim, hold and finish tasks, and post a run's result or an eval's verdict as a profile relay believes for reports. Post and label in the workers channel | Read or write another project's queue. Write as another profile. Grant a capability set, approve a spend, release a gate's hold or mark a start: those count only from a person or from `relay-site` ("Who may decide" above). Change grants, schemas or watchers on the board |
+
+What follows from that, plainly:
+
+- **A merge through GraphQL and a push to a branch cannot be blocked by the firewall.** `gh` needs `/graphql` to
+  open the pull request, and a rule sees a path, not a body or a ref. The repository's branch rule is the only
+  thing between a fooled lane and the default branch. Branches and tags that no rule covers are the lane's to
+  overwrite or delete, and a tag or branch it pushes starts whatever workflows the repository runs on a push, with
+  the secrets those workflows are given.
+- **The cap does not bound what a fooled lane can spend.** A hard cap needs a gateway credential that is this run's
+  alone, with a budget of its own. Vercel AI Gateway has API keys with budgets, made through its REST API with a
+  person's Vercel access token; relay holds no such token and does not ask for one, so it makes no key per run.
+  Set a budget on the key in `RELAY_GATEWAY_TOKEN` (`docs/HOSTING.md`, 8c). That budget is itself a soft cap: the
+  gateway checks it when a request starts, so the request that crosses it still completes.
+- **The sandbox writes to the board as the site's own principal.** Workers take tasks from that principal, and
+  believe its `relay-…` profiles for reports. A fooled lane can therefore disturb its own project's queue: claim or
+  finish tasks that are not its own, or leave a false report. It cannot make a task run with more than a person
+  granted, and it cannot spend.
+- **The rule on the default branch binds relay too.** relay's Approve merges as the same GitHub App, so on a
+  repository that allows paid runs it merges a pull request only after a person approved it on GitHub. Putting the
+  App on the rule's bypass list to avoid that gives the same bypass to every paid run; relay refuses a run when
+  GitHub says the App may bypass, and cannot always be told.
+- **Nothing here is verified against a live sandbox.** The firewall's rules, the narrowed token and `gh` behind
+  them are tested against fakes only.
 
 ## The lead
 
 The lead (`apps/lead`) is optional. It is a bot like any other: it reaches relay only through the site's MCP server
 with a scoped token, and the desk's rules for a bot apply to it (`docs/ARCHITECTURE.md`, "The lead").
 
-- Its token carries `tasks:read`, `tasks:write`, `memory:read`, `memory:write`, `feed:read` and `events:write`.
-  Never `tokens:write`, the scope that releases a held task. Revoking the token on the Access page stops it at once.
-- Its tool allowlist has no approve, release or close tool, and none of the asset, token, invite or access tools. It
-  has none of its framework's default tools: no shell, no file tools, no web tools.
+- Its token carries `tasks:read`, `tasks:write`, `memory:read`, `feed:read` and `events:write`. Never
+  `tasks:decide` (approve, close), `tokens:write` (release, access for other agents) or `memory:write`. Revoking the
+  token on the Access page stops it at once.
+- Its tool allowlist has no approve, release or close tool, none that writes memory, and none of the asset, token,
+  invite or access tools. That list is the lead's own lock. The one that holds if the lead is wrong is relay's
+  server, which refuses each of those tools to a token without its scope. It has none of its framework's default
+  tools: no shell, no file tools, no web tools.
+- It reads relay's memory and never writes it. A decision or a preference is in every later brief, outside the fence
+  that marks a task's text as data, and the lead reads text that workers wrote.
 - What a worker wrote about a task reaches it as data (a wake-up's reason), never as instructions.
 - Its routes that can start a turn take no anonymous caller: its conversation API takes Vercel OIDC tokens of its own
-  project, and its wake route checks the caller's Vercel OIDC token against the site's team and project.
+  project, and its wake route takes only a request signed with the secret it shares with the site.
 - The site wakes it only when `RELAY_LEAD_URL` is set on the site, for a task that failed, was held at the gate or
-  reached review, and signs the call with the deployment's own Vercel OIDC token. No relay token is sent. The URL
-  must be https, and a redirect is refused, since it would carry the token to another origin.
+  reached review. The call is signed with `RELAY_LEAD_WAKE_SECRET`, set on both projects: HMAC-SHA256 over the
+  timestamp and the raw body, checked by the lead in constant time and refused when the timestamp is more than
+  5 minutes off; a replay inside that window is the same wake-up, by its idempotency key. No token of any kind is
+  sent, and never the site deployment's own Vercel OIDC token: that token is the site's identity on the team's board,
+  where the site's word decides grants and releases, and whoever received it could act there as the site. The secret
+  proves "this is the site" to the lead and is worth nothing elsewhere. Without it, or with one under 32 characters,
+  the site sends nothing and the lead's wake route answers 503. The URL must be https, and a redirect is refused.
 - Its model calls are billed per token through Vercel AI Gateway to the Vercel team that owns its project. A budget
   on that project in AI Gateway is the limit to rely on (`apps/lead/README.md`).
 
