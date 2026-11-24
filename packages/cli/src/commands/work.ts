@@ -324,7 +324,7 @@ export function registerWork(program: Command, version: string, deps: WorkDeps =
           log: out,
           ...(debug ? { debug } : {}),
           signal: ac.signal,
-          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), ...(gateway ? { paid: { gateway, capUsd: cap! } } : { brief: memoryBrief }), sandbox, secrets: vercelSecrets() },
+          job: { timeoutMs: Math.max(1, Number(o.maxMinutes) || 60) * 60_000, ...(o.keep ? { keep: true } : {}), laneRunner: laneRunner({ sandbox }), ...(gateway ? { paid: { gateway, capUsd: cap! } } : { brief: memoryBrief }), sandbox, secrets: vercelSecrets({ log: out }) },
         });
         const count = (outcome: string): number => r.results.filter((x) => x.outcome === outcome).length;
         const parts = [`${count("review")} in review`, `${count("failed")} failed`, ...(count("eval") ? [`${count("eval")} waiting for an eval`] : []), ...(count("done") ? [`${count("done")} step task${count("done") === 1 ? "" : "s"} done`] : []), ...(count("held") ? [`${count("held")} held at the gate`] : []), ...(count("lost") ? [`${count("lost")} lost their claim`] : [])];

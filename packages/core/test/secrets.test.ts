@@ -59,6 +59,15 @@ describe("vercelSecrets", () => {
 
   it("without a project in the profile, or without the CLI, says what it found or why it could not look", async () => {
     expect(await vercelSecrets({ bin: fake })({ project: "store", names: ["BLOB_TOKEN"], vercel: null })).toEqual({});
-    await expect(vercelSecrets({ bin: fake })({ project: "store", names: ["BLOB_TOKEN"], vercel: { project: "no-such-project" } })).rejects.toThrow(/vercel link for no-such-project failed: Error: Project not found/);
+    // a pull that fails keeps what the worker's own environment gave, and says why the rest is missing
+    const said: string[] = [];
+    process.env.RELAY_TEST_FROM_ENV = "from-the-environment";
+    try {
+      const found = await vercelSecrets({ bin: fake, log: (l) => said.push(l) })({ project: "store", names: ["RELAY_TEST_FROM_ENV", "BLOB_TOKEN"], vercel: { project: "no-such-project" } });
+      expect(found).toEqual({ RELAY_TEST_FROM_ENV: "from-the-environment" });
+      expect(said).toEqual([expect.stringMatching(/^BLOB_TOKEN not read from the Vercel project no-such-project: vercel link failed: Error: Project not found/)]);
+    } finally {
+      delete process.env.RELAY_TEST_FROM_ENV;
+    }
   });
 });

@@ -36,20 +36,25 @@ const vercel = (bin: string, args: string[], cwd: string): Promise<{ code: numbe
  * project, when the profile names one and the Vercel CLI is here. A name found nowhere is left out, and the job says
  * which. Throws only with why the project could not be read, so the job can say that too.
  */
-export const vercelSecrets = (o: { bin?: string } = {}): SecretSource => async (req) => {
+export const vercelSecrets = (o: { bin?: string; log?: (line: string) => void } = {}): SecretSource => async (req) => {
   const found = await envSecrets(req);
   const missing = req.names.filter((n) => !(n in found));
   if (!missing.length || !req.vercel) return found;
+  // what the worker's own environment already gave stays, whatever happens to the pull
+  const gaveUp = (why: string): Record<string, string> => {
+    o.log?.(`${missing.join(", ")} not read from the Vercel project ${req.vercel!.project}: ${why}`);
+    return found;
+  };
   const bin = o.bin ?? findOnPath("vercel");
-  if (!bin) throw new Error("the Vercel CLI is not on this worker, so the granted variables could not be read from the project");
+  if (!bin) return gaveUp("the Vercel CLI is not on this worker");
   const dir = mkdtempSync(join(tmpdir(), "relay-env-"));
   try {
     const scope = req.vercel.team ? ["--scope", req.vercel.team] : [];
     const linked = await vercel(bin, ["link", "--yes", "--project", req.vercel.project, ...scope], dir);
-    if (linked.code !== 0) throw new Error(`vercel link for ${req.vercel.project} failed: ${linked.err || "no reason given"}`);
+    if (linked.code !== 0) return gaveUp(`vercel link failed: ${linked.err || "no reason given"}`);
     const pulled = await vercel(bin, ["env", "pull", ".env", "--yes", "--environment=development", ...scope], dir);
     const file = join(dir, ".env");
-    if (pulled.code !== 0 || !existsSync(file)) throw new Error(`vercel env pull for ${req.vercel.project} failed: ${pulled.err || "no reason given"}`);
+    if (pulled.code !== 0 || !existsSync(file)) return gaveUp(`vercel env pull failed: ${pulled.err || "no reason given"}`);
     const all = parseDotenv(readFileSync(file, "utf8"));
     for (const n of missing) if (typeof all[n] === "string" && all[n] !== "") found[n] = all[n]!;
     return found;
