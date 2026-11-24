@@ -1,6 +1,6 @@
 /**
  * Grok lane over the native Grok Build CLI: one `grok -p` process per call on the machine's own login (`grok login`).
- * Mirrors scripts/runner/run-lane.sh: JSON output, `--no-subagents --no-plan`, `--permission-mode acceptEdits`
+ * Flags: JSON output, `--no-subagents --no-plan`, `--permission-mode acceptEdits`
  * (`plan` for read-only calls), `-m <model>` when asked. Never a bypass flag.
  */
 import { execFile } from "node:child_process";

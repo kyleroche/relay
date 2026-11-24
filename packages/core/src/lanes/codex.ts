@@ -1,6 +1,6 @@
 /**
  * Codex lane over the native CLI: one `codex exec --json` process per call on the machine's own ChatGPT login
- * (`codex login`). Mirrors the flags scripts/runner/run-lane.sh used: `--sandbox workspace-write` (read-only for
+ * (`codex login`). Flags: `--sandbox workspace-write` (read-only for
  * review calls), `-c agents.enabled=false` so no subagents inflate the run, `-m <model>` when asked. Output is
  * JSONL; usage arrives in `turn.completed` events and the final text in the last `agent_message` item.
  */

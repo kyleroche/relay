@@ -9,20 +9,16 @@
  */
 import type { Command } from "commander";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { digestProject, emptyUsage, formatUsage, installOwnedSection, invalidateBriefCache, renderRulesFile, repo, registerProject, summarizeProject } from "@relay/core";
-import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady, RELAY_ROOT } from "./_common.ts";
+import { gitRemoteRepo, gitRoot, humanActor, log, onPath, openReady } from "./_common.ts";
 import { eventsCheck, eventsLeft, formatStage, localEventsCheck } from "./events-check.ts";
 
-const TEMPLATES = join(RELAY_ROOT, "packages", "cli", "templates");
-const WORKFLOWS = ["relay-caller.yml", "relay-review.yml", "relay-cloud.yml"] as const;
 const LABELS: Array<{ name: string; color: string; description: string }> = [
   { name: "agent:claude", color: "D97757", description: "relay: implement with the Claude lane" },
   { name: "agent:codex", color: "10A37F", description: "relay: implement with the Codex lane" },
   { name: "agent:grok", color: "1DA1F2", description: "relay: implement with the Grok lane" },
-  { name: "agent:claude-cloud", color: "F2C4B3", description: "relay: hand to Claude's cloud tier (@claude), no runner" },
-  { name: "agent:codex-cloud", color: "9FE3CF", description: "relay: hand to Codex cloud (@codex), no runner" },
   { name: "agent:nodes", color: "E4A11B", description: "relay: run a Griptape Nodes workflow on a worker that has the engine" },
   { name: "deliverable:asset", color: "7057FF", description: "relay: the result is a media asset, not code" },
   // a production's stages (docs/ARCHITECTURE.md "A task's life", the asset path): which step of the film the issue is
@@ -41,7 +37,6 @@ interface LinkOptions {
   digest: boolean;
   maxFiles: string;
   labels: boolean;
-  workflows: boolean;
   events: boolean;
   cwd?: string;
 }
@@ -52,12 +47,11 @@ export function registerLink(program: Command): void {
     .description("Link this repo: register it, digest changed files, write the project summary and relay.md, install the owned sections and lane labels, check GitHub events reach the site")
     .option("--repo <owner/name>", "override the origin remote")
     .option("--project <slug>", "project slug (default: the repo name)")
-    .option("--refresh", "re-digest stale files and rewrite the summary, relay.md (and the caller workflows with --workflows)")
+    .option("--refresh", "re-digest stale files and rewrite the summary and relay.md")
     .option("--force", "overwrite a locally edited owned section")
     .option("--no-digest", "skip the model steps (file digests and the project summary)")
     .option("--max-files <n>", "max files to digest in this run", "400")
     .option("--no-labels", "skip gh label creation")
-    .option("--workflows", "also install the GitHub Actions caller workflows (docs/RUNNERS.md): only for repos run by self-hosted runners; workers need none")
     .option("--no-events", "skip the check that GitHub events for this repo reach the site (the GitHub App installation)")
     .option("--cwd <path>")
     .action(async (o: LinkOptions) => {
@@ -123,30 +117,10 @@ export function registerLink(program: Command): void {
           log(`relay.md: ${prev === undefined ? "written" : "updated"} (${rules.tokens} tokens${noSummary})`);
         }
 
-        // 6. caller workflows: opt-in. The worker path needs none; a committed caller would queue an Actions run on every
-        // label that waits for a self-hosted runner that may not exist.
-        if (o.workflows) {
-          const relayRepo = h.cfg.relayRepo ?? `${repoName.split("/")[0]}/relay`;
-          const relayRef = h.cfg.relayRef ?? "main";
-          const dir = join(root, ".github", "workflows");
-          mkdirSync(dir, { recursive: true });
-          for (const w of WORKFLOWS) {
-            const dest = join(dir, w);
-            const content = readFileSync(join(TEMPLATES, w), "utf8").replaceAll("__RELAY_REPO__", relayRepo).replaceAll("__RELAY_REF__", relayRef);
-            if (existsSync(dest) && !o.refresh) {
-              log(`workflows: ${w} exists (--refresh rewrites it)`);
-              continue;
-            }
-            const same = existsSync(dest) && readFileSync(dest, "utf8") === content;
-            if (!same) writeFileSync(dest, content);
-            log(`workflows: ${w} ${same ? "unchanged" : "written"} (uses ${relayRepo}@${relayRef})`);
-          }
-        }
-
         // 7. lane labels
         if (o.labels) {
           const gh = onPath("gh");
-          if (!gh) log("labels: gh not on PATH; create agent:claude|codex|grok, agent:claude-cloud|codex-cloud and deliverable:asset by hand");
+          if (!gh) log("labels: gh not on PATH; create agent:claude|codex|grok|nodes and deliverable:asset by hand");
           else
             for (const l of LABELS) {
               try {

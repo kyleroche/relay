@@ -1,8 +1,8 @@
 /**
  * The OS sandbox for the Claude lane's Bash: Claude Code's built-in sandbox (Seatbelt on macOS, bubblewrap + socat on
  * Linux), switched on per run through `--settings '<json>'` so no file on the machine and no repository setting can
- * loosen it (docs/SECURITY.md, "Workers"). One builder for the worker (`job.ts`) and for `scripts/runner/run-lane.sh`
- * (`relay lane settings`), so the two paths cannot drift.
+ * loosen it (docs/SECURITY.md, "Workers"). The project's own commands run under the same rules through the
+ * sandbox runtime itself (work/exec.ts).
  *
  * What it does: every Bash command and every child process (git, pnpm, a repository's own scripts) may write only
  * inside the clone and the package caches below, may not read the credential paths below, and may reach only the

@@ -2,10 +2,10 @@
  * Where relay's own files are at run time. relay runs from two layouts:
  *
  *   checkout  packages/core/src, packages/cli/src/main.ts (run through the repo's tsx), packages/cli/hooks/*.mjs,
- *             packages/mcp/bin/relay-mcp.mjs, packages/cli/templates, packages/core/src/db/migrations
+ *             packages/mcp/bin/relay-mcp.mjs, packages/core/src/db/migrations
  *   package   the published `@kyleroche/relay`: dist/relay.js bundles core, mcp and the CLI; beside it sit
  *             dist/hooks/*.mjs, dist/relay-mcp.js, dist/migrations/*.sql, dist/container/ (the worker image's
- *             Dockerfile and entry script), dist/python/ (the Griptape Nodes shim), and templates/ at the package root
+ *             Dockerfile and entry script) and dist/python/ (the Griptape Nodes shim)
  *
  * Anything that records a path to a relay file (the hook installers, the template copier, the migration loader)
  * asks here instead of counting `..` from its own location, because in the bundle every module shares one
@@ -32,7 +32,6 @@ export interface RuntimePaths {
   /** The stdio MCP entry the CLIs' configs point at. */
   mcpEntry: string;
   /** The caller workflows `relay link` copies into a repo. */
-  templatesDir: string;
   /** The steps relay ships (`steps/index.ts`): remove-yap, eval, eval-respond, cleanup. */
   stepsDir: string;
   migrationsDir: string;
@@ -92,7 +91,6 @@ function packageAt(root: string): RuntimePaths {
     sessionEnd: join(hooksDir, "session-end.mjs"),
     statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(dist, "relay-mcp.js"),
-    templatesDir: join(root, "templates"),
     stepsDir: join(dist, "steps"),
     migrationsDir: join(dist, "migrations"),
     containerDir: join(dist, "container"),
@@ -113,7 +111,6 @@ function checkoutAt(root: string): RuntimePaths {
     sessionEnd: join(hooksDir, "session-end.mjs"),
     statusLine: join(hooksDir, "statusline.mjs"),
     mcpEntry: join(root, "packages", "mcp", "bin", "relay-mcp.mjs"),
-    templatesDir: join(root, "packages", "cli", "templates"),
     stepsDir: join(root, "packages", "cli", "steps"),
     migrationsDir: join(root, "packages", "core", "src", "db", "migrations"),
     containerDir: join(root, "packages", "cli", "container"),

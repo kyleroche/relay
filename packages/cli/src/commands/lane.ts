@@ -1,35 +1,16 @@
 /**
- * `relay lane`: what the lane adapters hand the vendor CLIs, for scripts that start a CLI themselves, and a manual run
- * of the nodes lane.
- *
- *   relay lane settings [--allow a.example,b.example]   the Claude Code `--settings` JSON that sandboxes a code run
- *   relay lane nodes --workflow <file> --inputs '<json>' [--out <dir>] [--outputs "End Flow"] [--model <id>]
- *                                                        run one Griptape Nodes workflow headless through the adapter
- *
- * `scripts/runner/run-lane.sh` calls `relay lane settings` so the Actions path and `relay work` share one sandbox
- * definition (`packages/core/src/lanes/sandbox.ts`). `RELAY_LANE_ALLOWED_DOMAINS` adds hosts the same way it does for
- * the worker. `relay lane nodes` is the worker's nodes stage without the task: the same shim, the same usage rows
- * (written to this machine's ledger in local mode), the files left in --out for the operator.
+ * `relay lane nodes --workflow <file> --inputs '<json>' [--out <dir>] [--outputs "End Flow"] [--model <id>]`: one
+ * Griptape Nodes workflow run headless through the nodes adapter by hand. It is the worker's nodes stage without the
+ * task: the same shim, the same usage rows (written to this machine's ledger in local mode), the files left in --out.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Command } from "commander";
-import { claudeSandboxSettings, DEFAULT_NODES_TIMEOUT_MS, findNodesPython, parseDomainList, recordNodesUsage, runNodes, runtimePaths } from "@relay/core";
+import { DEFAULT_NODES_TIMEOUT_MS, findNodesPython, recordNodesUsage, runNodes, runtimePaths } from "@relay/core";
 import { humanActor, log, openReady } from "./_common.ts";
 
 export function registerLane(program: Command): void {
-  const lane = program.command("lane").description("What the lane adapters pass to the vendor CLIs (for scripts that start a CLI themselves), and a manual nodes run");
-  lane
-    .command("settings")
-    .description("Print the Claude Code --settings JSON that puts a code run's Bash in the OS sandbox (one line; --pretty indents)")
-    .option("--allow <domains>", "extra hosts for the network allowlist, comma-separated (added to RELAY_LANE_ALLOWED_DOMAINS)")
-    .option("--pretty", "indent the JSON")
-    .action((o: { allow?: string; pretty?: boolean }) => {
-      const allowedDomains = [...parseDomainList(process.env.RELAY_LANE_ALLOWED_DOMAINS), ...parseDomainList(o.allow)];
-      const settings = claudeSandboxSettings(allowedDomains.length ? { allowedDomains } : {});
-      console.log(o.pretty ? JSON.stringify(settings, null, 2) : JSON.stringify(settings));
-    });
-
+  const lane = program.command("lane").description("Run a lane by hand: one Griptape Nodes workflow through the nodes adapter");
   lane
     .command("nodes")
     .description("Run one Griptape Nodes workflow headless through the nodes lane adapter: outputs land in --out, usage in this machine's ledger (local mode)")

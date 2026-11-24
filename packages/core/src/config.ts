@@ -28,9 +28,6 @@ export interface HarnessConfig {
   staleDays: number;
   /** Shell command used to gate transcript segments before capture (e.g. a Jev invocation). Unset = built-in rule. */
   captureGate?: string;
-  /** `owner/relay` and ref substituted into the caller workflows by `relay link` (env RELAY_REPO / RELAY_REF win). */
-  relayRepo?: string;
-  relayRef?: string;
   /** Hosted site the CLI talks to instead of a database (`relay setup --site`; env RELAY_SITE wins). */
   site?: string;
   /** Bearer token for the site, from ~/.harness/credentials.json (env RELAY_TOKEN wins). Never printed. */
@@ -66,7 +63,6 @@ export interface FileConfig {
   staleDays?: number;
   gateway?: { embeddingModel?: string; embeddingDim?: number };
   capture?: { gateCommand?: string };
-  relay?: { repo?: string; ref?: string };
   /** The hosted relay site the CLI talks to; the token lives in credentials.json next to this file. */
   site?: string;
   board?: { team?: string; name?: string; from?: string[] };
@@ -95,8 +91,6 @@ export function loadConfig(): HarnessConfig {
     if (file.gateway?.embeddingModel) cfg.gateway.embeddingModel = file.gateway.embeddingModel;
     if (typeof file.gateway?.embeddingDim === "number") cfg.gateway.embeddingDim = file.gateway.embeddingDim;
     if (file.capture?.gateCommand) cfg.captureGate = file.capture.gateCommand;
-    if (file.relay?.repo) cfg.relayRepo = file.relay.repo;
-    if (file.relay?.ref) cfg.relayRef = file.relay.ref;
     if (file.board?.team) cfg.board.team = file.board.team;
     if (file.board?.name) cfg.board.name = file.board.name;
     if (Array.isArray(file.board?.from)) cfg.board.from = file.board.from.filter((a): a is string => typeof a === "string" && a.trim() !== "");
@@ -105,8 +99,6 @@ export function loadConfig(): HarnessConfig {
   if (process.env.RELAY_BOARD_NAME) cfg.board.name = process.env.RELAY_BOARD_NAME;
   if (process.env.RELAY_BOARD_FROM) cfg.board.from = process.env.RELAY_BOARD_FROM.split(",").map((a) => a.trim()).filter(Boolean);
   if (process.env.RELAY_CAPTURE_GATE) cfg.captureGate = process.env.RELAY_CAPTURE_GATE;
-  if (process.env.RELAY_REPO) cfg.relayRepo = process.env.RELAY_REPO;
-  if (process.env.RELAY_REF) cfg.relayRef = process.env.RELAY_REF;
   if (process.env.DATABASE_URL) cfg.databaseUrl = process.env.DATABASE_URL;
   const site = readSiteConfig(cfg.home);
   if (site.site) cfg.site = site.site;
