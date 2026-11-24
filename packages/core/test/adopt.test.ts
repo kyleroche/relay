@@ -140,6 +140,9 @@ describe("reading a transcript", () => {
     expect(commandKey("node -e 'x'")).toBeUndefined();
     expect(commandKey("node /abs/path.mjs")).toBeUndefined();
     expect(commandKey("node ../outside.mjs")).toBeUndefined();
+    // installed and built files are not the project's tools
+    expect(commandKey("node node_modules/tsx/dist/cli.mjs src/x.ts")).toBeUndefined();
+    expect(commandKey("node packages/cli/dist/relay.js doctor")).toBeUndefined();
     expect(commandKey("npm run lint -- --fix src/secret-customer.ts")).toBe("npm run lint");
     expect(commandKey("corepack pnpm -r typecheck")).toBe("pnpm -r typecheck");
     expect(commandKey("pnpm --filter @shop/web test -- -t 'order 4411'")).toBe("pnpm --filter @shop/web test");

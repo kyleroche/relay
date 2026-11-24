@@ -50,9 +50,12 @@ function words(segment: string): string[] {
   return out;
 }
 
+/** Directories whose files are installed or built, not written: a script run from one is not a tool of the project. */
+const NOT_SOURCE = new Set(["..", "node_modules", "dist", ".next", ".output", ".turbo", ".vercel", "coverage"]);
+
 const relScript = (w: string | undefined): string | undefined => {
   const p = (w ?? "").replace(/^\.\//, "");
-  return SCRIPT_PATH.test(p) && !p.split("/").includes("..") ? p : undefined;
+  return SCRIPT_PATH.test(p) && !p.split("/").some((part) => NOT_SOURCE.has(part)) ? p : undefined;
 };
 
 /** What a segment runs, or undefined when it is none of the four kinds relay counts. */
@@ -66,8 +69,13 @@ export function commandKey(segment: string): string | undefined {
     if (rest.some((a) => /^(-e|--eval|-p|--print)$/.test(a))) return undefined;
     // the first plain word is the script, unless it is a switch's value (`--env-file .env scripts/x.mjs`)
     const plain = rest.filter((a) => !a.startsWith("-"));
-    const script = relScript(plain[0]) ?? plain.map(relScript).find(Boolean);
-    return script ? `node ${script}` : undefined;
+    for (const word of plain) {
+      const script = relScript(word);
+      if (script) return `node ${script}`;
+      // an installed or built script ran, and what follows it is that script's argument, not the project's tool
+      if (SCRIPT_PATH.test(word.replace(/^\.\//, ""))) return undefined;
+    }
+    return undefined;
   }
   if (bin === "npm") {
     const [sub, name] = rest.filter((a) => !a.startsWith("-"));
