@@ -27,12 +27,12 @@ describe("githubEvents on a shared repo", () => {
     sender: { login: "kyle", type: "User" },
   });
 
-  it("names the label's project, else the repo's; the lane label is read from core's lanes", async () => {
-    const fromLabel = await githubEvents("issues", payload([{ name: "agent:claude" }, { name: "production:daybreak" }]), "d2");
+  it("names the label's project, else the repo's; the lane label is read from core's lanes", () => {
+    const fromLabel = githubEvents("issues", payload([{ name: "agent:claude" }, { name: "production:daybreak" }]), "d2");
     expect(fromLabel).toMatchObject([{ kind: "issue.labeled", project: "daybreak", repo: "acme/productions", issue: 7, lane: "claude" }]);
-    const fromRepo = await githubEvents("issues", payload([{ name: "agent:claude" }]), "d3");
+    const fromRepo = githubEvents("issues", payload([{ name: "agent:claude" }]), "d3");
     expect(fromRepo[0]?.project).toBe("productions");
     // a label that is not a lane is not an event of record
-    expect(await githubEvents("issues", { ...payload([]), label: { name: "stage:cut" } }, "d4")).toEqual([]);
+    expect(githubEvents("issues", { ...payload([]), label: { name: "stage:cut" } }, "d4")).toEqual([]);
   });
 });

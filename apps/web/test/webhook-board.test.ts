@@ -59,7 +59,7 @@ describe("an issue with a lane label", () => {
   });
 
   it("refuses a lane that is neither built in nor served by a worker", async () => {
-    await expect(openIssueTask(deps, "issues", issues("labeled", { number: 31, label: "agent:claude-cloud" }))).rejects.toThrow(/no worker serves lane 'claude-cloud'/);
+    await expect(openIssueTask(deps, "issues", issues("labeled", { number: 31, label: "agent:embroidery" }))).rejects.toThrow(/no worker serves lane 'embroidery'/);
     expect((await board.listTasks(session.board, { state: "all" })).some((t) => t.issue?.number === 31)).toBe(false);
   });
 

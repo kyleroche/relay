@@ -103,7 +103,7 @@ export function appManifest(opts: { name?: string } = {}): Record<string, unknow
     public: false,
     // contents: write because approving a task squash-merges the PR and deletes its branch through the App
     default_permissions: { actions: "read", contents: "write", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" },
-    default_events: ["issues", "issue_comment", "pull_request", "pull_request_review", "workflow_run", "deployment_status"],
+    default_events: ["issues", "pull_request", "pull_request_review", "workflow_run", "deployment_status"],
   };
 }
 

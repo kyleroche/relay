@@ -1,13 +1,10 @@
 /**
  * Normalize GitHub webhook payloads into event rows. Kinds emitted here are documented in
- * lib/events.ts. Returns null for deliveries that are not events of record (ping, edits, syncs).
- * `issue_comment` deliveries carrying the runner's usage block go through `githubEvents`, which
- * may yield two rows (step.usage and, in review mode, pr.review).
+ * lib/events.ts. Returns null for deliveries that are not events of record (ping, edits, syncs, comments).
  */
 import { isLaneName, LANE_NAME_PATTERN } from "@relay/core";
 import type { Lane, NewEvent } from "@/lib/types";
 import { resolveProject } from "./project.ts";
-import { parseUsageComment, senderTrusted, usageEvents } from "./usage.ts";
 
 type Json = Record<string, unknown>;
 
@@ -25,13 +22,10 @@ export function actorOf(payload: Json): string {
 /**
  * The lane registry is open (packages/core/src/tasks/lanes.ts): an `agent:<lane>` label names any lane whose name
  * fits `LANE_NAME_PATTERN`, a built-in one or one an app registered, so a lane added anywhere is read here without
- * another edit. The branch pattern takes the shortest lane that leaves an issue number (`relay/laser-cut-42` is lane
- * `laser-cut`, issue 42; `relay/claude-7-fix` is `claude`, 7).
+ * another edit.
  */
 const LANE_LABEL = new RegExp(`^agent:(${LANE_NAME_PATTERN})$`);
-const LAZY_LANE = LANE_NAME_PATTERN.replace(/\}$/, "}?");
-const BOARD_BRANCH = new RegExp(`^relay\\/(${LANE_NAME_PATTERN})-[0-9a-f]{8}$`);
-const RELAY_BRANCH = new RegExp(`^relay\\/(?:(${LAZY_LANE})-(\\d+)|(\\d+)-(${LANE_NAME_PATTERN}))(?:$|[-/])`);
+const WORK_BRANCH = new RegExp(`^relay\\/(${LANE_NAME_PATTERN})-[0-9a-f]{8}$`);
 
 /** The lane an `agent:<lane>` label names, or null for any other label. */
 export function laneOf(label: string | undefined): Lane | null {
@@ -50,82 +44,28 @@ export function laneOfLabels(labels: unknown): Lane | null {
 }
 
 /**
- * A branch relay pushed: a worker's `relay/<lane>-<8 hex>` (the lane; its task is on the board, so no issue), or an
- * Actions runner's `relay/<lane>-<issue>` as run-lane.sh names it (the older `relay/<issue>-<lane>` spelling is still
- * read). Null for any other branch.
+ * The lane of a branch a worker pushed for a task, `relay/<lane>-<8 hex of the task ID's hash>` (`branchFor` in
+ * core's board/mapping.ts). Null for any other branch. The task is on the board, so the branch names no issue.
  */
-export function relayBranch(branch: string | null | undefined): { lane: Lane; issue: number | null } | null {
-  // a worker's branch names its board task by eight hex characters of a hash, never an issue
-  const board = BOARD_BRANCH.exec(branch ?? "");
-  if (board) return { lane: board[1] as Lane, issue: null };
-  const m = RELAY_BRANCH.exec(branch ?? "");
-  if (!m) return null;
-  const lane = (m[1] ?? m[4]) as Lane;
-  const issue = Number(m[2] ?? m[3]);
-  return Number.isInteger(issue) ? { lane, issue } : null;
+export function workBranchLane(branch: string | null | undefined): Lane | null {
+  return (WORK_BRANCH.exec(branch ?? "")?.[1] as Lane | undefined) ?? null;
 }
 
-/**
- * A pull request the vendor's cloud tier opened for a cloud lane (docs/RUNNERS.md "Cloud lanes"). Claude Code
- * cloud sessions, Routines and claude-code-action push `claude/` branches; Codex cloud pushes `codex/` branches.
- * When the branch is not telling, the bot login is: `claude[bot]` is the Claude GitHub App (claude-code-action),
- * `chatgpt-codex-connector[bot]` is the Codex connector. Cloud sessions that push as the user's own GitHub login
- * are recognised by the branch alone.
- */
-function cloudLaneOf(pr: Json, payload: Json): { lane: Lane; cloud: "claude-cloud" | "codex-cloud" } | null {
-  const branch = get<string>(pr, "head.ref") ?? "";
-  if (/^claude\//.test(branch)) return { lane: "claude", cloud: "claude-cloud" };
-  if (/^codex\//.test(branch)) return { lane: "codex", cloud: "codex-cloud" };
-  const login = (get<string>(pr, "user.login") ?? get<string>(payload, "sender.login") ?? "").toLowerCase();
-  if (login === "claude[bot]") return { lane: "claude", cloud: "claude-cloud" };
-  if (login === "chatgpt-codex-connector[bot]" || login === "chatgpt-codex-connector") return { lane: "codex", cloud: "codex-cloud" };
-  return null;
-}
-
-/** "Closes #12" / "Fixes #12" in a PR body, else the relay branch convention relay/<lane>-<issue>. */
+/** "Closes #12" / "Fixes #12" in a PR body: a worker writes it when the task's block names an issue in the same repository. */
 function linkedIssue(pr: Json): number | null {
-  const body = get<string>(pr, "body") ?? "";
-  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(body);
-  if (m?.[1]) return Number(m[1]);
-  return relayBranch(get<string>(pr, "head.ref"))?.issue ?? null;
+  const m = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)/i.exec(get<string>(pr, "body") ?? "");
+  return m?.[1] ? Number(m[1]) : null;
 }
 
 /**
- * Every row a delivery produces, with its project resolved (`resolveProject`: a `production:<slug>` label, else the
- * repository's name). Comments are async (trusted-sender lookup); everything else is `normalizeGitHub`.
+ * The row a delivery produces, if it is an event of record, with its project resolved (`resolveProject`: a
+ * `production:<slug>` label, else the repository's name).
  */
-export async function githubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
-  const rows = await rawGithubEvents(eventName, payload, deliveryId);
-  const project = resolveProject({ labels: get(payload, "issue.labels") ?? get(payload, "pull_request.labels"), repoName: get<string>(payload, "repository.name") ?? null });
-  return rows.map((e) => ({ ...e, project }));
-}
-
-async function rawGithubEvents(eventName: string, payload: Json, deliveryId: string): Promise<NewEvent[]> {
-  if (eventName === "issue_comment") {
-    const action = get<string>(payload, "action");
-    if (action !== "created" && action !== "edited") return [];
-    const comment = get<Json>(payload, "comment");
-    const issue = get<Json>(payload, "issue");
-    if (!comment || !issue || !get(issue, "pull_request")) return [];
-    const block = parseUsageComment(get<string>(comment, "body") ?? "");
-    if (!block) return [];
-    const repo = get<string>(payload, "repository.full_name") ?? null;
-    const login = get<string>(comment, "user.login") ?? "unknown";
-    const trusted = await senderTrusted(repo, login);
-    return usageEvents(block, {
-      repo,
-      project: get<string>(payload, "repository.name") ?? null,
-      pr: get<number>(issue, "number") ?? null,
-      url: get<string>(comment, "html_url") ?? null,
-      commentId: get<number | string>(comment, "id") ?? deliveryId,
-      sender: login,
-      body: get<string>(comment, "body") ?? "",
-      trusted,
-      ...(get<string>(comment, "created_at") ? { ts: get<string>(comment, "created_at") as string } : {}),
-    });
-  }
+export function githubEvents(eventName: string, payload: Json, deliveryId: string): NewEvent[] {
   const one = normalizeGitHub(eventName, payload, deliveryId);
-  return one ? [one] : [];
+  if (!one) return [];
+  const project = resolveProject({ labels: get(payload, "issue.labels") ?? get(payload, "pull_request.labels"), repoName: get<string>(payload, "repository.name") ?? null });
+  return [{ ...one, project }];
 }
 
 /** One delivery as a row, project = the repository's name (`githubEvents` resolves the shared-repo cases). */
@@ -169,13 +109,10 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
       const url = get<string>(pr, "html_url") ?? null;
       const issue = linkedIssue(pr);
       const branch = get<string>(pr, "head.ref") ?? null;
-      const cloud = cloudLaneOf(pr, payload);
-      const lane = relayBranch(branch)?.lane ?? cloud?.lane ?? laneOfLabels(get(pr, "labels"));
-      // A cloud-lane PR is the lane's work even when the vendor pushed it under the user's own GitHub login.
-      const common = { ...base, pr: number, issue, url, lane, ...(cloud ? { actor: `agent:${cloud.lane}` } : {}) };
-      const cloudPayload = cloud ? { cloud: cloud.cloud, author: get<string>(pr, "user.login") ?? null } : {};
+      const lane = workBranchLane(branch) ?? laneOfLabels(get(pr, "labels"));
+      const common = { ...base, pr: number, issue, url, lane };
       if (action === "opened" || action === "reopened" || action === "ready_for_review") {
-        return { ...common, kind: "pr.opened", summary: issue ? `${title} (#${issue})` : title, payload: { branch, additions: get(pr, "additions"), deletions: get(pr, "deletions"), ...cloudPayload } };
+        return { ...common, kind: "pr.opened", summary: issue ? `${title} (#${issue})` : title, payload: { branch, additions: get(pr, "additions"), deletions: get(pr, "deletions") } };
       }
       if (action === "closed") {
         const merged = Boolean(get(pr, "merged"));
@@ -221,7 +158,6 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         actor: "bot:github-actions",
         kind: "workflow.run",
         pr,
-        issue: relayBranch(branch)?.issue ?? null,
         duration_ms: duration,
         summary: `${name} ${conclusion === "success" ? "passed" : conclusion} on ${branch}`,
         url: get<string>(run, "html_url") ?? null,
@@ -239,7 +175,6 @@ export function normalizeGitHub(eventName: string, payload: Json, deliveryId: st
         ...base,
         actor: actorOf(payload).replace(/^human:/, "bot:"),
         kind: state === "success" ? "preview.ready" : "preview.failed",
-        issue: relayBranch(ref)?.issue ?? null,
         summary: state === "success" ? `${env} deployed for ${ref}` : `${env} deployment ${state} for ${ref}`,
         url: get<string>(status, "environment_url") ?? get<string>(status, "target_url") ?? null,
         // ref and sha say which branch and commit was deployed (a deployment carries no PR number)

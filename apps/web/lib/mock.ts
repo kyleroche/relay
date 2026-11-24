@@ -134,7 +134,7 @@ const TASKS: Record<string, string[]> = {
   relay: [
     "Add digest coverage bar to project list",
     "Rate-limit webhook ingest per delivery id",
-    "Write RUNNERS.md for self-hosted registration",
+    "Write WORKERS.md troubleshooting for a missing login",
     "Nightly consolidation should close superseded decisions",
     "Lane adapter: strip ANTHROPIC_API_KEY before spawning",
     "Feed: group events by day",

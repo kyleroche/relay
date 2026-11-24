@@ -8,7 +8,7 @@ import { githubApp, githubWebhookSecrets } from "@/lib/github-app";
 import { openIssueTask, settleMergedPull } from "@/lib/webhooks/board";
 import { githubEvents } from "@/lib/webhooks/github";
 import { installationEvents, isInstallationEvent } from "@/lib/webhooks/github-app";
-import { senderMayOpenTasks } from "@/lib/webhooks/usage";
+import { senderMayOpenTasks } from "@/lib/webhooks/senders";
 import { verifyGitHub } from "@/lib/webhooks/verify";
 
 export const dynamic = "force-dynamic";
@@ -16,10 +16,10 @@ export const dynamic = "force-dynamic";
 /**
  * GitHub webhook ingest, for an organization webhook or the GitHub App's own deliveries (same HMAC; app deliveries
  * carry an `installation` field). Configure with content type application/json, secret = GITHUB_WEBHOOK_SECRET (or
- * the secret the manifest flow stored), events: issues, issue_comment, pull_request, pull_request_review,
- * workflow_run, deployment_status; the app also sends installation and installation_repositories, which become
+ * the secret the manifest flow stored), events: issues, pull_request, pull_request_review, workflow_run,
+ * deployment_status; the app also sends installation and installation_repositories, which become
  * project.github_connected / project.github_disconnected rows and may register a project when relay.md is present.
- * Replays are idempotent via the delivery id (and the comment id for usage rows).
+ * Replays are idempotent via the delivery id.
  *
  * Two deliveries also act on the team's board, after the response (lib/webhooks/board.ts): an `agent:<lane>` label on
  * an issue opens a task, and a merged pull request completes the task that waited on it. When the board cannot be
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     events = outcome.events;
     registered = outcome.registered;
   } else {
-    events = await githubEvents(eventName, payload, delivery);
+    events = githubEvents(eventName, payload, delivery);
     if (dataMode() === "db" && (eventName === "issues" || eventName === "pull_request")) after(() => onBoard(eventName, payload));
   }
   if (!events.length) return NextResponse.json({ ok: true, ignored: true, event: eventName, action: payload.action ?? null }, { status: 202 });

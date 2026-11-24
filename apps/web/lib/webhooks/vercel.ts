@@ -21,9 +21,6 @@ export function normalizeVercel(body: Json): NewEvent | null {
   const project = get<string>(p, "project.name") ?? repoName ?? null;
   const repo = org && repoName ? `${org}/${repoName}` : null;
   const ref = get<string>(meta, "githubCommitRef") ?? "";
-  // a runner branch, either spelling: relay/<lane>-<issue> (run-lane.sh, job.ts) or the older relay/<issue>-<lane>
-  const issueMatch = /^relay\/(?:[a-z][a-z0-9-]*-(\d+)|(\d+)-[a-z][a-z0-9-]*)(?:$|[-/])/.exec(ref);
-  const issueFromRef = issueMatch ? Number(issueMatch[1] ?? issueMatch[2]) : null;
   const prId = get<string | number>(meta, "githubPrId");
   const target = get<string>(p, "target") ?? "preview";
   const host = get<string>(p, "url") ?? get<string>(p, "deployment.url");
@@ -35,7 +32,6 @@ export function normalizeVercel(body: Json): NewEvent | null {
     actor: "bot:vercel",
     project,
     repo,
-    issue: Number.isInteger(issueFromRef) ? issueFromRef : null,
     pr: prId != null && prId !== "" ? Number(prId) : null,
     ts: createdAt ? new Date(createdAt).toISOString() : undefined,
     summary: ok

@@ -21,7 +21,7 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v ? v 
 export interface IssueIntake {
   db: Db;
   session: board.BoardSession;
-  /** Whether a GitHub login may open tasks from this repository (lib/webhooks/usage.ts `senderMayOpenTasks`). */
+  /** Whether a GitHub login may open tasks from this repository (lib/webhooks/senders.ts `senderMayOpenTasks`). */
   mayOpen: (repo: string, login: string) => Promise<boolean>;
 }
 
