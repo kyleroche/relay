@@ -59,10 +59,11 @@ jobs:
         run: |
           for f in scripts/*.sh; do bash -n "$f" && echo "ok $f"; done
 
-      - name: No permission-bypass flags in workflows or scripts
-        # docs/SECURITY.md: lanes never run with permission checks disabled. Docs may name the flags; code may not.
+      - name: No permission-bypass flags where a vendor CLI is started
+        # docs/SECURITY.md: lanes never run with permission checks disabled. Docs may name the flags, and the injection
+        # gate names one to catch it in a task's text (packages/core/src/tasks); the code that starts a CLI may not.
         run: |
-          if grep -rnE --exclude=ci.yml 'dangerously|bypassPermissions|--full-access|--yolo' .github/workflows scripts; then
+          if grep -rnE --exclude=ci.yml 'dangerously|bypassPermissions|--full-access|--yolo' .github/workflows scripts packages/core/src/lanes packages/core/src/work packages/core/src/cloud packages/cli/src packages/cli/container packages/cli/hooks apps/lead/agent apps/web/lib/cloud; then
             echo "::error::permission-bypass flag found"; exit 1
           fi
           echo "ok: no bypass flags"
