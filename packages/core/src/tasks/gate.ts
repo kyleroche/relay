@@ -107,6 +107,9 @@ export interface GateVerdict {
   result?: LaneResult;
 }
 
+/** The most one grade may cost on paid credits when the run gives no smaller figure: one short call with no tools. */
+export const GATE_BUDGET_USD = 0.25;
+
 export interface GradeOptions {
   /** The model call: default `runClaude` on the utility lane with no tools. Tests inject one. */
   lane?: (req: LaneRequest) => Promise<LaneResult>;
@@ -119,6 +122,9 @@ export interface GradeOptions {
   task?: string;
   timeoutMs?: number;
   cwd?: string;
+  /** A paid run (work/job.ts): the grade goes through the run's model gateway, within what is left of its cap. */
+  gateway?: { baseUrl: string; token: string };
+  budgetUsd?: number;
 }
 
 const MODELS: readonly ClaudeModel[] = ["fable", "opus", "sonnet"];
@@ -174,7 +180,7 @@ export async function gradeTask(text: string, opts: GradeOptions = {}): Promise<
   };
   if (opts.project) req.project = opts.project;
   if (opts.task) req.task = opts.task;
-  const lane = opts.lane ?? ((r: LaneRequest) => runClaude(r, { model, tools: [], sandbox: false }));
+  const lane = opts.lane ?? ((r: LaneRequest) => runClaude(r, { model, tools: [], sandbox: false, ...(opts.gateway ? { gateway: opts.gateway, maxBudgetUsd: opts.budgetUsd ?? GATE_BUDGET_USD } : {}) }));
   let result: LaneResult;
   try {
     result = await lane(req);

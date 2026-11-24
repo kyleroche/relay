@@ -6,12 +6,12 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { existsSync } from "node:fs";
 import type { Board, ClaimedTask } from "@vercel/board";
 import { HOLD, branchFor } from "../src/board/mapping.ts";
-import { RUN_SCHEMA, taskBlockText, trustedBlocks, type RunBlock } from "../src/board/schemas.ts";
-import { approveTask, closeTask, gateInput, getTask, openTask, releaseTask, requestChanges } from "../src/board/tasks.ts";
+import { grantText, RUN_SCHEMA, taskBlockText, trustedBlocks, type RunBlock } from "../src/board/schemas.ts";
+import { approveTask, closeTask, gateInput, getTask, grantTask, openTask, releaseTask, requestChanges, taskDigest, toTask } from "../src/board/tasks.ts";
 import { SANDBOX_UNAVAILABLE } from "../src/lanes/sandbox.ts";
 import type { LaneResult } from "../src/lanes/types.ts";
 import type { GateVerdict } from "../src/tasks/gate.ts";
-import { claudeAlias, cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, keepClaim, runJob, runState, SANDBOX_UNAVAILABLE_SUMMARY, workDirFor, type JobOptions, type LaneRunner, type TaskGrader } from "../src/work/job.ts";
+import { claudeAlias, cleanEnv, CODE_DISALLOWED_TOOLS, CODE_TOOLS, composeJobPrompt, keepClaim, paidRun, runJob, runState, SANDBOX_UNAVAILABLE_SUMMARY, workDirFor, type JobOptions, type LaneRunner, type TaskGrader } from "../src/work/job.ts";
 import { fakeGitHub, relayBoard } from "./helpers/board.ts";
 import { editingLane, fakeHost, makeOrigin, sh, type FakeHost, type Origin } from "./helpers/repo.ts";
 
@@ -50,6 +50,62 @@ async function rig(lane = "claude"): Promise<Rig> {
     job: (over = {}) => ({ board: worker, lane, workerName: "mini", trusted: [principal, `board:client:relay-mini-${lane}`], home: origin.home, gitHost: host, laneRunner: editingLane, gate: clear, gh: "/nonexistent/gh", ...over }),
   };
 }
+
+describe("a run on paid credits", () => {
+  const gateway = { baseUrl: "https://gateway.example", token: "gw" };
+
+  it("has one cap for the whole job: each call may spend what is left, and none is made once it is gone", async () => {
+    const run = paidRun({ gateway, capUsd: 5 }, 2, "ask");
+    if ("refused" in run) throw new Error(run.refused);
+    // the smaller of what the worker was started with and what the person granted
+    expect(run.capUsd).toBe(2);
+    const budgets: number[] = [];
+    const lane = run.lane(async (_req, l, o) => (budgets.push(o!.paid!.budgetUsd), { tool: l, ok: true, text: "", model: "test", subscription: "gateway", tokensIn: 0, tokensOut: 0, cacheRead: 0, cacheWrite: 0, costEquiv: 1.2, durationMs: 1 }));
+    const req = { lane: "code" as const, prompt: "p", cwd: "/" };
+    await lane(req, "claude");
+    await lane(req, "claude");
+    expect(budgets).toEqual([2, 0.8]);
+    expect(run.spent()).toBeCloseTo(2.4);
+    await expect(lane(req, "claude")).rejects.toThrow("the run's cap of $2.00 is spent");
+    expect(budgets).toHaveLength(2);
+  });
+
+  it("is refused without a person's grant, against a profile that says never, and without a cap", () => {
+    expect(paidRun({ gateway, capUsd: 5 }, null, "ask")).toMatchObject({ refused: expect.stringContaining("no grant from a person") });
+    expect(paidRun({ gateway, capUsd: 5 }, 2, "never")).toMatchObject({ refused: expect.stringContaining("cloud: never") });
+    expect(paidRun({ gateway, capUsd: 0 }, 2, "ask")).toMatchObject({ refused: expect.stringContaining("without a cap") });
+  });
+
+  it("does not run a task nobody granted: the worker hands it back untouched, for a subscription worker", async () => {
+    const r = await rig();
+    const t = await r.open();
+    let calls = 0;
+    const out = await runJob(await r.claim(t.id), r.job({ paid: { gateway, capUsd: 5 }, laneRunner: async (...a) => (calls++, editingLane(...a)) }));
+    expect(out.outcome).toBe("lost");
+    expect(out.error).toContain("no grant from a person");
+    expect(calls).toBe(0);
+    const d = await getTask(r.board, t.id);
+    expect(d.task.state).toBe("queued");
+    expect(d.usage).toEqual([]);
+    expect(r.host.prs).toEqual([]);
+  });
+
+  it("runs a granted task through the gateway within the grant, and its usage says gateway; a worker's own grant counts for nothing", async () => {
+    const r = await rig();
+    const t = await r.open();
+    // the worker's profile is relay's own and still decides nothing about spend
+    const digest = taskDigest(toTask((await r.board.thread(t.id)).message));
+    await r.worker.reply(t.id, { text: grantText({ cloud_cap_usd: 50, digest }), noSync: true });
+    expect((await runJob(await r.claim(t.id), r.job({ paid: { gateway, capUsd: 5 } }))).outcome).toBe("lost");
+
+    await grantTask(r.board, t.id, { cloudCapUsd: 3 });
+    const seen: Array<{ url: string; budget: number }> = [];
+    const out = await runJob(await r.claim(t.id), r.job({ paid: { gateway, capUsd: 5 }, laneRunner: async (req, l, o) => (seen.push({ url: o!.paid!.gateway.baseUrl, budget: o!.paid!.budgetUsd }), editingLane(req, l, o)) }));
+    expect(out.outcome).toBe("review");
+    expect(seen[0]).toEqual({ url: "https://gateway.example", budget: 3 });
+    expect((await getTask(r.board, t.id)).usage.every((u) => u.billing === "gateway")).toBe(true);
+  });
+});
 
 describe("composeJobPrompt", () => {
   it("quotes the task and its thread as data under the banner and carries rules and memory", () => {

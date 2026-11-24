@@ -41,7 +41,7 @@ import { runtimePaths } from "../runtime.ts";
 import { gitFiles, otherLane, projectSteps, respondStep, stepBody, type ProjectSteps, type Step } from "../steps/index.ts";
 import { grantedAccess, profileToolPatterns, readProfile, type ProjectProfile } from "../steps/profile.ts";
 import type { LaneRequest, LaneResult } from "../lanes/types.ts";
-import { gradeTask, type GateVerdict } from "../tasks/gate.ts";
+import { GATE_BUDGET_USD, gradeTask, type GateVerdict } from "../tasks/gate.ts";
 import { ManifestError, parseNodesManifest, type NodesManifest } from "../tasks/manifest.ts";
 import { type Log, noopLog, sha256 } from "../util.ts";
 import { cleanEnv } from "./env.ts";
@@ -115,13 +115,18 @@ export interface GitHost {
 }
 
 /** The model call of a job. `model` is what the task's `model` label asked for; a lane that cannot take it uses its own and says so in `note`. */
-export type LaneRunner = (req: LaneRequest, lane: string, opts?: { model?: string }) => Promise<LaneResult & { tool: string; note?: string }>;
+export type LaneRunner = (req: LaneRequest, lane: string, opts?: { model?: string; paid?: PaidCall }) => Promise<LaneResult & { tool: string; note?: string }>;
+/** One model call of a paid run: the gateway it goes through and the most it may spend, which is what is left of the run's cap. */
+export interface PaidCall {
+  gateway: { baseUrl: string; token: string };
+  budgetUsd: number;
+}
 /** The nodes lane's runner (`runNodes` by default; tests inject one that writes files without the engine). */
 export type NodesRunner = (req: NodesRequest) => Promise<NodesResult>;
 
 /** The injection gate a job runs before its lane (`gradeTask` by default; tests inject a verdict). */
-export type TaskGrader = (text: string, ctx: { project: string; task: string; env: NodeJS.ProcessEnv }) => Promise<GateVerdict>;
-export const defaultGrader: TaskGrader = (text, ctx) => gradeTask(text, { project: ctx.project, task: ctx.task, env: ctx.env });
+export type TaskGrader = (text: string, ctx: { project: string; task: string; env: NodeJS.ProcessEnv; paid?: PaidCall }) => Promise<GateVerdict>;
+export const defaultGrader: TaskGrader = (text, ctx) => gradeTask(text, { project: ctx.project, task: ctx.task, env: ctx.env, ...(ctx.paid ? { gateway: ctx.paid.gateway, budgetUsd: Math.min(ctx.paid.budgetUsd, GATE_BUDGET_USD) } : {}) });
 
 /** The label a worker started with `--no-sandbox` advertises, so the site shows which machines run Claude's Bash unsandboxed. */
 export const NO_SANDBOX_LABEL = "sandbox:off";
@@ -177,8 +182,14 @@ export interface JobOptions {
   gitEmail?: string;
   /** The gh binary used to resolve the commit identity when gitName/gitEmail are not given. */
   gh?: string;
-  /** How a run is paid for, in its usage block: a machine's login, or AI Gateway credits in a sandbox. */
-  billing?: UsageBlock["billing"];
+  /**
+   * Run on paid credits through a model gateway instead of the machine's logins (`relay work --task <id> --billing
+   * gateway --cap <usd>`, what a sandbox started for an approved task runs). The flag is only how the worker was
+   * started: the job runs only when the task's thread holds a person's grant to spend for its text as it stands
+   * (`grantsOf`) and the project's profile does not say `cloud: never`, and it spends at most the smaller of the
+   * grant and `capUsd`, over every model call it makes together.
+   */
+  paid?: { gateway: { baseUrl: string; token: string }; capUsd: number };
   /** The steps relay ships (default `runtimePaths().stepsDir`); the user's are under `<home>/steps`. */
   stepsDir?: string;
   /** The lanes some worker serves, for a step that runs on another lane (default: the board's workers). */
@@ -305,13 +316,42 @@ export interface LaneRunnerOptions {
    * with the allowlist alone, as the worker's OS user, and the worker says so in its labels (`NO_SANDBOX_LABEL`).
    */
   sandbox?: boolean;
-  /**
-   * Paid credits through a model gateway instead of the machine's login, with the most this run may spend: a sandbox
-   * started for a task whose spend a person approved (`relay work --task <id> --billing gateway --cap <usd>`). Only
-   * the Claude lane runs this way.
-   */
-  gateway?: { baseUrl: string; token: string };
-  budgetUsd?: number;
+}
+
+/** Below this much of the cap left, a paid run makes no further model call. */
+const PAID_FLOOR_USD = 0.02;
+
+/**
+ * The budget of one paid run, or why there is none. One cap for the whole job: each model call may spend what is
+ * left, and what it reports having cost comes off before the next.
+ */
+export function paidRun(
+  how: NonNullable<JobOptions["paid"]>,
+  grantedUsd: number | null,
+  cloud: ProjectProfile["cloud"],
+): { refused: string } | { capUsd: number; spent: () => number; call: () => PaidCall; spend: (usd: number) => void; lane: (inner: LaneRunner) => LaneRunner } {
+  if (cloud === "never") return { refused: "the project's profile says cloud: never" };
+  if (grantedUsd === null) return { refused: "the thread holds no grant from a person to spend on this task's text as it stands (relay task grant <id> --cloud <usd>)" };
+  if (!(Number.isFinite(how.capUsd) && how.capUsd > 0)) return { refused: "the worker was started without a cap" };
+  const capUsd = Math.min(how.capUsd, grantedUsd);
+  let spent = 0;
+  const left = (): number => Math.max(0, capUsd - spent);
+  const call = (): PaidCall => ({ gateway: how.gateway, budgetUsd: Number(left().toFixed(4)) });
+  const spend = (usd: number): void => {
+    if (Number.isFinite(usd) && usd > 0) spent += usd;
+  };
+  return {
+    capUsd,
+    spent: () => spent,
+    call,
+    spend,
+    lane: (inner) => async (req, lane, o = {}) => {
+      if (left() < PAID_FLOOR_USD) throw new Error(`the run's cap of $${capUsd.toFixed(2)} is spent ($${spent.toFixed(2)} so far); no further model call was made`);
+      const r = await inner(req, lane, { ...o, paid: call() });
+      spend(r.costEquiv);
+      return r;
+    },
+  };
 }
 
 const CLAUDE_MODELS: readonly ClaudeModel[] = ["fable", "opus", "sonnet"];
@@ -333,10 +373,10 @@ export const laneRunner = (o: LaneRunnerOptions = {}): LaneRunner => async (req,
   if (lane === "claude") {
     const asked = claudeAlias(opts.model);
     const model = asked ?? (env.RELAY_MODEL_CLAUDE as ClaudeModel | undefined) ?? "opus";
-    const r = await runClaude(req, { model, allowedTools: [...CODE_TOOLS, ...(req.access?.tools ?? [])], disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS, sandbox: o.sandbox ?? true, ...(o.gateway ? { gateway: o.gateway } : {}), ...(o.budgetUsd ? { maxBudgetUsd: o.budgetUsd } : {}) });
+    const r = await runClaude(req, { model, allowedTools: [...CODE_TOOLS, ...(req.access?.tools ?? [])], disallowedTools: CODE_DISALLOWED_TOOLS, maxTurns: DEFAULT_MAX_TURNS, sandbox: o.sandbox ?? true, ...(opts.paid ? { gateway: opts.paid.gateway, maxBudgetUsd: opts.paid.budgetUsd } : {}) });
     return { tool: "claude", ...r, ...(opts.model && !asked ? { note: `the claude lane takes fable, opus or sonnet, not '${opts.model}'; it ran on ${model}` } : {}) };
   }
-  if (o.gateway) throw new Error(`a paid sandbox run uses the claude lane; '${lane}' has no gateway adapter`);
+  if (opts.paid) throw new Error(`a paid run uses the claude lane; '${lane}' has no gateway adapter`);
   const fake = env.RELAY_FAKE_LANES === "1";
   if (lane === "codex") {
     const model = opts.model ?? env.RELAY_MODEL_CODEX;
@@ -840,7 +880,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
   const board = opts.board;
   const host = opts.gitHost ?? ghHost();
   const home = opts.home ?? relayHomeDir();
-  const billing = opts.billing ?? "subscription";
+  const billing: UsageBlock["billing"] = opts.paid ? "gateway" : "subscription";
   const lane = opts.lane;
   const id = claim.task.id;
   const dir = workDirFor(home, id);
@@ -921,6 +961,16 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const profile = readProfile(gitFiles(dir, `origin/${trunk}`));
     for (const problem of profile.problems) log(`${id}: profile: ${problem}`);
 
+    // A paid run is a person's decision about this task's text, read from the thread: without it, or against the
+    // project's own "never", this worker hands the task back untouched for a subscription worker.
+    const paid = opts.paid ? paidRun(opts.paid, grantsOf(thread, opts.trusted).cloudCapUsd, profile.cloud) : undefined;
+    if (paid && "refused" in paid) {
+      log(`${id}: not run on paid credits: ${paid.refused}; handing it back`);
+      keeper.stop();
+      await claim.release().catch((e: unknown) => log(`${id}: could not hand it back (${describeBoardError(e)}); its claim ends by itself`));
+      return await finish("lost", undefined, { error: paid.refused });
+    }
+
     // The injection gate (tasks/gate.ts): the task's text and what people added in the thread, as the lane would see
     // them, graded before anything runs. A release covers the text a person read: its digest, in a trusted block.
     const gate = await gateInput(board, thread);
@@ -928,8 +978,9 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
       log(`${id}: a person released the gate's hold on this text; not grading it again`);
     } else {
       log(`${id}: grading the task text`);
-      verdict = await (opts.gate ?? defaultGrader)(gate.text, { project, task: id, env: cleanEnv() });
+      verdict = await (opts.gate ?? defaultGrader)(gate.text, { project, task: id, env: cleanEnv(), ...(paid ? { paid: paid.call() } : {}) });
       if (verdict.result) gateUsage = usageOf({ ...verdict.result, tool: "claude" }, "gate");
+      if (verdict.result) paid?.spend(verdict.result.costEquiv);
       if (verdict.error) log(`${id}: gate unavailable (${verdict.error}); the pre-check passed, running anyway`);
       if (verdict.verdict === "hold") {
         report.summary = `held at the gate (${verdict.grader}, ${verdict.score.toFixed(2)}): ${verdict.reasons.join("; ")}`;
@@ -948,7 +999,7 @@ export async function runJob(claim: ClaimedTask, opts: JobOptions): Promise<JobR
     const access: JobAccess = { sets: granted.sets.filter((name) => profile.sets[name]), hosts: want.hosts, values, missing: want.env.filter((n) => !(n in values)), unknown: want.unknown };
 
     const rulesPath = join(dir, "relay.md");
-    const job: Job = { opts, claim, board, host, laneRun: opts.laneRunner ?? defaultLaneRunner, log, id, lane, dir, repo, project, base, thread, task, body: gate.body, notes: gate.notes, state: runState(thread, opts.trusted), steps, profile, access, exec: opts.exec ?? projectExec({ sandbox: opts.sandbox !== false }), rules: existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, keeper, report, usageOf, git, finish, fail };
+    const job: Job = { opts, claim, board, host, laneRun: paid ? paid.lane(opts.laneRunner ?? defaultLaneRunner) : (opts.laneRunner ?? defaultLaneRunner), log, id, lane, dir, repo, project, base, thread, task, body: gate.body, notes: gate.notes, state: runState(thread, opts.trusted), steps, profile, access, exec: opts.exec ?? projectExec({ sandbox: opts.sandbox !== false }), rules: existsSync(rulesPath) ? { rules: readFileSync(rulesPath, "utf8") } : {}, timeoutMs: opts.timeoutMs ?? DEFAULT_JOB_TIMEOUT_MS, keeper, report, usageOf, git, finish, fail };
     await say(`Running on ${opts.workerName} (${lane}${task.model ? `, model ${task.model}` : ""}) from \`${base}\`.`, RELAY_MESSAGE.log);
     if (granted.sets.length) {
       // names only: which sets, how many hosts, which variables are missing here. A value is never written anywhere.
