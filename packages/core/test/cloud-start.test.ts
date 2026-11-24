@@ -9,7 +9,7 @@ import { deskFor, grantFor, openFor } from "../src/board/desk.ts";
 import { LABEL, RELAY_MESSAGE } from "../src/board/mapping.ts";
 import { grantText, isDecidingActor } from "../src/board/schemas.ts";
 import { actorProfile, SITE_PROFILE } from "../src/board/site.ts";
-import { grantsOf, taskDigest, toTask } from "../src/board/tasks.ts";
+import { grantsOf, grantDigest, toTask } from "../src/board/tasks.ts";
 import { registerWorker } from "../src/board/workers.ts";
 import { cloudNames } from "../src/cloud/plan.ts";
 import { CLOUD_MAX_STARTS, CLOUD_START_GRACE_MS, cloudFailedKey, cloudFailedText, cloudGrantOf, cloudMarksOf, cloudStart, cloudStartKey, cloudStartText, parseCloudMark, type CloudMark } from "../src/cloud/start.ts";
@@ -112,7 +112,7 @@ describe("reading a thread", () => {
 
   it("believes no grant a stranger wrote, nor one for another wording of the task", async () => {
     const s = await site();
-    const digest = taskDigest(toTask((await s.b.thread(s.id)).message));
+    const digest = grantDigest(await s.b.thread(s.id));
     // the person's own profile is not one of relay's: their words are never data
     await s.b.as(actorProfile("human:kyle")).reply(s.id, { text: grantText({ cloud_cap_usd: 9, digest }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
     await s.b.as("someone-else").reply(s.id, { text: grantText({ cloud_cap_usd: 9, digest }), noSync: true });
@@ -131,7 +131,7 @@ describe("reading a thread", () => {
 
   it("does not believe a grant or a mark written as a worker's profile: a paid run's lane can post as its worker", async () => {
     const s = await site();
-    const digest = taskDigest(toTask((await s.b.thread(s.id)).message));
+    const digest = grantDigest(await s.b.thread(s.id));
     // the profile the sandbox writes as: one of relay's own, believed for a run's reports and for nothing that spends
     const lane = s.b.as(cloudNames(s.id).profile);
     await lane.reply(s.id, { text: grantText({ cloud_cap_usd: 10, digest }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });

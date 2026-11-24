@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import type { Board, ClaimedTask } from "@vercel/board";
 import { HOLD, branchFor } from "../src/board/mapping.ts";
 import { grantText, RUN_SCHEMA, taskBlockText, trustedBlocks, type RunBlock } from "../src/board/schemas.ts";
-import { approveTask, closeTask, gateInput, getTask, grantTask, openTask, releaseTask, requestChanges, taskDigest, toTask } from "../src/board/tasks.ts";
+import { approveTask, closeTask, gateInput, getTask, grantTask, openTask, releaseTask, requestChanges, grantDigest, toTask } from "../src/board/tasks.ts";
 import { SANDBOX_UNAVAILABLE } from "../src/lanes/sandbox.ts";
 import type { LaneResult } from "../src/lanes/types.ts";
 import type { GateVerdict } from "../src/tasks/gate.ts";
@@ -94,7 +94,7 @@ describe("a run on paid credits", () => {
     const r = await rig();
     const t = await r.open();
     // the worker's profile is relay's own and still decides nothing about spend
-    const digest = taskDigest(toTask((await r.board.thread(t.id)).message));
+    const digest = grantDigest(await r.board.thread(t.id));
     await r.worker.reply(t.id, { text: grantText({ cloud_cap_usd: 50, digest }), noSync: true });
     expect((await runJob(await r.claim(t.id), r.job({ paid: { gateway, capUsd: 5 } }))).outcome).toBe("lost");
 

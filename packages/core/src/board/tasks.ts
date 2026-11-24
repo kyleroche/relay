@@ -23,7 +23,7 @@ import { BoardError, type Board, type ClaimedTask, type MessageView, type TaskVi
 import type { GitHubClient } from "../github/client.ts";
 import { GitHubError } from "../github/client.ts";
 import { gateText, precheckTask } from "../tasks/gate.ts";
-import { isLaneName, laneNameProblem } from "../tasks/lanes.ts";
+import { laneUnservedProblem, isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
 import { describeBoardError } from "./client.ts";
 import { PLAN_FILE, planOrder, planProblem, type Plan } from "./plan.ts";
@@ -456,8 +456,20 @@ export async function skipStep(board: Board, id: string, stepTask: string, why: 
   }
 }
 
-/** The digest of a task's own words, title and body: what a grant names, so it covers that text and no later edit of it. */
+/** The digest of a task's own words, title and body. */
 export const taskDigest = (t: Pick<BoardTask, "title" | "body">): string => sha256(`${t.title}\n\n${t.body}`);
+
+/**
+ * What a grant names: the digest of everything a lane is given as the task, which is its title, its body (the
+ * `task.md` file by its ID when the body is one) and every note people added in the thread. A grant covers that text
+ * and nothing added or edited later, the same as a release of the gate's hold (`gateInput`): a note posted after a
+ * person granted a set would otherwise reach the lane together with the set's values, read by nobody.
+ */
+export function grantDigest(thread: Pick<ThreadView, "message" | "replies">): string {
+  const task = toTask(thread.message);
+  const file = thread.message.attachments.find((a) => a.name === "task.md")?.id ?? null;
+  return sha256(JSON.stringify({ title: task.title, body: task.body, file, notes: threadNotes(thread as ThreadView).map((n) => n.text) }));
+}
 
 export interface TaskGrants {
   /** The capability sets of the project's profile this task may use. */
@@ -468,7 +480,7 @@ export interface TaskGrants {
 
 /** What trusted people granted this task, for its text as it stands. A grant for an earlier wording counts for nothing. */
 export function grantsOf(thread: ThreadView, trusted: readonly string[]): TaskGrants {
-  const digest = taskDigest(toTask(thread.message));
+  const digest = grantDigest(thread);
   const grants = trustedBlocks<GrantBlock>(thread.replies, GRANT_SCHEMA, trusted, { deciding: true }).map((g) => g.data).filter((g) => g.digest === digest);
   const caps = grants.map((g) => g.cloud_cap_usd).filter((c): c is number => typeof c === "number");
   return { sets: [...new Set(grants.map((g) => g.set).filter((x): x is string => !!x))], cloudCapUsd: caps.length ? caps.at(-1)! : null };
@@ -491,7 +503,7 @@ export async function grantTask(board: Board, id: string, grant: { set?: string;
   const what = hasSet ? `the capability set ${grant.set}` : `a paid sandbox run of up to $${grant.cloudCapUsd!.toFixed(2)}`;
   try {
     const said = `Granted${opts.by ? ` by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}` : ""}: ${what}, for this task's text as it stands.`;
-    await (opts.own ?? board).reply(id, { text: `${said}\n\n${grantText({ ...(hasSet ? { set: grant.set! } : { cloud_cap_usd: grant.cloudCapUsd! }), digest: taskDigest(task) })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
+    await (opts.own ?? board).reply(id, { text: `${said}\n\n${grantText({ ...(hasSet ? { set: grant.set! } : { cloud_cap_usd: grant.cloudCapUsd! }), digest: grantDigest(thread) })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
     // a hint for the site that starts paid runs, so it reads this thread now and not on its next wide look
     if (hasCap) await (opts.own ?? board).label(id, { set: { [LABEL.cloud]: CLOUD_APPROVED } }).catch(() => undefined);
     return task;
@@ -635,6 +647,13 @@ async function approvePlan(board: Board, thread: ThreadView, task: BoardTask, op
   if (!task.project) throw new TaskError(`${task.id} is in no project's queue.`, 409);
   const problem = await settleProblem(board, thread);
   if (problem) throw new TaskError(problem, 403);
+  // the same rule as a task a person opens (`openServedTask`): a lane no worker lists is refused, before any is opened
+  const { listWorkers, servedLanes } = await import("./workers.ts");
+  const served = servedLanes(await listWorkers(board));
+  for (const t of plan.tasks) {
+    const unserved = laneUnservedProblem(t.lane, served);
+    if (unserved) throw new TaskError(`the plan's task '${t.key}': ${unserved}`, 409);
+  }
   const ids = new Map<string, string>();
   try {
     for (const t of planOrder(plan)!) {

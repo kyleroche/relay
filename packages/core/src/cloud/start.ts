@@ -23,7 +23,7 @@
 import type { MessageView, ThreadView } from "@vercel/board";
 import { CLOUD_APPROVED, LABEL } from "../board/mapping.ts";
 import { GRANT_SCHEMA, isDecidingActor, trustedBlocks, withoutBlocks, type GrantBlock } from "../board/schemas.ts";
-import { taskDigest, toTask } from "../board/tasks.ts";
+import { grantDigest } from "../board/tasks.ts";
 
 /** How long a start has to come up and claim its task before it is no longer "being started". */
 export const CLOUD_START_GRACE_MS = 10 * 60_000;
@@ -71,7 +71,8 @@ export function parseCloudMark(text: string): Omit<CloudMark, "at"> | undefined 
 /** The marks the site left in a thread, oldest first. */
 export function cloudMarksOf(thread: Pick<ThreadView, "replies">, trusted: readonly string[]): CloudMark[] {
   return thread.replies.flatMap((m: MessageView) => {
-    if (m.deleted || !isDecidingActor(m.by.actor, trusted)) return [];
+    // an edit keeps its author, and a board may let another profile of the same principal make it: an edited mark is none
+    if (m.deleted || m.editedAt || !isDecidingActor(m.by.actor, trusted)) return [];
     const mark = parseCloudMark(withoutBlocks(m.text));
     return mark ? [{ ...mark, at: m.createdAt }] : [];
   });
@@ -83,7 +84,7 @@ export function cloudMarksOf(thread: Pick<ThreadView, "replies">, trusted: reado
  * profile wrote.
  */
 export function cloudGrantOf(thread: ThreadView, trusted: readonly string[]): { id: string; capUsd: number; at: string } | undefined {
-  const digest = taskDigest(toTask(thread.message));
+  const digest = grantDigest(thread);
   const last = trustedBlocks<GrantBlock>(thread.replies, GRANT_SCHEMA, trusted, { deciding: true })
     .filter((g) => g.data.digest === digest && typeof g.data.cloud_cap_usd === "number" && Number.isFinite(g.data.cloud_cap_usd) && g.data.cloud_cap_usd > 0)
     .at(-1);

@@ -108,7 +108,7 @@ export function parsePlan(text: string): { plan?: Plan; problem?: string } {
 
 /** A plan as a person reads it in the thread before approving: each task, what it waits for, and where it runs. */
 export function planSummary(plan: Plan): string {
-  const lines = [`Proposed plan: ${plan.tasks.length} task${plan.tasks.length === 1 ? "" : "s"}. Approving it opens them; nothing is opened before that.`, ""];
+  const lines = [`Proposed plan: ${plan.tasks.length} task${plan.tasks.length === 1 ? "" : "s"}. Approving it opens them; nothing is opened before that. Each task is shown by its first line only: its whole text, which is what a lane will be given, is in the attached ${PLAN_FILE}.`, ""];
   for (const [i, t] of (planOrder(plan) ?? plan.tasks).entries()) {
     const where = [t.lane, t.model, t.repo ?? t.project].filter(Boolean).join(", ");
     lines.push(`${i + 1}. **${t.title}** (${t.key}; ${where})${t.needs?.length ? ` after ${t.needs.join(", ")}` : ""}`, `   ${t.body.split("\n").find((l) => l.trim())?.trim().slice(0, 240) ?? ""}`);

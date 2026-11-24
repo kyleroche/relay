@@ -323,9 +323,10 @@ const isPrincipal = (t: string): boolean => !t.includes("+") && !t.startsWith(`$
  * place in the thread. A block anyone else posted is not relay's word, whatever it says. With `deciding`, only the
  * authors a decision is believed from (`isDecidingActor`).
  */
-export function trustedBlocks<T>(replies: ReadonlyArray<Pick<MessageView, "blocks" | "by" | "deleted">>, schema: string, trusted: readonly string[], opts: { deciding?: boolean } = {}): Array<{ data: T; index: number }> {
+export function trustedBlocks<T>(replies: ReadonlyArray<Pick<MessageView, "blocks" | "by" | "deleted" | "editedAt">>, schema: string, trusted: readonly string[], opts: { deciding?: boolean } = {}): Array<{ data: T; index: number }> {
   const believed = opts.deciding ? isDecidingActor : isTrustedActor;
-  return replies.flatMap((m, index) => (m.deleted || !believed(m.by.actor, trusted) ? [] : blocksOf<T>(m, schema).map((data) => ({ data, index }))));
+  // a decision is believed as it was posted: an edit keeps the author's name whoever made it, and relay never edits one
+  return replies.flatMap((m, index) => (m.deleted || (opts.deciding && m.editedAt) || !believed(m.by.actor, trusted) ? [] : blocksOf<T>(m, schema).map((data) => ({ data, index }))));
 }
 
 /** The blocks of one schema on a message, typed. */
