@@ -27,6 +27,15 @@ export const BOARD_METADATA: Metadata = {
 /** The newest finished tasks the board keeps; History has the rest. */
 const DONE_SHOWN = 10;
 
+/** Whether the deployment may settle tasks in the queues, with what the board said about it for the warning and the log. */
+async function queueAccess(session: board.BoardSession): Promise<{ decides: boolean; access: string }> {
+  const a = await board.accessIn(session.board, board.workChannel("any"), session.me);
+  const decides = a.can.includes("manage");
+  const access = `As ${session.me.actor} it may ${a.can.join(", ") || "do nothing"} there (${a.how}).`;
+  if (!decides) console.error(`[relay] board: this deployment does not manage the queues. ${access}`);
+  return { decides, access };
+}
+
 export async function BoardPage({ all, project }: { all?: string; project?: string } = {}) {
   const db = dataMode() === "db";
   syncFeedAfter(siteBoard);
@@ -36,11 +45,11 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
         tasks: [...open, ...finished],
         workers,
         problem: null,
-        decides: await board.mayDo(session.board, board.workChannel("any"), "manage", session.me),
+        ...(await queueAccess(session)),
         // the offer of a paid run on a queued card: read from the board as it is now, and nothing is written to make it
         cloud: await cloudViews(open, { session, workers, now: Date.now() }).catch(() => new Map()),
       }),
-      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true, cloud: new Map() }),
+      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true, access: "", cloud: new Map() }),
     ),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
@@ -109,7 +118,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
       )}
       {db && !read.problem && !read.decides && (
         <Alert tone="warn" className="mb-4">
-          This deployment can open tasks but does not manage the queues (<code>work/</code>) on the board, so it cannot approve, release, requeue or close a task someone else opened. Someone who manages the board runs <code>relay setup --board --site-project &lt;this project&gt;</code> once.
+          This deployment can open tasks but does not manage the queues (<code>work/</code>) on the board, so it cannot approve, release, requeue or close a task someone else opened. Someone who manages the board runs <code>relay setup --board --site-project &lt;this project&gt;</code> once. <span className="text-muted-foreground">{read.access}</span>
         </Alert>
       )}
       {db && !read.problem && read.tasks.length === 0 && !project && (

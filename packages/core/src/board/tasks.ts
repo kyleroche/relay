@@ -537,10 +537,24 @@ export interface ApproveResult {
  * subtree, which made a site with the grant say it had none.
  */
 export async function mayDo(board: Board, channel: string, permission: "read" | "post" | "react" | "label" | "sync" | "manage", me?: Pick<Awaited<ReturnType<Board["me"]>>, "can">): Promise<boolean> {
+  return (await accessIn(board, channel, me)).can.includes(permission);
+}
+
+/**
+ * What the caller may do in one channel and how that was learnt, in words an operator can act on: the board's own
+ * explanation (the rule that decided and where it came from), or its summary when it would not explain.
+ */
+export async function accessIn(board: Board, channel: string, me?: Pick<Awaited<ReturnType<Board["me"]>>, "can">): Promise<{ can: string[]; how: string }> {
   try {
-    return ((await board.explain(channel)).can as readonly string[]).includes(permission);
-  } catch {
-    return mayIn((me ?? (await board.me())).can, channel, permission);
+    const x = await board.explain(channel);
+    const from = x.grants.map((g) => g.id).filter(Boolean).join(", ");
+    return { can: [...x.can], how: `the board's answer for ${channel}: rule ${x.pattern ?? "none"}${x.level ? ` (${x.level})` : ""}${from ? `, from grant ${from}` : ""}${x.capped ? ", capped" : ""}` };
+  } catch (e) {
+    const can = (me ?? (await board.me())).can ?? {};
+    const patterns = Object.keys(can);
+    const subtree = patterns.filter((p) => p.endsWith("/") && channel.startsWith(p)).sort((a, z) => z.length - a.length)[0];
+    const decides = patterns.includes(channel) ? channel : (subtree ?? (patterns.includes("*") ? "*" : undefined));
+    return { can: decides ? [...can[decides]!] : [], how: `the board would not explain (${e instanceof Error ? e.message.slice(0, 120) : "error"}); its summary lists ${patterns.join(", ") || "nothing"}` };
   }
 }
 
