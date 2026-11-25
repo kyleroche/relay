@@ -36,7 +36,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
         tasks: [...open, ...finished],
         workers,
         problem: null,
-        decides: board.mayIn(session.me.can, board.workChannel("any"), "manage"),
+        decides: await board.mayDo(session.board, board.workChannel("any"), "manage", session.me),
         // the offer of a paid run on a queued card: read from the board as it is now, and nothing is written to make it
         cloud: await cloudViews(open, { session, workers, now: Date.now() }).catch(() => new Map()),
       }),

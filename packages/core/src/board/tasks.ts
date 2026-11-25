@@ -530,9 +530,23 @@ export interface ApproveResult {
  * Whether this caller can settle a held task: it made the task, or it manages the task's queue. Asked before
  * anything outside the board changes, so an approval never merges and then finds it cannot complete the task.
  */
+/**
+ * Whether the caller may do something in a channel, asked of the board for that one channel (`explain`), which is the
+ * decision the board itself applies to a request. The summary in `me().can` is only the fallback for a board that
+ * will not explain: on Vercel's board that summary has been seen to leave out a grant made to one project for one
+ * subtree, which made a site with the grant say it had none.
+ */
+export async function mayDo(board: Board, channel: string, permission: "read" | "post" | "react" | "label" | "sync" | "manage", me?: Pick<Awaited<ReturnType<Board["me"]>>, "can">): Promise<boolean> {
+  try {
+    return ((await board.explain(channel)).can as readonly string[]).includes(permission);
+  } catch {
+    return mayIn((me ?? (await board.me())).can, channel, permission);
+  }
+}
+
 async function settleProblem(board: Board, thread: ThreadView): Promise<string | undefined> {
   const me = await board.me();
-  if (thread.message.by.actor === me.actor || mayIn(me.can, thread.message.channel, "manage")) return undefined;
+  if (thread.message.by.actor === me.actor || (await mayDo(board, thread.message.channel, "manage", me))) return undefined;
   return `${me.handle} cannot settle ${thread.message.id}: someone else opened it and this login does not manage ${thread.message.channel}. A site needs the grant relay setup --board --site-project <its project> makes (docs/WORKERS.md).`;
 }
 
