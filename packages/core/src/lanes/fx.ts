@@ -81,9 +81,9 @@ interface Exec {
   code: number;
 }
 
-const exec = (bin: string, args: string[], o: { cwd?: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<Exec> =>
+const exec = (bin: string, args: string[], o: { cwd?: string; env: NodeJS.ProcessEnv; timeout: number; signal?: AbortSignal }): Promise<Exec> =>
   new Promise((resolve) => {
-    const child = execFile(bin, args, { ...(o.cwd ? { cwd: o.cwd } : {}), env: o.env, maxBuffer: 64 * 1024 * 1024, timeout: o.timeout }, (err, stdout, stderr) =>
+    const child = execFile(bin, args, { ...(o.cwd ? { cwd: o.cwd } : {}), env: o.env, maxBuffer: 64 * 1024 * 1024, timeout: o.timeout, ...(o.signal ? { signal: o.signal } : {}) }, (err, stdout, stderr) =>
       resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
     );
     child.stdin?.end();
@@ -127,7 +127,7 @@ export async function runFx(req: LaneRequest, opts: FxOptions): Promise<LaneResu
     const ask = async (model: string): Promise<LaneResult> => {
       writeFileSync(settingsPath(), settings(model));
       const t0 = Date.now();
-      const { stdout, stderr, code } = await exec(bin, args, { cwd: req.cwd, env: { ...baseEnv, FX_MODEL: model }, timeout: req.timeoutMs ?? 20 * 60_000 });
+      const { stdout, stderr, code } = await exec(bin, args, { cwd: req.cwd, env: { ...baseEnv, FX_MODEL: model }, timeout: req.timeoutMs ?? 20 * 60_000, ...(req.signal ? { signal: req.signal } : {}) });
       const durationMs = Date.now() - t0;
       let j: FxAskJson | undefined;
       try {

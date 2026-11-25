@@ -48,8 +48,11 @@ let db: Db;
 // find a client created at now() a day older than the clock even after this file's ticks (under an hour) add up. A
 // pinned date satisfied both only on the day it was written.
 let clock = Math.floor(Date.now() / 1000) * 1000 - 6 * 3_600_000;
-const events: repo.EventRow[] = [];
-const o: OAuthServerOptions = { issuer: "https://relay.test", now: () => clock, onEvent: (row) => void events.push(row) };
+const o: OAuthServerOptions = { issuer: "https://relay.test", now: () => clock };
+/** The access rows the server wrote since `mark`, oldest first. */
+let mark = 0;
+const newest = async () => (await repo.listEvents(db, { limit: 1 }))[0]?.id ?? 0;
+const seen = async () => (await repo.listEvents(db, { kind: "access.", limit: 200 })).filter((e) => e.id > mark).reverse();
 const tick = (seconds: number) => (clock += seconds * 1000);
 
 beforeAll(async () => {
@@ -165,7 +168,7 @@ describe("authorization code with PKCE", () => {
     expect(row?.scopes).toEqual(["tasks:read", "tasks:write", "events:write"]);
     expect(row?.client_id).toBe(reg.client_id);
     expect(row?.expires_at).toBe(new Date(clock + ACCESS_TOKEN_TTL_SECONDS * 1000).toISOString());
-    expect(events.some((e) => e.kind === "access.granted" && e.actor === "human:kyle")).toBe(true);
+    expect((await seen()).some((e) => e.kind === "access.granted" && e.actor === "human:kyle")).toBe(true);
 
     // refresh: new pair, old access token dead, old refresh token dead; reuse revokes the lineage
     const t2 = await exchangeToken(db, { grant_type: "refresh_token", refresh_token: t.refresh_token, client_id: reg.client_id }, o);
@@ -214,14 +217,14 @@ describe("authorization code with PKCE", () => {
 
 describe("device flow", () => {
   it("approve: pending → slow_down → approved → token, redeemable once; feed carries access.requested", async () => {
-    events.length = 0;
+    mark = await newest();
     const d = await deviceAuthorization(db, { client_name: "relay-cli@studio", scope: "feed:read memory:read memory:write" }, o);
     expect(d.user_code).toMatch(/^RLAY-/);
     expect(d.device_code).toMatch(/^rdc_/);
     expect(d.verification_uri).toBe("https://relay.test/activate");
     expect(d.verification_uri_complete).toBe(`https://relay.test/activate?code=${d.user_code}`);
     expect(d.interval).toBe(5);
-    const requested = events.find((e) => e.kind === "access.requested");
+    const requested = (await seen()).find((e) => e.kind === "access.requested");
     expect(requested?.summary).toBe(`client "relay-cli@studio" asks for access: approve ${d.user_code} at https://relay.test/activate`);
     expect(requested?.payload.scopes).toEqual(["feed:read", "memory:read", "memory:write"]);
     expect(requested?.payload.approve_api).toBe(`/api/v1/access/${d.user_code}/approve`);
@@ -257,7 +260,7 @@ describe("device flow", () => {
     await decideDeviceRequest(db, d.user_code, "deny", "human:kyle", o);
     tick(6);
     await fails(exchangeToken(db, { grant_type: GRANT_DEVICE_CODE, device_code: d.device_code }, o), "access_denied");
-    expect(events.some((e) => e.kind === "access.denied" && e.summary.includes(d.user_code))).toBe(true);
+    expect((await seen()).some((e) => e.kind === "access.denied" && e.summary.includes(d.user_code))).toBe(true);
   });
 
   it("expiry: an unapproved code expires for the poller and for the approver", async () => {
@@ -453,25 +456,25 @@ describe("the Access page and retention", () => {
     const rt = await db.query<{ token_hash: string }>("SELECT token_hash FROM oauth_refresh_tokens WHERE client_id = $1", [redeemed.client_id]);
     await repo.revokeRefreshToken(db, rt[0]!.token_hash);
     await repo.revokeTokenById(db, tok.id);
-    events.length = 0;
+    mark = await newest();
     const gone = await removeClient(db, redeemed.client_id, "human:kyle", o);
     expect(gone.name).toBe("redeemed-bot");
     expect(await repo.getClient(db, redeemed.client_id)).toBeUndefined();
     expect((await db.query("SELECT 1 FROM oauth_device_codes WHERE client_id = $1", [redeemed.client_id])).length).toBe(0);
     expect((await db.query("SELECT 1 FROM oauth_refresh_tokens WHERE client_id = $1", [redeemed.client_id])).length).toBe(0);
     expect((await repo.getTokenById(db, tok.id))?.client_id).toBe(redeemed.client_id);
-    expect(events.map((x) => x.kind)).toEqual(["access.client_removed"]);
+    expect((await seen()).map((x) => x.kind)).toEqual(["access.client_removed"]);
   });
 
   it("invites write access.invite_created and access.invite_revoked", async () => {
-    events.length = 0;
+    mark = await newest();
     const { invite } = await createInvite(db, { name: "audited", scopes: ["feed:read"], createdBy: "human:kyle" }, o);
-    expect(events.map((x) => x.kind)).toEqual(["access.invite_created"]);
-    expect(events[0]!.payload.invite_id).toBe(invite.id);
+    expect((await seen()).map((x) => x.kind)).toEqual(["access.invite_created"]);
+    expect((await seen())[0]!.payload.invite_id).toBe(invite.id);
     expect(await revokeInvite(db, invite.id, "human:kyle", o)).toBeDefined();
-    expect(events.map((x) => x.kind)).toEqual(["access.invite_created", "access.invite_revoked"]);
+    expect((await seen()).map((x) => x.kind)).toEqual(["access.invite_created", "access.invite_revoked"]);
     expect(await revokeInvite(db, invite.id, "human:kyle", o)).toBeUndefined();
-    expect(events.length).toBe(2);
+    expect((await seen()).length).toBe(2);
   });
 
   it("purgeAccess removes day-old expired codes and orphan device clients, keeps everything live, and logs once", async () => {
@@ -482,10 +485,10 @@ describe("the Access page and retention", () => {
     // created_at defaults to the database clock; pin the two old clients to the test clock
     await db.query("UPDATE oauth_clients SET created_at = $2 WHERE client_id = ANY($1::text[])", [[smoke.client_id, dcr.client_id], dayAgo]);
 
-    events.length = 0;
+    mark = await newest();
     const before = await purgeAccess(db, o);
     expect(before).toEqual({ device_codes: 0, auth_codes: 0, refresh_tokens: 0, clients: [] });
-    expect(events.length).toBe(0);
+    expect((await seen()).length).toBe(0);
 
     tick(DEVICE_CODE_TTL_SECONDS + 86_400 + 1);
     const r = await purgeAccess(db, o);
@@ -497,8 +500,8 @@ describe("the Access page and retention", () => {
     expect(await repo.getClient(db, smoke.client_id)).toBeUndefined();
     expect(await repo.getClient(db, fresh.client_id)).toBeDefined();
     expect((await db.query("SELECT 1 FROM oauth_device_codes WHERE client_id = $1", [fresh.client_id])).length).toBe(0);
-    expect(events.map((x) => x.kind)).toEqual(["access.purged"]);
-    expect(events[0]!.payload.clients).toContain("relay-smoke-test");
+    expect((await seen()).map((x) => x.kind)).toEqual(["access.purged"]);
+    expect((await seen())[0]!.payload.clients).toContain("relay-smoke-test");
 
     // fresh-bot is now a day older than its (deleted) code and nothing else refers to it: the next sweep takes it
     await db.query("UPDATE oauth_clients SET created_at = $2 WHERE client_id = $1", [fresh.client_id, new Date(clock - 2 * 86_400_000)]);

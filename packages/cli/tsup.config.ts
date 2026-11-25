@@ -13,22 +13,21 @@ const pkg = JSON.parse(await readFile(new URL("./package.json", import.meta.url)
 const external = [...Object.keys(pkg.dependencies ?? {}), ...Object.keys(pkg.optionalDependencies ?? {})];
 
 /**
- * Two command modules compute paths from the checkout layout (`RELAY_ROOT` is four directories above
- * `_common.ts`; the templates sit under packages/cli). In the bundle every module shares dist/relay.js's
- * `import.meta.url`, so those two constants are pointed at `runtimePaths()` instead. A rewrite that finds nothing
+ * One command module computes a path from the checkout layout (`RELAY_ROOT` is four directories above
+ * `_common.ts`). In the bundle every module shares dist/relay.js's `import.meta.url`, so that constant is pointed
+ * at `runtimePaths()` instead. A rewrite that finds nothing
  * to rewrite fails the build: a changed line surfaces here, not as a package that cannot find its files. Once a
  * module uses `runtimePaths(` itself it is left alone, so this plugin retires line by line.
  */
 const REWRITES: Record<string, Array<[RegExp, string]>> = {
   "_common.ts": [[/export const RELAY_ROOT = resolve\(dirname\(fileURLToPath\(import\.meta\.url\)\), "\.\.", "\.\.", "\.\.", "\.\."\);/, "export const RELAY_ROOT = runtimePaths().root;"]],
-  "link.ts": [[/const TEMPLATES = join\(RELAY_ROOT, "packages", "cli", "templates"\);/, "const TEMPLATES = runtimePaths().templatesDir;"]],
 };
 
 function runtimePathsRewrite(): Plugin {
   return {
     name: "relay-runtime-paths",
     setup(build) {
-      build.onLoad({ filter: /[\\/]src[\\/]commands[\\/](?:_common|link)\.ts$/ }, async (args) => {
+      build.onLoad({ filter: /[\\/]src[\\/]commands[\\/]_common\.ts$/ }, async (args) => {
         let contents = await readFile(args.path, "utf8");
         if (contents.includes("runtimePaths(")) return { contents, loader: "ts" };
         for (const [re, to] of REWRITES[basename(args.path)] ?? []) {

@@ -1,74 +1,74 @@
 /**
- * The worker loop behind `relay work` (docs/WORKERS.md, "The loop"): register, then on every tick read the doorbell
- * (the queue version and a queued estimate, one cheap query) and run a claim only when the version moved since the
- * last read or something is queued. The tick starts at `pollMs` (15 s) after any activity and doubles while nothing
- * happens, up to `maxIdleMs` (5 minutes), so an idle worker makes a few hundred requests a day instead of several
- * thousand and a Neon database behind the site is left alone. A claimed task runs, and when it finishes the loop
- * claims once more right away (there may be more work) before going back to the doorbell. Heartbeats go every
- * minute while a lease is held (they renew it) and at most every `idleHeartbeatMs` otherwise, carrying the current
- * interval so the workers page can show it, and the plan meters relay's status line saved under ~/.harness/meters
- * (`meters.ts`), so the site's header can show the login's own 5-hour and 7-day usage. One job at a time by default;
- * `jobs` raises it, and the lane adapters' per-subscription locks still keep one process per vendor login. A stop
- * (SIGTERM, --once with an empty queue) lets running jobs finish, then reports the worker offline. A heartbeat or
- * claim the site answers with 404 means the worker was forgotten there (`relay work forget`); the loop registers
- * again under the same name and carries on with the new id.
+ * The worker loop behind `relay work` (docs/WORKERS.md, "The loop"). The queue is the board: every project's tasks
+ * are threads under `work/`, and a task is this worker's to take when its `lane` label names a lane the machine
+ * serves (or `any`, for a code lane) and its owner is one the machine takes work from.
+ *
+ *   look     one claim per free lane, oldest ready task first; the board gives the task to exactly one claimer
+ *   run      the job renews its own lease; one job at a time by default (`jobs` raises it, never two on one lane,
+ *            since a lane is one vendor login)
+ *   wait     with nothing to take, the loop blocks on the board until a task under `work/` becomes ready, from a
+ *            cursor it noted before it looked, so nothing that happened in between is missed. It never polls on a
+ *            timer; the wait ends by itself every few minutes so a lease that ran out elsewhere is found too
+ *   live     the worker's message in `relay/workers` is relabelled on every pass and every few minutes while a job
+ *            runs, and rewritten when the plan meters relay's status line saved under ~/.harness/meters change
+ *
+ * A stop (SIGTERM, `--once` with nothing left) lets running jobs finish, then marks the worker offline.
  */
-import type { WorkerRow } from "../db/workers.ts";
+import { BoardError, type Board, type ClaimedTask } from "@vercel/board";
+import { describeBoardError, type BoardSession } from "../board/client.ts";
+import { ANY_LANE, LABEL, WORK_SUBTREE, workerProfile } from "../board/mapping.ts";
+import { ensureSchemas } from "../board/schemas.ts";
+import { registerWorker, type WorkerRegistration } from "../board/workers.ts";
 import { relayHome } from "../hooks/cache.ts";
 import { readMeterFiles, type MeterReading } from "../meters.ts";
+import { isCodeLane } from "../tasks/lanes.ts";
 import { type Log, noopLog } from "../util.ts";
-import type { WorkApi } from "./api.ts";
 import { runJob, type JobOptions, type JobResult } from "./job.ts";
-import type { ClaimResult } from "./server.ts";
 
-/** Heartbeat cadence while this worker holds a lease (each one renews the lease). */
-export const HEARTBEAT_MS = 60_000;
-/** The tick right after activity; the loop doubles it while idle. */
-export const POLL_MS = 15_000;
-/** The longest an idle worker waits between doorbell reads (`--max-interval`, `RELAY_WORK_MAX_INTERVAL`). */
-export const MAX_IDLE_MS = 5 * 60_000;
-/** Heartbeat cadence while idle: enough for the workers page to show `idle`, not `offline` (WORKER_OFFLINE_MS is an hour). */
-export const IDLE_HEARTBEAT_MS = 5 * 60_000;
+/** How long an idle worker waits on the board before it looks again by itself. */
+export const IDLE_WAIT_MS = 5 * 60_000;
+/** How often a worker with a job running says it is alive. */
+export const HEARTBEAT_MS = 5 * 60_000;
+/** The pause after a failed look (the board unreachable, a rate limit), doubled up to IDLE_WAIT_MS. */
+export const RETRY_MS = 15_000;
 
 export interface WorkerLoopOptions {
-  api: WorkApi;
+  session: BoardSession;
   name: string;
   host: string;
   lanes: string[];
   labels?: string[];
   version: string;
-  /** Concurrent jobs (default 1). */
+  /** Concurrent jobs (default 1), each on a different lane. */
   jobs?: number;
-  /** Drain the queue once, then stop (no doorbell, no sleep between claims). */
+  /** Drain the queue once, then stop (no waiting). */
   once?: boolean;
-  /** The first idle tick (default 15 s); the loop doubles it up to maxIdleMs. */
-  pollMs?: number;
-  /** The longest idle tick (default 5 minutes; never below pollMs). */
-  maxIdleMs?: number;
+  /** Run this one task and stop: a sandbox started for a task someone approved. Its owner must still be one this worker takes tasks from. */
+  only?: string;
+  idleWaitMs?: number;
   heartbeatMs?: number;
-  idleHeartbeatMs?: number;
+  retryMs?: number;
   log?: Log;
-  /** Interval and version changes, for `RELAY_DEBUG`; silent by default. */
+  /** What the loop is waiting for and why it woke, for `RELAY_DEBUG`; silent by default. */
   debug?: Log;
   /** Per-job settings (git host, lane runner, timeout, keep) passed through to runJob. */
-  job?: Omit<JobOptions, "api" | "workerId" | "workerName" | "host">;
+  job?: Omit<JobOptions, "board" | "lane" | "workerName" | "trusted">;
   signal?: AbortSignal;
   onJob?: (r: JobResult) => void;
-  /** Called with the interval after every change (tests, status displays). */
-  onInterval?: (ms: number) => void;
   /** The job runner (`runJob`); the loop tests substitute one that does no git. */
-  runJob?: (claim: ClaimResult, opts: JobOptions) => Promise<JobResult>;
-  /** The plan meters to send with each heartbeat (default: the fresh files under `$RELAY_HOME/meters`). */
+  runJob?: (claim: ClaimedTask, opts: JobOptions) => Promise<JobResult>;
+  /** The plan meters to post (default: the fresh files under `$RELAY_HOME/meters`). */
   meters?: () => MeterReading[];
 }
 
 export interface WorkerLoopResult {
-  worker: WorkerRow;
+  /** The worker's message in `relay/workers`. */
+  thread: string;
   ran: number;
   results: JobResult[];
 }
 
-const abortable = (ms: number, signal?: AbortSignal): Promise<void> =>
+const sleep = (ms: number, signal?: AbortSignal): Promise<void> =>
   new Promise((res) => {
     if (signal?.aborted) return res();
     const t = setTimeout(done, ms);
@@ -80,44 +80,27 @@ const abortable = (ms: number, signal?: AbortSignal): Promise<void> =>
     signal?.addEventListener("abort", done, { once: true });
   });
 
-const secs = (ms: number): string => `${Math.round(ms / 100) / 10}s`;
+/** What a failed claim means for the operator, where the board's own words need relay's context. */
+function claimAdvice(e: unknown): string {
+  const said = describeBoardError(e);
+  if (e instanceof BoardError && (e.code === "claim_too_wide" || e.code === "channel_tree_too_large")) return `${said} A claim looks under ${WORK_SUBTREE} for every owner in board.from: name fewer owners in ~/.harness/config.json.`;
+  if (e instanceof BoardError && e.code === "not_logged_in") return `${said} The worker reaches the board with this machine's own Vercel login: run vercel login here.`;
+  return said;
+}
 
 export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResult> {
   const log = opts.log ?? noopLog;
   const debug = opts.debug ?? noopLog;
+  const { board, me, from } = opts.session;
   const jobs = Math.max(1, opts.jobs ?? 1);
-  const pollMs = Math.max(1, opts.pollMs ?? POLL_MS);
-  const maxIdleMs = Math.max(pollMs, opts.maxIdleMs ?? MAX_IDLE_MS);
-  const heartbeatMs = opts.heartbeatMs ?? HEARTBEAT_MS;
-  const idleHeartbeatMs = Math.max(heartbeatMs, opts.idleHeartbeatMs ?? IDLE_HEARTBEAT_MS);
+  const idleWaitMs = Math.max(1, opts.idleWaitMs ?? IDLE_WAIT_MS);
+  const heartbeatMs = Math.max(1, opts.heartbeatMs ?? HEARTBEAT_MS);
+  const retryMs = Math.max(1, opts.retryMs ?? RETRY_MS);
   const lanes = opts.lanes;
-  const labels = opts.labels ?? [];
-  const register = () => opts.api.register({ name: opts.name, host: opts.host, lanes, labels, version: opts.version });
-  let { worker } = await register();
-  log(`registered as ${worker.name} (${worker.id}) serving ${worker.lanes.join(", ") || "no lanes"}${worker.labels.length ? ` with labels ${worker.labels.join(", ")}` : ""} via ${opts.api.mode}`);
-  /** The site no longer knows this worker's id (someone ran `relay work forget`): take a fresh row under the same name. */
-  const forgotten = (e: unknown): boolean => typeof e === "object" && e !== null && (e as { status?: unknown }).status === 404;
-  const reregister = async (why: string): Promise<void> => {
-    try {
-      ({ worker } = await register());
-      log(`${why}: this worker was forgotten on the site; registered again as ${worker.name} (${worker.id})`);
-    } catch (e) {
-      log(`${why}: forgotten on the site and registering again failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-  const results: JobResult[] = [];
-  const running = new Set<Promise<void>>();
-  let stopped = false;
-  let interval = pollMs;
-  /** The queue version seen by the last doorbell read; a claim runs when the next read differs. */
-  let lastVersion: number | undefined;
-  /** Claim on the next pass whatever the doorbell says: at start, after a claim, and when a job finishes. */
-  let claimNow = true;
-  /** A claim already retried once after the site forgot this worker. */
-  let retried = false;
+  const info = { name: opts.name, host: opts.host, lanes, labels: opts.labels ?? [], version: opts.version };
   const run = opts.runJob ?? runJob;
   const readMeters = opts.meters ?? (() => readMeterFiles(relayHome()));
-  /** Never let a bad meter file cost a heartbeat. */
+  /** Never let a bad meter file cost a sign of life. */
   const meters = (): MeterReading[] => {
     try {
       return readMeters();
@@ -125,118 +108,124 @@ export async function runWorker(opts: WorkerLoopOptions): Promise<WorkerLoopResu
       return [];
     }
   };
-  let lastBeat = Date.now();
-  let beating: Promise<void> | undefined;
+  /** One handle per lane: the board shows `relay-<worker>-<lane> via <login>`, and a lane's claims are its own. */
+  const handles = new Map<string, Board>();
+  const handle = (lane: string): Board => {
+    let h = handles.get(lane);
+    if (!h) handles.set(lane, (h = board.as(workerProfile(opts.name, lane))));
+    return h;
+  };
 
-  const setIntervalTo = (ms: number) => {
-    if (ms === interval) return;
-    debug(`poll interval ${secs(interval)} -> ${secs(ms)}`);
-    interval = ms;
-    opts.onInterval?.(ms);
-  };
-  const beat = (): Promise<void> => {
-    if (beating) return beating;
+  // a job reports in blocks, and the worker's own message is one: without the schemas nothing it does would land
+  if (!(await ensureSchemas(board))) throw new Error("relay's schemas are not on this board and this login cannot register them (it takes `manage` everywhere). Someone who manages the board runs once: relay setup --board");
+  const reg: WorkerRegistration = await registerWorker(board, info, meters());
+  log(`on the board as ${me.handle} (${me.principal}), worker ${opts.name} serving ${lanes.join(", ") || "no lanes"}${info.labels.length ? ` with labels ${info.labels.join(", ")}` : ""}; taking tasks from ${from.join(", ")}`);
+
+  // what a run leaves in a thread is trusted by its author; on a board where a profile is a principal of its own
+  // (a local one), this worker's lane profiles would otherwise read as strangers to each other
+  const trusted = [...new Set([...from, ...(await Promise.all(lanes.map((l) => handle(l).me()))).map((m) => m.actor)])];
+  const results: JobResult[] = [];
+  const once = !!opts.once || !!opts.only;
+  const running = new Map<Promise<void>, string>();
+  let stopped = false;
+  let retry = retryMs;
+  let lastBeat = Date.now();
+  const beat = async (): Promise<void> => {
     lastBeat = Date.now();
-    beating = opts.api
-      .heartbeat(worker.id, { interval_ms: interval, meters: meters() })
-      .then(() => undefined)
-      .catch((e: unknown) => (forgotten(e) ? reregister("heartbeat") : log(`heartbeat failed: ${e instanceof Error ? e.message : String(e)}`)))
-      .finally(() => (beating = undefined));
-    return beating;
+    await reg.beat({ running: running.size, meters: meters() }).catch((e: unknown) => log(`could not update the worker's message: ${describeBoardError(e)}`));
   };
-  /** Every minute while a lease is held; otherwise only when the idle cadence is due. */
-  const maybeBeat = (): Promise<void> | undefined => (running.size > 0 || Date.now() - lastBeat >= idleHeartbeatMs ? beat() : undefined);
-  const timer = setInterval(() => void maybeBeat(), heartbeatMs);
-  /** An empty tick: wait the current interval, then lengthen it. */
-  const rest = async () => {
-    await abortable(interval, opts.signal);
-    if (!stopped) setIntervalTo(Math.min(interval * 2, maxIdleMs));
-  };
+  const timer = setInterval(() => {
+    if (running.size > 0 && Date.now() - lastBeat >= heartbeatMs) void beat();
+  }, Math.min(heartbeatMs, 60_000));
+  timer.unref?.();
   const onAbort = () => {
     stopped = true;
     log("stopping: no new claims; waiting for running jobs");
   };
   opts.signal?.addEventListener("abort", onAbort, { once: true });
+
+  /** The oldest ready task this worker may take on a lane that is free: its own lanes first, then `any` on a free code lane. */
+  let took = false;
+  const claimNext = async (): Promise<{ claim: ClaimedTask; lane: string } | undefined> => {
+    if (opts.only) {
+      if (took) return undefined;
+      took = true;
+      const root = (await board.thread(opts.only)).message;
+      // a claim by ID asks nobody whose task it is, so the worker's own rule is checked here
+      if (!root.task || !from.includes(root.task.owner)) throw new Error(`${opts.only} is not a task of an owner this worker takes tasks from`);
+      const want = root.labels?.[LABEL.lane];
+      const lane = want === ANY_LANE ? lanes.find(isCodeLane) : lanes.find((l) => l === want);
+      if (!lane) throw new Error(`this worker does not serve the lane of ${opts.only} (${want ?? "none"})`);
+      return { claim: await handle(lane).tasks.claim(opts.only), lane };
+    }
+    const busy = new Set(running.values());
+    const free = lanes.filter((l) => !busy.has(l));
+    for (const lane of free) {
+      const claim = await handle(lane).tasks.claim({ channel: WORK_SUBTREE, label: { [LABEL.lane]: lane }, from });
+      if (claim) return { claim, lane };
+    }
+    const code = free.find(isCodeLane);
+    if (code) {
+      const claim = await handle(code).tasks.claim({ channel: WORK_SUBTREE, label: { [LABEL.lane]: ANY_LANE }, from });
+      if (claim) return { claim, lane: code };
+    }
+    return undefined;
+  };
+
   try {
     while (!stopped) {
       if (running.size >= jobs) {
-        await Promise.race(running);
+        await Promise.race(running.keys());
         continue;
       }
-      // Every tick reads the doorbell (one cheap query) so the remembered version is current even right after this
-      // worker's own release moved it; --once drains with claims alone.
-      let shouldClaim = opts.once === true;
-      if (!opts.once) {
-        let bell;
-        try {
-          bell = await opts.api.doorbell({ lanes });
-        } catch (e) {
-          log(`doorbell failed: ${e instanceof Error ? e.message : String(e)}`);
-          await rest();
-          continue;
-        }
-        await maybeBeat();
-        if (!bell) {
-          shouldClaim = true; // the site has no doorbell: claim on every tick, still backing off
-        } else {
-          const moved = bell.version !== lastVersion;
-          if (moved) debug(`queue version ${lastVersion ?? "?"} -> ${bell.version}${bell.queued ? `, ${bell.queued} queued` : ""}`);
-          lastVersion = bell.version;
-          shouldClaim = claimNow || moved || bell.queued > 0;
-        }
-        if (!shouldClaim) {
-          await rest();
-          continue;
-        }
-      }
-      claimNow = false;
-      let claim;
+      let cursor: string | undefined;
+      let next: { claim: ClaimedTask; lane: string } | undefined;
       try {
-        claim = await opts.api.claim({ worker_id: worker.id, lanes, labels });
+        // note the place before looking: a task that becomes ready while this pass looks still wakes the wait below
+        if (!once) cursor = (await board.poll({ channel: WORK_SUBTREE, wait: 0 })).cursor;
+        next = await claimNext();
+        retry = retryMs;
       } catch (e) {
-        if (forgotten(e) && !retried) {
-          await reregister("claim");
-          retried = true; // one immediate retry with the new id; a second 404 waits like any other failure
-          claimNow = true;
-          continue;
+        log(`could not look for work: ${claimAdvice(e)}`);
+        if (once) break;
+        await sleep(retry, opts.signal);
+        retry = Math.min(retry * 2, idleWaitMs);
+        continue;
+      }
+      if (!next) {
+        if (once) break;
+        await beat();
+        debug(`nothing to take; waiting on ${WORK_SUBTREE} for up to ${Math.round(idleWaitMs / 1000)}s`);
+        try {
+          const woke = await board.wait({ channel: WORK_SUBTREE, label: ["board.task=ready"], ...(cursor ? { after: cursor } : {}) }, { timeout: idleWaitMs, ...(opts.signal ? { signal: opts.signal } : {}) });
+          debug(woke ? `woke on ${woke.type} ${woke.message?.id ?? ""}` : "the wait ended; looking again");
+        } catch (e) {
+          if (stopped) break;
+          log(`the wait on the board failed: ${describeBoardError(e)}`);
+          await sleep(retry, opts.signal);
+          retry = Math.min(retry * 2, idleWaitMs);
         }
-        log(`claim failed: ${e instanceof Error ? e.message : String(e)}`);
-        if (opts.once) break;
-        await rest();
         continue;
       }
-      retried = false;
-      if (!claim) {
-        if (opts.once) break;
-        await rest();
-        continue;
-      }
-      setIntervalTo(pollMs);
-      log(`claimed ${claim.task.id} (${claim.task.lane}) until ${claim.claim.lease_until}`);
-      const p = run(claim, { ...(opts.job ?? {}), api: opts.api, workerId: worker.id, workerName: worker.name, host: opts.host, log })
+      const { claim, lane } = next;
+      log(`claimed ${claim.task.id} for the ${lane} lane until ${claim.until}`);
+      const p: Promise<void> = run(claim, { ...(opts.job ?? {}), board: handle(lane), lane, workerName: opts.name, trusted, log })
         .then((r) => {
           results.push(r);
           opts.onJob?.(r);
         })
-        .catch((e: unknown) => log(`${claim!.task.id}: report failed: ${e instanceof Error ? e.message : String(e)}`))
-        .finally(() => {
-          running.delete(p);
-          claimNow = true; // the queue may hold more: one claim right away, then back to the doorbell
-          setIntervalTo(pollMs);
-        });
-      running.add(p);
-      claimNow = true;
+        .catch((e: unknown) => log(`${claim.task.id}: could not report: ${describeBoardError(e)}`))
+        .finally(() => running.delete(p));
+      running.set(p, lane);
+      void beat();
     }
-    await Promise.all(running);
+    await Promise.all(running.keys());
   } finally {
     clearInterval(timer);
     opts.signal?.removeEventListener("abort", onAbort);
-    await beating?.catch(() => {});
-    try {
-      await opts.api.heartbeat(worker.id, { status: "offline", interval_ms: interval, meters: meters() });
-    } catch {
-      /* the site will see the silence */
-    }
+    await reg.offline(meters()).catch(() => {
+      /* the board will see the silence */
+    });
   }
-  return { worker, ran: results.length, results };
+  return { thread: reg.id, ran: results.length, results };
 }

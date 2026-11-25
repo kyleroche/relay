@@ -94,7 +94,7 @@ export function appManifest(opts: { name?: string } = {}): Record<string, unknow
   return {
     name: opts.name ?? `relay-${new URL(SITE_URL).hostname.split(".")[0]}`,
     url: SITE_URL,
-    description: "relay: GitHub issues as the task bus for one person's coding-agent subscriptions. Opens tasks, reads runs and PRs, comments on reviews.",
+    description: "relay: one person's coding-agent subscriptions as one system. Merges approved pull requests, comments on reviews, and turns agent:<lane> issues into tasks.",
     hook_attributes: { url: `${SITE_URL}/api/webhooks/github`, active: true },
     redirect_url: `${SITE_URL}/setup/github/callback`,
     callback_urls: [`${SITE_URL}/auth/github/callback`],
@@ -103,7 +103,7 @@ export function appManifest(opts: { name?: string } = {}): Record<string, unknow
     public: false,
     // contents: write because approving a task squash-merges the PR and deletes its branch through the App
     default_permissions: { actions: "read", contents: "write", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" },
-    default_events: ["issues", "issue_comment", "pull_request", "pull_request_review", "workflow_run", "deployment_status"],
+    default_events: ["issues", "pull_request", "pull_request_review", "workflow_run", "deployment_status"],
   };
 }
 

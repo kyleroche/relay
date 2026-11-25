@@ -1,21 +1,19 @@
 /**
  * The authorization server's wiring for this site (docs/SECURITY.md, "Access for agents"). The logic is
- * @relay/core's oauth/server.ts; this file supplies the issuer (SITE_URL), the feed fan-out for access.* events,
- * request parsing shared by /oauth/token, /oauth/device, /oauth/revoke and /oauth/register, and the RFC 6749 error
+ * @relay/core's oauth/server.ts; this file supplies the issuer (SITE_URL), request parsing shared by /oauth/token, /oauth/device, /oauth/revoke and /oauth/register, and the RFC 6749 error
  * shape. Every endpoint needs the database: mock deployments answer `server_error` with a hint.
  */
 import { OAuthError, type OAuthServerOptions } from "@relay/core";
 import { NextResponse } from "next/server";
 import { clientKey, rateHeaders, RESOURCE_METADATA_URL, takeToken, type RateState } from "@/lib/api";
 import { dataMode } from "@/lib/data";
-import { dispatchOne } from "@/lib/dispatch";
 import { SITE_URL } from "@/lib/site";
 
 export const ISSUER = SITE_URL;
 export const AUTHORIZATION_SERVER_METADATA_URL = `${SITE_URL}/.well-known/oauth-authorization-server`;
 export { RESOURCE_METADATA_URL };
 
-export const oauthOptions = (): OAuthServerOptions => ({ issuer: ISSUER, onEvent: dispatchOne });
+export const oauthOptions = (): OAuthServerOptions => ({ issuer: ISSUER });
 
 /** Token-style endpoints accept application/x-www-form-urlencoded (the standard) and JSON (what agents send). */
 export async function readParams(req: Request): Promise<Record<string, string>> {

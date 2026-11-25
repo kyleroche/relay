@@ -90,6 +90,9 @@ function settingsWith(ctx: HookContext, remove: boolean, statusline: boolean): {
     } else if (!isRelayStatusLine(settings.statusLine)) {
       settings.statusLine = relayStatusLine(ctx);
       extra.push(...planDelete(prevPath)); // nothing to delegate to: a remembered command would be stale
+    } else {
+      // already relay's: write it again, so a Node or package path that moved since the last setup is corrected
+      settings.statusLine = { ...(settings.statusLine as object), ...relayStatusLine(ctx) };
     }
   }
   return { content: toJson(settings), extra };

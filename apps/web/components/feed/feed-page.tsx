@@ -3,7 +3,10 @@ import Link from "next/link";
 import { WORKER_LANES } from "@relay/core";
 import { Feed } from "@/components/feed/feed";
 import { HomeTabs } from "@/components/home-tabs";
-import { getAssets, getFeed, getProjects, getTasks, getWorkers } from "@/lib/data";
+import { siteBoard, siteWorkers } from "@/lib/board";
+import { waitingOnYou } from "@/lib/board-read";
+import { syncFeedAfter } from "@/lib/board-watch";
+import { getAssets, getFeed, getProjects } from "@/lib/data";
 import { viewerTimeZone } from "@/lib/tz-server";
 
 /** The feed, the second tab of the signed-in home: `app/feed/page.tsx` renders it; the board at / is the first tab. */
@@ -29,14 +32,15 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
     actor: one(sp.actor),
     kind: one(sp.kind),
   };
-  const [events, projects, allRecent, pending, review, held, workers, tz] = await Promise.all([
+  syncFeedAfter(siteBoard);
+  // the header's two numbers come from the board; a board that cannot be read costs the feed nothing
+  const [events, projects, allRecent, pending, { review, held }, workers, tz] = await Promise.all([
     getFeed({ ...filters, limit: 150 }),
     getProjects(),
     getFeed({ limit: 300 }),
     getAssets({ status: "pending", limit: 50 }),
-    getTasks({ state: "review", limit: 50 }),
-    getTasks({ state: "held", limit: 50 }),
-    getWorkers(),
+    waitingOnYou().catch(() => ({ review: 0, held: 0 })),
+    siteWorkers().catch(() => []),
     viewerTimeZone(),
   ]);
   const actors = [...new Set(allRecent.map((e) => e.actor))].sort();
@@ -45,8 +49,8 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
   const today = new Date().toISOString().slice(0, 10);
   const todayCount = allRecent.filter((e) => e.ts.slice(0, 10) === today).length;
   const todayCost = allRecent.filter((e) => e.ts.slice(0, 10) === today).reduce((s, e) => s + e.cost_equiv, 0);
-  const offline = workers.filter((w) => !w.retired && w.status === "offline").length;
-  const waiting = review.length + held.length;
+  const offline = workers.filter((w) => !w.retired && w.state === "offline").length;
+  const waiting = review + held;
   const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
   return (
@@ -58,8 +62,8 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
             <HomeTabs active="feed" />
             <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
               Everything humans, bots, workers and agents did across your coding-agent subscriptions, newest first. relay
-              records each GitHub issue, run, model call, pull request, review and deployment as one append-only event with
-              its tokens and cost equivalent. Decisions are made on the board.
+              records each task, run, model call, pull request, review and deployment as one append-only event with its
+              tokens and cost equivalent. Decisions are made on the board.
             </p>
           </div>
           <dl className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
@@ -75,7 +79,7 @@ export async function FeedPage({ searchParams }: { searchParams: Promise<Search>
               <dt className="text-xs text-muted-foreground">Waiting on you</dt>
               <dd className="font-mono tabular-nums">
                 {waiting > 0 ? (
-                  <Link href="/" className="text-warn underline underline-offset-4" title={`${review.length} in review, ${held.length} held; decide on the board`}>
+                  <Link href="/" className="text-warn underline underline-offset-4" title={`${review} in review, ${held} held; decide on the board`}>
                     {plural(waiting, "task")}
                   </Link>
                 ) : (

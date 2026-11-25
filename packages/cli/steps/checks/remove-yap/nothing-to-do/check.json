@@ -1,0 +1,11 @@
+{
+  "task": {
+    "title": "Sum order totals in cents"
+  },
+  "unchanged": [
+    "src/money.js",
+    "package.json"
+  ],
+  "no_code_change": true,
+  "rubric": "The only comment the change added says why the sum is done in cents, which the code cannot say. The agent left the working tree exactly as it was, and its last line reports that nothing was removed, shortened or moved."
+}

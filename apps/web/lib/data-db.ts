@@ -5,8 +5,7 @@
  *   getFeed      -> repo.listEvents (project, kind, actor, lane, before, after)
  *   getProjects  -> repo.listProjects + repo.projectStats
  *   getProject   -> repo.getProject + listDecisions(current) + listEvents + listModels
- *   getUsage     -> repo.usageSummary + repo.usageDaily; plan meters from RELAY_PLAN_METERS, else the workers' heartbeat readings (lib/meters.ts)
- *   getWorkers   -> the last run.* events per runner:* actor (until a heartbeat exists)
+ *   getUsage     -> repo.usageSummary + repo.usageDaily (the plan meters are the board's, lib/board-read.ts)
  *   getModels    -> repo.listModels
  *   writeEvent   -> repo.writeEvent (dedupe_key makes redeliveries a no-op)
  *   assets       -> repo.listAssets / getAsset / listVersions / reviewAsset / publishAsset through lib/assets.ts
@@ -18,28 +17,22 @@ type ModelRow = repo.ModelRow;
 import { getStore, taskUrl, toAsset, toVersion, viewUrl } from "./assets.ts";
 import { getDb } from "./db.ts";
 import type { EventKind } from "./events.ts";
-import { composeMeters } from "./meters.ts";
 import type {
   Asset,
   AssetDetail,
-  BoardTask,
   AssetListOptions,
   AssetReview,
   DataSource,
   FeedEvent,
   FeedOptions,
   Lane,
+  LedgerUsage,
   ModelInfo,
   NewEvent,
-  PlanMeter,
   ProjectDetail,
   ProjectSummary,
   Subscription,
-  TaskListOptions,
-  TaskView,
-  UsageSummary,
   UsageWindow,
-  Worker,
 } from "./types.ts";
 
 const H = 3_600_000;
@@ -65,16 +58,6 @@ function toModel(m: ModelRow): ModelInfo {
 function laneModels(lanes: Lane[], models: ModelInfo[]): ModelInfo[] {
   if (!lanes.length) return [];
   return models.filter((m) => m.lanes.some((l) => lanes.includes(l as Lane)));
-}
-
-/**
- * Plan meters are vendor numbers the app cannot compute from the ledger (lib/meters.ts): RELAY_PLAN_METERS overrides,
- * then the freshest reading the workers reported with their heartbeats (Claude Code's own rate limits, saved by relay's
- * status line), else unknown with a note that says how to get one.
- */
-async function meters(db: Awaited<ReturnType<typeof getDb>>, now: number): Promise<PlanMeter[]> {
-  const workers = await repo.workerViews(db, now);
-  return composeMeters({ override: process.env.RELAY_PLAN_METERS, workers, now });
 }
 
 const utcDay = (ms: number) => new Date(ms).toISOString().slice(0, 10);
@@ -137,22 +120,22 @@ export const dbSource: DataSource = {
     };
   },
 
-  async getUsage(window: UsageWindow): Promise<UsageSummary> {
+  async getUsage(window: UsageWindow): Promise<LedgerUsage> {
     const db = await getDb();
     const now = Date.now();
     const since = new Date(now - WINDOW_MS[window]).toISOString();
     const days = window === "30d" ? 30 : 7;
     const seriesSince = new Date(now - days * D).toISOString();
-    const [rows, perDay, windows] = await Promise.all([repo.usageSummary(db, since), repo.usageDaily(db, seriesSince), meters(db, now)]);
+    const [rows, perDay] = await Promise.all([repo.usageSummary(db, since), repo.usageDaily(db, seriesSince)]);
     const subscriptions = rows
       .filter((r) => asSubscription(r.subscription))
       .map((r) => ({ subscription: r.subscription as Subscription, calls: r.calls, tokens_in: r.tokens_in, tokens_out: r.tokens_out, cache_read: r.cache_read, cost_equiv: r.cost_equiv, avg_ctx: Math.round(r.avg_ctx) }));
-    const daily: UsageSummary["daily"] = [];
-    const avgCtx: UsageSummary["avgCtx"] = [];
+    const daily: LedgerUsage["daily"] = [];
+    const avgCtx: LedgerUsage["avgCtx"] = [];
     for (let i = days - 1; i >= 0; i--) {
       const key = utcDay(now - i * D);
       const dayRows = perDay.filter((r) => r.day === key);
-      const row: UsageSummary["daily"][number] = { day: key };
+      const row: LedgerUsage["daily"][number] = { day: key };
       let calls = 0;
       let ctx = 0;
       for (const r of dayRows) {
@@ -166,101 +149,7 @@ export const dbSource: DataSource = {
     }
     const totalCalls = rows.reduce((s, r) => s + r.calls, 0);
     const totalCtx = rows.reduce((s, r) => s + r.tokens_in + r.cache_read, 0);
-    return { window, since, subscriptions, windows, daily, avgCtx, avgCtxWindow: totalCalls ? Math.round(totalCtx / totalCalls) : 0 };
-  },
-
-  /**
-   * Workers are the machines that ran `relay work` (the `workers` table, docs/WORKERS.md): state from last_seen, the
-   * current task from the live claim, runs today from their run.started rows. Runners that only ever reported through
-   * GitHub Actions (no registration) still appear from their run.* events, so the older path keeps showing up.
-   */
-  async getWorkers(): Promise<Worker[]> {
-    const db = await getDb();
-    const now = Date.now();
-    const dayStart = new Date(now);
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const [views, rows, forgotten] = await Promise.all([repo.workerViews(db, now), repo.listEvents(db, { kind: "run.", limit: 2000 }), repo.listEvents(db, { kind: "worker.forgotten", limit: 500 })]);
-    // a forgotten worker's run.* rows stay in the feed; the event-derived fallback below must not resurrect it
-    const forgottenAt = new Map<string, string>();
-    for (const e of forgotten) {
-      const name = typeof e.payload.name === "string" ? e.payload.name : null;
-      if (name && (forgottenAt.get(name) ?? "") < e.ts) forgottenAt.set(name, e.ts);
-    }
-    const byRunner = new Map<string, EventRow[]>();
-    for (const e of rows) {
-      if (!e.actor.startsWith("runner:")) continue;
-      const list = byRunner.get(e.actor) ?? [];
-      list.push(e);
-      byRunner.set(e.actor, list);
-    }
-    const runsToday = (name: string) => (byRunner.get(`runner:${name}`) ?? []).filter((e) => e.kind === "run.started" && new Date(e.ts).getTime() >= dayStart.getTime()).length;
-    const workers: Worker[] = views.map((w) => ({
-      name: w.name,
-      host: w.host || w.name,
-      labels: w.labels,
-      lastSeen: w.last_seen,
-      status: w.state,
-      retired: w.retired,
-      lanes: w.lanes.map(asLane).filter((l): l is Lane => l !== null),
-      version: w.version,
-      runsToday: runsToday(w.name),
-      pollMs: w.poll_ms,
-      current: w.current ? { project: w.current.project, issue: w.current.issue, startedAt: w.current.claimed_at, taskId: w.current.task_id, leaseUntil: w.current.lease_until } : null,
-    }));
-    const known = new Set(workers.map((w) => `runner:${w.name}`));
-    for (const [actor, events] of byRunner) {
-      if (known.has(actor)) continue;
-      events.sort((a, b) => a.ts.localeCompare(b.ts));
-      const last = events.at(-1)!;
-      const name = actor.slice("runner:".length);
-      if ((forgottenAt.get(name) ?? "") > last.ts) continue; // forgotten after its last run: gone for good, until it registers again
-      const lastSeenMs = new Date(last.ts).getTime();
-      const started = events.filter((e) => e.kind === "run.started");
-      const lastStart = started.at(-1);
-      const finished = lastStart ? events.some((e) => e.kind !== "run.started" && e.ts > lastStart.ts && (e.issue === lastStart.issue || e.issue == null)) : true;
-      const current = lastStart && !finished ? { project: lastStart.project ?? "", issue: lastStart.issue ?? 0, startedAt: lastStart.ts } : null;
-      const lanes = [...new Set(events.map((e) => asLane(e.lane)).filter((l): l is Lane => l !== null))];
-      const payloadLabels = (last.payload.labels as unknown) ?? (lastStart?.payload.labels as unknown);
-      const status = current ? "online" : now - lastSeenMs < H ? "idle" : "offline";
-      workers.push({
-        name,
-        host: typeof last.payload.host === "string" ? last.payload.host : name,
-        labels: Array.isArray(payloadLabels) ? (payloadLabels as string[]) : [],
-        lastSeen: last.ts,
-        status,
-        retired: status === "offline" && now - lastSeenMs > repo.WORKER_RETIRED_MS,
-        lanes,
-        version: "",
-        runsToday: runsToday(name),
-        pollMs: null,
-        current,
-      });
-    }
-    return workers.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen));
-  },
-
-  async getTasks(opts: TaskListOptions = {}): Promise<TaskView[]> {
-    return repo.listTaskViews(await getDb(), opts);
-  },
-
-  /**
-   * Expired leases are released first so a vanished worker's task reads `queued`, as the fold would have said. A card
-   * whose deliverable is an asset gets its thumbnail signed here (VIEW_TTL, like the library's cards).
-   */
-  async getBoard(opts = {}): Promise<BoardTask[]> {
-    const db = await getDb();
-    const now = Date.now();
-    await repo.expireLeases(db, now);
-    const rows = await repo.boardTasks(db, { now, ...opts });
-    return Promise.all(rows.map(async (r) => ({ ...r, asset_thumb_url: await viewUrl(r.asset_thumb_key) })));
-  },
-
-  async getHistory(opts = {}): Promise<BoardTask[]> {
-    const db = await getDb();
-    const now = Date.now();
-    await repo.expireLeases(db, now);
-    const rows = await repo.taskHistory(db, { now, ...opts });
-    return Promise.all(rows.map(async (r) => ({ ...r, asset_thumb_url: await viewUrl(r.asset_thumb_key) })));
+    return { window, since, subscriptions, daily, avgCtx, avgCtxWindow: totalCalls ? Math.round(totalCtx / totalCalls) : 0 };
   },
 
   async getModels(): Promise<ModelInfo[]> {

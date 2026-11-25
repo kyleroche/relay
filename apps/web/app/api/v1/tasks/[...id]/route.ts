@@ -1,9 +1,9 @@
-import { approveTask, closeTask, parseTaskId, releaseTask, repo, requestChanges, requeueTask, TaskCloseError, TaskGateError, TaskRequeueError, TaskReviewError } from "@relay/core";
-import { api, callerGrant, json, problem } from "@/lib/api";
-import { dataMode } from "@/lib/data";
-import { getDb } from "@/lib/db";
-import { dispatchAfter } from "@/lib/dispatch";
+import { board } from "@relay/core";
+import { api, callerGrant, json, problem, type Scope } from "@/lib/api";
+import { siteBoard } from "@/lib/board";
 import { needsDb, readJson, siteGitHub, str, writerActor } from "@/lib/integrations";
+import { approveFor, closeFor, releaseFor, requestChangesFor, requeueFor } from "@/lib/task-ops";
+import { taskProblem } from "@/lib/task-problem";
 
 export const dynamic = "force-dynamic";
 
@@ -11,98 +11,82 @@ type Ctx = { params: Promise<{ id: string[] }> };
 
 const ACTIONS = new Set(["approve", "request-changes", "requeue", "release", "close"]);
 
-/** `owner/repo%23n[/approve|/request-changes|/requeue|/release|/close]`: the id and the action the trailing segment names. */
-function parts(raw: string[]): { id: string; action: string | null } {
+/** `<id>` or `<id>/<action>`: a task's ID on the board (URL-encoded, one segment) and the action the trailing segment names. */
+function parts(raw: string[]): { id: string; action: string | null } | undefined {
   const segs = raw.map((p) => decodeURIComponent(p));
-  if (segs.length === 3 && ACTIONS.has(segs[2] as string)) return { id: `${segs[0]}/${segs[1]}`, action: segs[2] as string };
-  return { id: segs.join("/"), action: null };
+  if (segs.length === 1) return { id: segs[0]!, action: null };
+  if (segs.length === 2 && ACTIONS.has(segs[1]!)) return { id: segs[0]!, action: segs[1]! };
+  return undefined;
 }
 
-/** operationId: getTask. The id is `owner/repo#n`; the `#` travels as `%23` (`/api/v1/tasks/owner/repo%2342`). */
+/**
+ * The scope each action needs. Settling a task (approve, close) is `tasks:decide`; sending one back or requeueing it
+ * is `tasks:write`, the scope that opens tasks, so a bot that opens work can hold a token that settles none. Release
+ * is `tokens:write`, as on the MCP server. A path that names no action is answered by the handler (400 or 405) once
+ * the caller has shown the scope that reads this far.
+ */
+const ACTION_SCOPE: Record<string, Scope> = { approve: "tasks:decide", close: "tasks:decide", "request-changes": "tasks:write", requeue: "tasks:write", release: "tokens:write" };
+
+const BAD_PATH = "The path is /api/v1/tasks/{id} or /api/v1/tasks/{id}/{approve|request-changes|requeue|close|release}, where id is the task's ID on the board.";
+
+/** operationId: getTask. One task with its state, the usage rows in its thread and the notes people left there. */
 export const GET = api<Ctx>(
   async (req, ctx) => {
-    const { id, action } = parts((await ctx.params).id);
+    const p = parts((await ctx.params).id);
     const instance = req.nextUrl.pathname;
-    if (action || !parseTaskId(id)) return problem(400, "Bad Request", "task id must be owner/repo#n.", instance, { parameter: "id" });
-    if (dataMode() !== "db") return problem(404, "Not Found", `No task ${id}.`, instance);
-    const db = await getDb();
-    const task = await repo.getTask(db, id);
-    if (!task) return problem(404, "Not Found", `No task ${id}.`, instance);
-    return json(await repo.taskView(db, task));
+    if (!p || p.action) return problem(400, "Bad Request", BAD_PATH, instance, { parameter: "id" });
+    try {
+      const d = await board.getTask((await siteBoard()).board, p.id);
+      return json({ ...d.task, usage: d.usage, notes: d.notes });
+    } catch (e) {
+      return taskProblem(e, instance);
+    }
   },
   { scope: "tasks:read" },
 );
 
-const STATUS_TITLE: Record<number, string> = { 400: "Bad Request", 403: "Forbidden", 404: "Not Found", 409: "Conflict", 502: "Bad Gateway", 503: "Service Unavailable" };
-
 /**
- * operationId: approveTask (`…/approve`), requestTaskChanges (`…/request-changes`) and requeueTask (`…/requeue`). The
- * review step of a task in `review` (packages/core/src/tasks/review.ts): approve squash-merges the PR, deletes the
- * branch and writes `task.approved`; request-changes comments on the PR with `{ "note" }` and writes
- * `task.changes_requested` (the task is queued again). Requeue (packages/core/src/tasks/requeue.ts) takes
- * `{ "lane"?, "reason"? }` from any state but `done`: moves the lane label, releases a live claim, writes
- * `task.requeued`. Close (`…/close`, packages/core/src/tasks/close.ts) takes `{ "reason"? }` from any state but `done`:
- * closes the issue (and an open PR) on GitHub as not planned, releases a live claim, writes `task.closed` (the task is
- * done). Release (`…/release`, packages/core/src/tasks/gate.ts) takes `{ "note"? }` and lifts the injection
- * gate's hold on a `held` task: writes `task.released`, the task is queued again. A signed-in person is unrestricted; a
- * token needs `tasks:write` (release: `tokens:write`, and never the bot that opened the task) and may not approve a PR
- * its own lane produced. All answer with the updated task.
+ * operationId: approveTask (`…/approve`), requestTaskChanges (`…/request-changes`, `{ "note" }`), requeueTask
+ * (`…/requeue`, `{ "lane"?, "model"? }`; `"model": null` goes back to the lane's default), closeTask (`…/close`,
+ * `{ "reason"? }`) and releaseTask (`…/release`). Each is the board's own task function (packages/core/src/board/
+ * tasks.ts), made as the caller's profile, and answers with the updated task. A signed-in person is unrestricted. A
+ * token needs `tasks:decide` to approve or close and never approves a task it opened, `tasks:write` to send back or
+ * requeue, and `tokens:write` to release, never a task whose text it wrote any part of (`ACTION_SCOPE` above; the
+ * rules about whose work it is are core's desk, through lib/task-ops.ts).
  */
 export const POST = api<Ctx>(
   async (req, ctx) => {
-    const { id, action } = parts((await ctx.params).id);
+    const p = parts((await ctx.params).id);
     const instance = req.nextUrl.pathname;
+    if (!p) return problem(400, "Bad Request", BAD_PATH, instance, { parameter: "id" });
+    const { id, action } = p;
     if (!action) return problem(405, "Method Not Allowed", "POST …/approve, …/request-changes, …/requeue, …/close or …/release; a task itself is read with GET.", instance, {}, { allow: "GET" });
-    if (!parseTaskId(id)) return problem(400, "Bad Request", "task id must be owner/repo#n.", instance, { parameter: "id" });
     const refused = needsDb(instance);
     if (refused) return refused;
-    const [actor, grant, db, github] = await Promise.all([writerActor(req), callerGrant(req), getDb(), siteGitHub()]);
-    const scopes = grant?.scopes ?? [];
+    const body = (await readJson(req)) ?? {};
     try {
+      const [actor, grant, session] = await Promise.all([writerActor(req), callerGrant(req), siteBoard()]);
+      const asker = { actor, scopes: grant?.scopes ?? [] };
       if (action === "approve") {
-        const r = await approveTask(db, github, id, actor, { scopes });
-        dispatchAfter(r.events);
-        return json(r.task);
+        const r = await approveFor(session, await siteGitHub(), asker, id);
+        return json({ ...r.task, pr_url: r.pr_url, merge_sha: r.merge_sha, branch_deleted: r.branch_deleted, ...(r.opened ? { opened: r.opened } : {}) });
       }
       if (action === "requeue") {
-        const body = (await readJson(req)) ?? {};
-        const r = await requeueTask(db, github, id, actor, { lane: str(body.lane) ?? null, reason: str(body.reason) ?? null, scopes });
-        dispatchAfter(r.events);
-        return json(r.task);
+        const lane = str(body.lane);
+        const model = body.model === null ? null : str(body.model);
+        return json(await requeueFor(session, asker, id, { ...(lane ? { lane } : {}), ...(model !== undefined ? { model } : {}) }));
       }
       if (action === "close") {
-        const body = (await readJson(req)) ?? {};
-        const r = await closeTask(db, github, id, actor, { reason: str(body.reason) ?? null, scopes });
-        dispatchAfter(r.events);
-        return json(r.task);
+        const r = await closeFor(session, await siteGitHub(), asker, id, str(body.reason));
+        return json({ ...r.task, github: r.github, canceled: r.canceled, to_review: r.to_review });
       }
-      if (action === "release") {
-        const body = (await readJson(req)) ?? {};
-        const r = await releaseTask(db, id, actor, { note: str(body.note) ?? null, scopes });
-        dispatchAfter(r.events);
-        return json(r.task);
-      }
-      const body = await readJson(req);
-      const note = str(body?.note);
+      if (action === "release") return json(await releaseFor(session, asker, id));
+      const note = str(body.note);
       if (!note) return problem(400, "Bad Request", "Body must be a JSON object with a non-empty note.", instance, { parameter: "note" });
-      const r = await requestChanges(db, github, id, actor, note, { scopes });
-      dispatchAfter(r.events);
-      return json(r.task);
+      return json(await requestChangesFor(session, await siteGitHub(), asker, id, note));
     } catch (e) {
-      if (e instanceof TaskRequeueError || e instanceof TaskCloseError || e instanceof TaskGateError) return problem(e.status, STATUS_TITLE[e.status] ?? "Error", e.message, instance);
-      if (e instanceof TaskReviewError) {
-        // the merge refusal is in the feed too (task.merge_failed), so the webhooks hear about it
-        const db2 = await getDb();
-        const task = await repo.getTask(db2, id);
-        if (task && e.status === 502) {
-          const events = await repo.taskEvents(db2, task);
-          const last = events.at(-1);
-          if (last?.kind === "task.merge_failed") dispatchAfter([last]);
-        }
-        return problem(e.status, STATUS_TITLE[e.status] ?? "Error", e.message, instance);
-      }
-      throw e;
+      return taskProblem(e, instance);
     }
   },
-  { scope: "tasks:write" },
+  { scope: async (_req, ctx) => ACTION_SCOPE[parts((await ctx.params).id)?.action ?? ""] ?? "tasks:write" },
 );

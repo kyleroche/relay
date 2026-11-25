@@ -10,11 +10,13 @@
 #                  (`@kyleroche/relay@<version>`); a checkout drops its `npm pack` tarball into the context instead
 #   FX_VERSION     fx release (`vX.Y.Z`); `latest` reads https://releases.fx.sh/latest.txt
 #   CLAUDE_SPEC    the Claude Code npm package spec
+#   VERCEL_SPEC    the Vercel CLI npm package spec (the worker reaches the board with the Vercel login made inside)
 FROM docker.io/library/node:24-bookworm-slim
 
 ARG RELAY_SPEC=@kyleroche/relay
 ARG FX_VERSION=latest
 ARG CLAUDE_SPEC=@anthropic-ai/claude-code
+ARG VERCEL_SPEC=vercel
 ARG DEBIAN_FRONTEND=noninteractive
 
 # git, curl and CA certificates for the clone and the installers; bubblewrap, socat and ripgrep for Claude Code's own
@@ -48,10 +50,11 @@ COPY . /tmp/ctx/
 RUN set -eu; \
     corepack enable && corepack prepare pnpm@latest --activate; \
     npm install -g --no-fund --no-audit --allow-scripts=@anthropic-ai/claude-code "$CLAUDE_SPEC"; \
+    npm install -g --no-fund --no-audit "$VERCEL_SPEC"; \
     tgz="$(ls /tmp/ctx/*.tgz 2>/dev/null | head -n1 || true)"; \
     if [ -n "$tgz" ]; then npm install -g --no-fund --no-audit "$tgz"; else npm install -g --no-fund --no-audit "$RELAY_SPEC"; fi; \
     npm cache clean --force; rm -rf /tmp/ctx; \
-    claude --version; relay --version
+    claude --version; vercel --version; relay --version
 
 # The worker's user. The volume mounted at /home/relay arrives owned by root; relay-entry hands it over on first boot.
 RUN userdel -r node 2>/dev/null || true; \

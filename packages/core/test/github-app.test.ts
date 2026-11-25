@@ -8,6 +8,9 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const pkcs1 = privateKey.export({ type: "pkcs1", format: "pem" }).toString(); // what GitHub downloads
 const spki = publicKey.export({ type: "spki", format: "pem" }).toString();
 
+/** What relay's app is granted on an installation (apps/web/lib/github-app.ts, the manifest's default_permissions). */
+const APP_PERMISSIONS = { actions: "read", contents: "write", deployments: "read", issues: "write", metadata: "read", pull_requests: "write" };
+
 interface Call {
   method: string;
   url: string;
@@ -39,7 +42,9 @@ function fakeGitHub(opts: { installations?: Record<string, number>; files?: stri
     const mint = /^\/app\/installations\/(\d+)\/access_tokens$/.exec(u.pathname);
     if (mint && init.method === "POST") {
       minted++;
-      return reply(201, { token: `ghs_${mint[1]}_${minted}`, expires_at: new Date(now + (opts.tokenTtlSeconds ?? 3600) * 1000).toISOString() });
+      // GitHub answers with what the token may do: what was asked for, or everything the app was granted
+      const asked = (init.body ? (JSON.parse(init.body) as { permissions?: Record<string, string> }) : {}).permissions;
+      return reply(201, { token: `ghs_${mint[1]}_${minted}`, expires_at: new Date(now + (opts.tokenTtlSeconds ?? 3600) * 1000).toISOString(), permissions: asked ?? APP_PERMISSIONS });
     }
     if (u.pathname === "/app/installations") return reply(200, [{ id: 7, account: { login: "acme", type: "Organization" }, repository_selection: "selected", html_url: "https://github.com/organizations/acme/settings/installations/7", created_at: "2026-10-01T00:00:00Z", suspended_at: null }]);
     if (!token.startsWith("ghs_")) return reply(401, { message: "installation token required" });
@@ -93,6 +98,26 @@ describe("GitHub App", () => {
     await expect(app.installationFor("nobody/here")).rejects.toThrow(/not installed on nobody\/here/);
     const list = await app.listInstallations();
     expect(list[0]).toMatchObject({ id: 7, account: "acme", repository_selection: "selected" });
+  });
+
+  it("mints a token for one repository with the permissions asked for and no more, and keeps it nowhere", async () => {
+    const gh = fakeGitHub({ installations: { "acme/site": 7 } });
+    const app = new GitHubApp({ appId: "4242", privateKey: pkcs1 }, { fetch: gh.fetch, now: gh.now });
+    const narrow = await app.repoToken("acme/site", { permissions: { contents: "write", metadata: "read", pull_requests: "write" } });
+    const asked = gh.calls.find((c) => c.url === "/app/installations/7/access_tokens")!;
+    expect(JSON.parse(asked.body!)).toEqual({ repositories: ["site"], permissions: { contents: "write", metadata: "read", pull_requests: "write" } });
+    expect(narrow.permissions).toEqual({ contents: "write", metadata: "read", pull_requests: "write" });
+    expect(narrow.expiresAt).toBe(gh.now() + 3_600_000);
+    // each call mints anew, and the app's own cached token is another one
+    const again = await app.repoToken("acme/site", { permissions: { contents: "read" } });
+    expect(again.token).not.toBe(narrow.token);
+    expect(await app.tokenFor("acme/site")).not.toBe(again.token);
+    expect(gh.minted()).toBe(3);
+    // without permissions the body names none, and the token has everything the app was granted
+    const wide = await app.repoToken("acme/site");
+    expect(JSON.parse(gh.calls.filter((c) => c.url === "/app/installations/7/access_tokens").at(-1)!.body!)).toEqual({ repositories: ["site"] });
+    expect(wide.permissions).toMatchObject({ issues: "write", actions: "read" });
+    await expect(app.repoToken("nobody/here")).rejects.toThrow(/not installed on nobody\/here/);
   });
 
   it("the GitHubClient it hands out opens issues with an installation token and exposes request()", async () => {

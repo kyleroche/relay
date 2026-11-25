@@ -4,8 +4,8 @@
  * `<!-- relay:end -->`; everything else in the file is the user's. Hashes of what relay last wrote are kept in
  * `.relay/rules.json` so a local edit inside the markers is detected and never clobbered without `force`.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { sha256 } from "../util.ts";
 
 export const BEGIN = "<!-- relay:begin -->";
@@ -21,7 +21,7 @@ export interface RulesState {
   /** owner/name */
   repo?: string;
   /** sha256 of the section body relay last wrote, per file. */
-  sections: Partial<Record<OwnedFile, { hash: string; updated_at: string }>>;
+  sections: Partial<Record<OwnedFile, { hash: string }>>;
   [k: string]: unknown;
 }
 
@@ -32,7 +32,7 @@ export function renderOwnedSection(opts: { project?: string } = {}): string {
   const who = opts.project ? ` (project \`${opts.project}\`)` : "";
   return [
     `This repository is managed with relay${who}. Read \`relay.md\` before making changes; it holds the current decisions and preferences for this project.`,
-    `Issues labelled \`agent:claude\`, \`agent:codex\` or \`agent:grok\` are picked up by relay workers (machines running \`relay work\`) that open pull requests from \`relay/<lane>-<issue>\` branches.`,
+    `Tasks for this repository are opened with \`relay task create\` on the team's board; relay workers (machines running \`relay work\`) claim them and open pull requests from \`relay/<lane>-<task>\` branches, which a person approves.`,
     `Memory tools (MCP server \`relay\`): ${MEMORY_TOOLS.map((t) => `\`${t}\``).join(", ")}. Call \`relay_recall\` before choosing an approach and \`relay_decide\` when you settle one.`,
   ].join("\n");
 }
@@ -60,24 +60,23 @@ export function isIncludeOnly(text: string): boolean {
   return lines.length === 1 && /^@\.?\/?AGENTS\.md$/.test(lines[0]!);
 }
 
-export function readRulesState(root: string): RulesState {
-  const p = join(root, STATE_FILE);
-  if (!existsSync(p)) return { version: 1, sections: {} };
+/** The state `.relay/rules.json` holds, from its text; an absent or unreadable file is the empty state. */
+export function parseRulesState(text: string | undefined): RulesState {
+  if (text === undefined) return { version: 1, sections: {} };
   try {
-    const j = JSON.parse(readFileSync(p, "utf8")) as Partial<RulesState>;
+    const j = JSON.parse(text) as Partial<RulesState>;
     return { ...j, version: 1, sections: j.sections ?? {} };
   } catch {
     return { version: 1, sections: {} };
   }
 }
 
-export function writeRulesState(root: string, state: RulesState): void {
+export function readRulesState(root: string): RulesState {
   const p = join(root, STATE_FILE);
-  mkdirSync(dirname(p), { recursive: true });
-  writeFileSync(p, JSON.stringify(state, null, 2) + "\n");
+  return parseRulesState(existsSync(p) ? readFileSync(p, "utf8") : undefined);
 }
 
-export type SectionAction = "created" | "appended" | "updated" | "unchanged" | "skipped-include" | "refused-local-edit" | "removed" | "absent";
+export type SectionAction = "created" | "appended" | "updated" | "unchanged" | "skipped-include" | "refused-local-edit" | "absent";
 
 export interface SectionResult {
   file: OwnedFile;
@@ -98,37 +97,49 @@ export interface InstallOptions {
   createClaudeMd?: boolean;
 }
 
+export interface SectionPlan {
+  results: SectionResult[];
+  /** The files whose text changes, whole. */
+  files: Array<{ file: OwnedFile; content: string }>;
+  /** The state after the plan; `stateText` is `.relay/rules.json` as it would be written. */
+  state: RulesState;
+  stateText: string;
+  stateChanged: boolean;
+}
+
+export const rulesStateText = (state: RulesState): string => JSON.stringify(state, null, 2) + "\n";
+
 /**
- * Install or update the owned section in AGENTS.md and CLAUDE.md under `root`.
+ * What installing the owned section would do to AGENTS.md and CLAUDE.md, given their text (`read`) and the state
+ * that was recorded. Writes nothing, so the same rules serve a working tree (`installOwnedSection`) and a tree that
+ * exists only in git (`relay link`, which proposes its files as a pull request).
  * - missing file: created with the section (CLAUDE.md only when createClaudeMd or it already exists)
  * - markers missing: section appended at the end
  * - markers present, body matches the recorded hash: rewritten (or unchanged)
  * - markers present, body differs from the recorded hash and from the new body: refused unless force
  * - CLAUDE.md that is a one-line `@AGENTS.md` include: left alone
  */
-export function installOwnedSection(root: string, opts: InstallOptions = {}): SectionResult[] {
+export function planOwnedSection(read: (file: OwnedFile) => string | undefined, prior: RulesState, opts: InstallOptions = {}): SectionPlan {
   const body = opts.body ?? renderOwnedSection(opts.project ? { project: opts.project } : {});
   const newHash = sha256(body);
-  const state = readRulesState(root);
+  const state: RulesState = { ...prior, sections: { ...prior.sections } };
   if (opts.project) state.project = opts.project;
   if (opts.repo) state.repo = opts.repo;
   const results: SectionResult[] = [];
-  const now = new Date().toISOString();
+  const files: SectionPlan["files"] = [];
 
   for (const file of opts.files ?? OWNED_FILES) {
-    const path = join(root, file);
-    const exists = existsSync(path);
-    if (!exists) {
+    const text = read(file);
+    if (text === undefined) {
       if (file === "CLAUDE.md" && !opts.createClaudeMd) {
         results.push({ file, action: "absent", detail: "not created; AGENTS.md carries the section" });
         continue;
       }
-      writeFileSync(path, `# ${file === "AGENTS.md" ? "AGENTS.md" : "CLAUDE.md"}\n\n${wrap(body)}\n`);
-      state.sections[file] = { hash: newHash, updated_at: now };
+      files.push({ file, content: `# ${file}\n\n${wrap(body)}\n` });
+      state.sections[file] = { hash: newHash };
       results.push({ file, action: "created" });
       continue;
     }
-    const text = readFileSync(path, "utf8");
     if (file === "CLAUDE.md" && isIncludeOnly(text)) {
       results.push({ file, action: "skipped-include", detail: "CLAUDE.md includes AGENTS.md; left as is" });
       continue;
@@ -136,14 +147,14 @@ export function installOwnedSection(root: string, opts: InstallOptions = {}): Se
     const split = findOwnedSection(text);
     if (!split) {
       const sep = text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
-      writeFileSync(path, `${text}${sep}${wrap(body)}\n`);
-      state.sections[file] = { hash: newHash, updated_at: now };
+      files.push({ file, content: `${text}${sep}${wrap(body)}\n` });
+      state.sections[file] = { hash: newHash };
       results.push({ file, action: "appended" });
       continue;
     }
     const currentHash = sha256(split.inner);
     if (currentHash === newHash) {
-      if (state.sections[file]?.hash !== newHash) state.sections[file] = { hash: newHash, updated_at: now };
+      if (state.sections[file]?.hash !== newHash) state.sections[file] = { hash: newHash };
       results.push({ file, action: "unchanged" });
       continue;
     }
@@ -157,54 +168,10 @@ export function installOwnedSection(root: string, opts: InstallOptions = {}): Se
       results.push({ file, action: "refused-local-edit", detail: "a relay section exists that relay did not write; re-run with --force to take it over" });
       continue;
     }
-    writeFileSync(path, `${split.before}${wrap(body)}${split.after}`);
-    state.sections[file] = { hash: newHash, updated_at: now };
+    files.push({ file, content: `${split.before}${wrap(body)}${split.after}` });
+    state.sections[file] = { hash: newHash };
     results.push({ file, action: "updated" });
   }
-  writeRulesState(root, state);
-  return results;
-}
-
-/** Remove the owned section (markers included) from both files and forget the hashes. Files are never deleted. */
-export function removeOwnedSection(root: string, opts: { files?: readonly OwnedFile[] } = {}): SectionResult[] {
-  const state = readRulesState(root);
-  const results: SectionResult[] = [];
-  for (const file of opts.files ?? OWNED_FILES) {
-    const path = join(root, file);
-    if (!existsSync(path)) {
-      results.push({ file, action: "absent" });
-      continue;
-    }
-    const text = readFileSync(path, "utf8");
-    const split = findOwnedSection(text);
-    if (!split) {
-      results.push({ file, action: "absent" });
-      delete state.sections[file];
-      continue;
-    }
-    const before = split.before.replace(/\n{2,}$/, "\n\n");
-    const after = split.after.replace(/^\n+/, "");
-    const out = (before + after).replace(/\n{3,}/g, "\n\n").replace(/\n+$/, "\n");
-    writeFileSync(path, out.trim() ? out : "");
-    delete state.sections[file];
-    results.push({ file, action: "removed" });
-  }
-  writeRulesState(root, state);
-  return results;
-}
-
-/** Report the state of each file: present/absent markers, and whether the body matches what relay wrote. */
-export function checkOwnedSection(root: string): Array<SectionResult & { localEdit: boolean }> {
-  const state = readRulesState(root);
-  return OWNED_FILES.map((file) => {
-    const path = join(root, file);
-    if (!existsSync(path)) return { file, action: "absent" as const, localEdit: false };
-    const text = readFileSync(path, "utf8");
-    if (file === "CLAUDE.md" && isIncludeOnly(text)) return { file, action: "skipped-include" as const, localEdit: false };
-    const split = findOwnedSection(text);
-    if (!split) return { file, action: "absent" as const, localEdit: false, detail: "markers missing; relay will not write here" };
-    const recorded = state.sections[file]?.hash;
-    const localEdit = !!recorded && recorded !== sha256(split.inner);
-    return { file, action: localEdit ? ("refused-local-edit" as const) : ("unchanged" as const), localEdit };
-  });
+  const stateText = rulesStateText(state);
+  return { results, files, state, stateText, stateChanged: stateText !== rulesStateText(prior) };
 }

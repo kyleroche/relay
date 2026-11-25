@@ -5,6 +5,8 @@ import { SectionHeading } from "@/components/ui/section-heading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { AvgContextOverTime, CostByDay } from "@/components/usage/charts";
 import { WindowSwitcher } from "@/components/usage/window-switcher";
+import { siteBoard } from "@/lib/board";
+import { syncFeedAfter } from "@/lib/board-watch";
 import { getUsage } from "@/lib/data";
 import { fmtCost, fmtInt, fmtTokens } from "@/lib/format";
 import { meterSourceLine } from "@/lib/meters";
@@ -35,6 +37,7 @@ export default async function UsagePage({ searchParams }: { searchParams: Promis
   const baselineParam = Number(Array.isArray(sp.baseline) ? sp.baseline[0] : sp.baseline);
   const baseline = Number.isFinite(baselineParam) && baselineParam > 0 ? baselineParam : DEFAULT_BASELINE;
 
+  syncFeedAfter(siteBoard);
   const [usage, week] = await Promise.all([getUsage(window), getUsage("7d")]);
   const avg = week.avgCtxWindow;
   const delta = baseline ? Math.round(((avg - baseline) / baseline) * 100) : 0;

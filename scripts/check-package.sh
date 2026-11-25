@@ -21,7 +21,7 @@ packed="$(cd packages/cli && npm pack --ignore-scripts --pack-destination "$tmp"
 tarball="$(jq -r '.[0].filename' <<<"$packed")"
 jq -r '.[0] | "\(.filename): \(.files | length) files, \(.size) bytes packed, \(.unpackedSize) bytes unpacked"' <<<"$packed"
 jq -r '.[0].files[].path' <<<"$packed" | sort
-for f in dist/relay.js dist/relay-mcp.js dist/hooks/_lib.mjs dist/hooks/session-start.mjs dist/hooks/user-prompt.mjs dist/hooks/session-end.mjs dist/migrations/001_init.sql dist/container/Dockerfile dist/container/relay-entry dist/python/run_workflow.py templates/relay-caller.yml templates/relay-review.yml README.md LICENSE; do
+for f in dist/relay.js dist/relay-mcp.js dist/hooks/_lib.mjs dist/hooks/session-start.mjs dist/hooks/user-prompt.mjs dist/hooks/session-end.mjs dist/migrations/001_init.sql dist/container/Dockerfile dist/container/relay-entry dist/python/run_workflow.py dist/steps/eval.md dist/steps/checks/remove-yap/narration/check.json README.md LICENSE; do
   if ! tar -tzf "$tmp/$tarball" "package/$f" >/dev/null 2>&1; then echo "::error::$f missing from the tarball"; exit 1; fi
 done
 
@@ -44,6 +44,8 @@ echo "== relay doctor (first run creates the PGlite database)"
 npx --no-install relay init
 npx --no-install relay doctor || true   # exit 1 is expected on a machine without claude/gh logins
 grep -q "schema v" <(npx --no-install relay doctor 2>&1 || true) || { echo "::error::doctor did not report the database schema"; exit 1; }
+# a project's setup and verify commands run under the sandbox runtime, which has to come with the package
+if grep -q "sandbox runtime .* is not installed beside relay" <(npx --no-install relay doctor 2>&1 || true); then echo "::error::the installed package cannot find @anthropic-ai/sandbox-runtime"; exit 1; fi
 
 echo "== relay setup records the package's dist/ files (written into the isolated RELAY_USER_HOME)"
 npx --no-install relay setup --only claude --yes >/dev/null

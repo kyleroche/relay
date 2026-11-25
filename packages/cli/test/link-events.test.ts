@@ -48,6 +48,8 @@ beforeAll(async () => {
   execFileSync("git", ["init", "-q"], { cwd: repoDir, stdio: "ignore" });
   execFileSync("git", ["remote", "add", "origin", "git@github.com:acme/demo.git"], { cwd: repoDir, stdio: "ignore" });
   process.env.RELAY_HOME = join(tmp, "harness");
+  // adoption looks under the user's home for Claude Code's files; the test has its own, empty one
+  process.env.RELAY_USER_HOME = join(tmp, "userhome");
   process.env.RELAY_FAKE_LANES = "1";
   ({ registerLink } = await import("../src/commands/link.ts"));
 });
@@ -72,7 +74,7 @@ async function link(...extra: string[]): Promise<string[]> {
   try {
     const program = new Command().exitOverride();
     registerLink(program);
-    await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-digest", ...extra], { from: "user" });
+    await program.parseAsync(["link", "--cwd", repoDir, "--no-labels", "--no-pr", "--no-digest", ...extra], { from: "user" });
   } finally {
     console.error = orig;
   }
@@ -89,7 +91,9 @@ describe("relay link: the events stage", () => {
   it("in local mode says GitHub events are not ingested and points at relay setup --site", async () => {
     const lines = await link();
     expect(lines).toContain("info  events   local mode: GitHub events are not ingested; join a site with relay setup --site");
-    expect(lines.at(-1)).toMatch(/^cost: /);
+    expect(lines.at(-2)).toMatch(/^cost: /);
+    // the first run wrote relay's files into the checkout (--no-pr), and committing them is what is left
+    expect(lines.at(-1)).toMatch(/^left: commit the changed files/);
   });
 
   it("--no-events prints no events line", async () => {
@@ -102,7 +106,8 @@ describe("relay link: the events stage", () => {
     status = { repo: "acme/demo", app: { configured: true, slug: "relay-acme", installed: true, installation_id: 7, install_url: "https://github.com/apps/relay-acme/installations/new" }, webhook: { org_or_repo_hook_seen: true, last_delivery_at: "2026-10-16T10:00:00.000Z" } };
     const lines = await link();
     expect(lines).toContain("ok    events   GitHub App installed on acme/demo (installation 7)");
-    expect(lines.at(-1)).toMatch(/^cost: /);
+    expect(lines.at(-2)).toMatch(/^cost: /);
+    expect(lines.at(-1)).toMatch(/^done: demo is linked/);
     // the check runs after the upload so a first link finds its project on the site
     expect(seen.indexOf("GET /api/v1/projects/demo/github")).toBeGreaterThan(seen.indexOf("PUT /api/v1/projects/demo/digests"));
   });

@@ -45,9 +45,9 @@ jobs:
         # Every `pnpm <script>` line inside a ```bash block in README.md must name a root package.json script.
         run: scripts/check-readme-commands.sh
 
-      - name: Workflow and template YAML parses
+      - name: Workflow YAML parses
         run: |
-          python3 - .github/workflows/*.yml packages/cli/templates/*.yml <<'PY'
+          python3 - .github/workflows/*.yml <<'PY'
           import sys, yaml
           for f in sys.argv[1:]:
               with open(f) as fh:
@@ -55,14 +55,15 @@ jobs:
               print("ok", f)
           PY
 
-      - name: Runner script syntax
+      - name: Script syntax
         run: |
-          for f in scripts/runner/*.sh scripts/*.sh; do bash -n "$f" && echo "ok $f"; done
+          for f in scripts/*.sh; do bash -n "$f" && echo "ok $f"; done
 
-      - name: No permission-bypass flags in runner code
-        # docs/SECURITY.md: lanes never run with permission checks disabled. Docs may name the flags; code may not.
+      - name: No permission-bypass flags where a vendor CLI is started
+        # docs/SECURITY.md: lanes never run with permission checks disabled. Docs may name the flags, and the injection
+        # gate names one to catch it in a task's text (packages/core/src/tasks); the code that starts a CLI may not.
         run: |
-          if grep -rnE --exclude=ci.yml 'dangerously|bypassPermissions|--full-access|--yolo' .github/workflows scripts packages/cli/templates; then
-            echo "::error::permission-bypass flag found in runner code"; exit 1
+          if grep -rnE --exclude=ci.yml 'dangerously|bypassPermissions|--full-access|--yolo' .github/workflows scripts packages/core/src/lanes packages/core/src/work packages/core/src/cloud packages/cli/src packages/cli/container packages/cli/hooks apps/lead/agent apps/web/lib/cloud; then
+            echo "::error::permission-bypass flag found"; exit 1
           fi
           echo "ok: no bypass flags"

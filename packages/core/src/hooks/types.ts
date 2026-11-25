@@ -6,7 +6,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
-import { runtimePaths } from "../runtime.ts";
+import { runtimePaths, stableNodePath } from "../runtime.ts";
 
 export type CliName = "claude" | "codex" | "grok";
 export const CLI_NAMES: readonly CliName[] = ["claude", "codex", "grok"];
@@ -18,7 +18,7 @@ export interface HookContext {
   relayHome: string;
   /** Absolute path of the relay checkout or installed package; hook scripts and the MCP entry are referenced from here (see `runtimePaths`). */
   repoRoot: string;
-  /** Node binary used to run hook scripts and the MCP server (absolute, so hooks do not depend on PATH). */
+  /** Node binary used to run hook scripts and the MCP server (absolute, so hooks do not depend on PATH; `stableNodePath`, so a Homebrew upgrade does not orphan them). */
   node: string;
 }
 
@@ -27,7 +27,7 @@ export function defaultHookContext(repoRoot: string, overrides: Partial<HookCont
     userHome: process.env.RELAY_USER_HOME ?? homedir(),
     relayHome: process.env.RELAY_HOME ?? join(homedir(), ".harness"),
     repoRoot: runtimePaths(repoRoot).root,
-    node: process.execPath,
+    node: stableNodePath(),
     ...overrides,
   };
 }

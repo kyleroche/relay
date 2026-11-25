@@ -4,8 +4,8 @@
  */
 import { execFile, execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
-import { existsSync } from "node:fs";
-import { CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, readMeterFiles, sandboxPrerequisites, type ContainerState, type HarnessConfig } from "@relay/core";
+import { existsSync, readFileSync } from "node:fs";
+import { board, CONTAINER_NAME, CONTAINER_USER, containerStateFrom, findNodesPython, fmtMeterReadings, lanesFromDoctorOutput, METERS_MAX_AGE_MS, missingNodePaths, RETIRED_WORK_OPTIONS, readMeterFiles, sandboxPrerequisites, type BoardConfig, type ContainerState, type HarnessConfig, srtCli } from "@relay/core";
 import { listSiteTools, tokenLabel } from "@relay/mcp";
 import { onPath } from "./_common.ts";
 
@@ -162,11 +162,15 @@ export const inContainer = (): boolean => process.env.RELAY_ISOLATION === "conta
  * on PATH and a kernel that lets bubblewrap start (`relay work` fails Claude jobs rather than run them unsandboxed,
  * docs/WORKERS.md; inside the relay container it runs them with the allowlist alone and says `sandbox:container`).
  */
-export async function sandboxCheck(platform: NodeJS.Platform = process.platform): Promise<Check> {
+export async function sandboxCheck(platform: NodeJS.Platform = process.platform, runtime: string | undefined = srtCli()): Promise<Check> {
   const r = sandboxPrerequisites(platform, (bin) => !!onPath(bin));
-  if (!r.ok || platform !== "linux") return { status: r.ok ? "ok" : "warn", name: "sandbox", detail: r.detail };
+  // a project's own commands (its profile's setup and verify) run under the sandbox runtime shipped beside relay
+  const whole = (detail: string): Check =>
+    runtime ? { status: "ok", name: "sandbox", detail } : { status: "warn", name: "sandbox", detail: `${detail}; but the sandbox runtime (@anthropic-ai/sandbox-runtime) is not installed beside relay, so a project's setup and verify commands will not run: reinstall relay` };
+  if (!r.ok) return { status: "warn", name: "sandbox", detail: r.detail };
+  if (platform !== "linux") return whole(r.detail);
   const probe = await bwrapProbe();
-  if (probe.ok) return { status: "ok", name: "sandbox", detail: r.detail };
+  if (probe.ok) return whole(r.detail);
   const fix = inContainer()
     ? "the container is the boundary: the Claude lane runs with the allowlist alone, advertised as sandbox:container (recreate the container with `relay work --isolation container --install` to get the runtime flags it needs)"
     : "Claude jobs fail here (relay work never runs them unsandboxed); the kernel must allow unprivileged user namespaces";
@@ -256,6 +260,63 @@ function fmtAge(ms: number): string {
   if (m < 60) return `${m}m`;
   const h = Math.round(m / 60);
   return h < 48 ? `${h}h` : `${Math.round(h / 24)}d`;
+}
+
+/**
+ * The board this machine works from, as its own Vercel login sees it: which board, who it is there, whether relay's
+ * schemas are registered, and how many workers are on it. The board takes no relay credential, so a failure here is
+ * a Vercel login that is missing, expired or not on the team.
+ */
+export async function boardCheck(cfg: BoardConfig, connect: (cfg: BoardConfig) => Promise<board.BoardSession> = (c) => board.connectBoard(board.openBoard(c), c), timeoutMs = 15_000): Promise<Check> {
+  const name = "board";
+  try {
+    const session = await Promise.race([connect(cfg), new Promise<never>((_, no) => setTimeout(() => no(new Error(`no answer in ${timeoutMs / 1000}s`)), timeoutMs).unref())]);
+    const [{ url, name: boardName }, schemas, workers] = await Promise.all([session.board.discovery(), session.board.schemas().catch(() => []), board.listWorkers(session.board).catch(() => [])]);
+    const registered = schemas.some((x) => x.name === "relay-usage");
+    const online = workers.filter((w) => w.state === "online").length;
+    const detail = `${boardName ?? "General"} at ${new URL(url).host} as ${session.me.handle}; takes tasks from ${session.from.length} owner${session.from.length === 1 ? "" : "s"}; ${workers.length} worker${workers.length === 1 ? "" : "s"}${workers.length ? ` (${online} online)` : ""}`;
+    if (!registered) return { status: "warn", name, detail: `${detail}; relay's schemas are not registered there yet. Run: relay setup --board` };
+    return { status: "ok", name, detail };
+  } catch (e) {
+    if (board.boardCode(e) === "no_board") return { status: "fail", name, detail: `the team has no board named '${cfg.name}' that this login can see. Make it with: relay setup --board --board-name ${cfg.name} --create (or go back to the team's own board: relay setup --board --board-name default)` };
+    return { status: "fail", name, detail: `${board.describeBoardError(e).slice(0, 240)}. The board takes this machine's own Vercel login: run vercel login (Vercel CLI 66 or newer), then relay setup --board` };
+  }
+}
+
+/** What marks a command as relay's in a CLI's config: its MCP entry, its bundle, or one of its hook scripts (a checkout's path need not say "relay"). */
+const RELAY_RUNS = /relay-mcp|relay\.js|hooks\/(?:session-start|session-end|user-prompt|statusline)\.mjs/;
+
+/**
+ * The files relay wrote a Node path into: the CLIs' hook and MCP config (`configs`, where only relay's own entries
+ * are looked at) and the worker's service file (`owned`, relay's from top to bottom). A path in them that is gone
+ * means every hook and the MCP server fail silently, which is what a `brew upgrade` of a versioned Cellar directory
+ * did before `stableNodePath`; a service file that passes an option `relay work` no longer takes exits at once.
+ * Reads only; the fix is to run setup, or the service install, again.
+ */
+export function recordedNodeCheck(files: { configs: string[]; owned?: string[] }, opts: { read?: (p: string) => string | undefined; exists?: (p: string) => boolean } = {}): Check {
+  const name = "recorded";
+  const read = opts.read ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : undefined));
+  const exists = opts.exists ? { exists: opts.exists } : {};
+  const broken: string[] = [];
+  let seen = 0;
+  const look = (paths: string[], whole: boolean): void => {
+    for (const f of new Set(paths)) {
+      const text = read(f);
+      if (text === undefined || (!whole && !RELAY_RUNS.test(text))) continue;
+      seen += 1;
+      for (const gone of missingNodePaths(text, { ...exists, ...(whole ? {} : { runs: RELAY_RUNS }) })) broken.push(`${f} runs ${gone}, which no longer exists`);
+    }
+  };
+  look(files.configs, false);
+  look(files.owned ?? [], true);
+  // a service installed before the worker waited on the board still passes options relay work no longer takes, and exits on them
+  for (const f of new Set(files.owned ?? [])) {
+    const stale = RETIRED_WORK_OPTIONS.filter((o) => new RegExp(`${o}\\b`).test(read(f) ?? ""));
+    if (stale.length) broken.push(`${f} passes ${stale.join(", ")}, which relay work no longer takes`);
+  }
+  const service = broken.some((b) => (files.owned ?? []).some((f) => b.startsWith(`${f} `)));
+  if (broken.length) return { status: "fail", name, detail: `${broken.join("; ")}. The hooks, the MCP server or the worker service cannot start. Run: relay setup --yes${service ? " and relay work --install --yes" : ""}` };
+  return { status: "ok", name, detail: seen ? `the Node path in ${seen} relay config file${seen === 1 ? "" : "s"} exists` : "no relay hooks or service installed on this machine yet (relay setup)" };
 }
 
 /**

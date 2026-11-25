@@ -1,7 +1,7 @@
 /**
  * Claude lane: one `claude -p` process per call, on the Max subscription (official CLI only; the harness never
  * touches the OAuth token). Plan calls use --json-schema for structured output; review calls are read-only.
- * `claude auth status` must report loggedIn=true for the user running the daemon.
+ * `claude auth status` must report loggedIn=true for the user running the worker.
  */
 import { execFile } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -41,6 +41,12 @@ export interface ClaudeOptions {
    * cannot sandbox fails (`failIfUnavailable`) and `error` starts with `SANDBOX_UNAVAILABLE`.
    */
   sandbox?: boolean | SandboxOptions;
+  /**
+   * Run on paid credits through a model gateway instead of the machine's subscription login: the one case where the
+   * CLI is handed a credential, and only because the caller said so (a sandbox started for a task whose spend a
+   * person approved). The result's `subscription` is then `gateway`.
+   */
+  gateway?: { baseUrl: string; token: string };
 }
 
 interface ClaudeJson {
@@ -66,6 +72,7 @@ export function sandboxFor(req: LaneRequest, opts: ClaudeOptions): SandboxOption
   const o: SandboxOptions = on === true ? {} : { ...on };
   const extra = parseDomainList((req.env ?? process.env)["RELAY_LANE_ALLOWED_DOMAINS"]);
   if (extra.length) o.allowedDomains = [...(o.allowedDomains ?? []), ...extra];
+  if (req.access?.hosts?.length) o.allowedDomains = [...(o.allowedDomains ?? []), ...req.access.hosts];
   return o;
 }
 
@@ -156,6 +163,11 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     // the lane must run on the subscription, never on a stray API key
     delete env["ANTHROPIC_API_KEY"];
     delete env["ANTHROPIC_AUTH_TOKEN"];
+    delete env["ANTHROPIC_BASE_URL"];
+    if (opts.gateway) {
+      env["ANTHROPIC_BASE_URL"] = opts.gateway.baseUrl;
+      env["ANTHROPIC_AUTH_TOKEN"] = opts.gateway.token;
+    }
     let cwd = req.cwd;
     let scratch: string | undefined;
     if (utility) {
@@ -165,7 +177,7 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
       cwd = scratch;
     }
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-      const child = execFile(bin, args, { cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000 }, (err, stdout, stderr) =>
+      const child = execFile(bin, args, { cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000, ...(req.signal ? { signal: req.signal } : {}) }, (err, stdout, stderr) =>
         resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
       );
       child.stdin?.end();
@@ -184,16 +196,18 @@ export async function runClaude(req: LaneRequest, opts: ClaudeOptions): Promise<
     const cacheRead = u.cache_read_input_tokens ?? 0;
     const cacheWrite = u.cache_creation_input_tokens ?? 0;
     const ok = !!j && !j.is_error && code === 0;
+    // on paid credits Claude Code's own figure is what was charged; the price table is an estimate for a subscription
+    const charged = opts.gateway && typeof j?.total_cost_usd === "number" && Number.isFinite(j.total_cost_usd) && j.total_cost_usd >= 0 ? j.total_cost_usd : undefined;
     const res: LaneResult = {
       ok,
       text: j?.result ?? "",
       model,
-      subscription: "max",
+      subscription: opts.gateway ? "gateway" : "max",
       tokensIn,
       tokensOut,
       cacheRead,
       cacheWrite,
-      costEquiv: costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
+      costEquiv: charged ?? costEquiv({ lane: req.lane, model, provider: "anthropic", subscription: opts.gateway ? "gateway" : "max", tokens_in: tokensIn, tokens_out: tokensOut, cache_read: cacheRead, cache_write: cacheWrite, duration_ms: durationMs }),
       durationMs,
       raw: j ?? { stdout: stdout.slice(0, 2000), stderr: stderr.slice(0, 2000), code },
     };

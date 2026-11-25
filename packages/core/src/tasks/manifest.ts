@@ -44,7 +44,7 @@ export const MANIFEST_FENCE = "relay-nodes";
 const KNOWN_KEYS = new Set(["workflow", "inputs", "outputs", "model", "stage"]);
 
 /**
- * The text inside the first ```<fence> block (`relay-nodes` by default; `relay-job` for app workers, `job-manifest.ts`),
+ * The text inside the first ```<fence> block (`relay-nodes` by default),
  * or undefined when the body has none.
  */
 export function extractManifestBlock(body: string, fence: string = MANIFEST_FENCE): string | undefined {

@@ -15,11 +15,10 @@ export const TOKEN_SCOPES = [
   "assets:review",
   "tasks:read",
   "tasks:write",
+  "tasks:decide",
   "events:write",
   "projects:write",
-  "webhooks:write",
   "tokens:write",
-  "work:claim",
 ] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
@@ -33,13 +32,12 @@ export const TOKEN_SCOPE_DESCRIPTIONS: Record<TokenScope, string> = {
   "assets:read": "List and view assets (signed URLs).",
   "assets:write": "Upload, finalize and publish assets.",
   "assets:review": "Approve or reject assets.",
-  "tasks:read": "Read tasks and their derived state.",
-  "tasks:write": "Open tasks (GitHub issues with a lane label).",
+  "tasks:read": "Read tasks on the board.",
+  "tasks:write": "Open tasks on the board, send one in review back with a note, requeue one.",
+  "tasks:decide": "Settle a task: approve it (merge its pull request; never a task the same bot opened) or close it.",
   "events:write": "Log external.* events; the actor is always bot:<token name>.",
   "projects:write": "Register projects and upload digests and summaries (relay link in site mode).",
-  "webhooks:write": "Add, list, remove and test outbound webhooks.",
   "tokens:write": "Mint, list and revoke tokens (relay token in site mode).",
-  "work:claim": "Register a worker, heartbeat, claim queued tasks and report runs (relay work); pair with memory:read for the brief.",
 };
 
 export interface TokenRow {

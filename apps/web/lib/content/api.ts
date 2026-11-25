@@ -46,13 +46,12 @@ Scopes are named and granted per token:
 | \`assets:read\` | GET /api/v1/assets, GET /api/v1/assets/{id}, relay_asset_list, relay_asset_get |
 | \`assets:write\` | POST /api/v1/assets, finalize, publish, relay_asset_request_upload, relay_asset_finalize |
 | \`assets:review\` | PUT /api/v1/assets/{id}/review, relay_asset_review |
-| \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{owner}/{repo}%23{n}, relay_task_get, relay_task_list |
-| \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/request-changes, POST /api/v1/tasks/{id}/requeue, POST /api/v1/tasks/{id}/close, relay_task_create, relay_task_approve, relay_task_request_changes, relay_task_requeue, relay_task_close |
+| \`tasks:read\` | GET /api/v1/tasks, GET /api/v1/tasks/{id}, relay_task_get, relay_task_list |
+| \`tasks:write\` | POST /api/v1/tasks, POST /api/v1/tasks/{id}/request-changes, POST /api/v1/tasks/{id}/requeue, relay_task_create, relay_task_request_changes, relay_task_requeue. It opens work and does not settle it |
+| \`tasks:decide\` | POST /api/v1/tasks/{id}/approve, POST /api/v1/tasks/{id}/close, relay_task_approve, relay_task_close: settle a task (an approval merges its pull request). Separate from \`tasks:write\`, so a bot that opens tasks can hold a token that settles none; a token minted with \`tasks:write\` before this scope existed no longer approves or closes |
 | \`events:write\` | POST /api/v1/events, relay_event_log (external.* kinds only; actor is always bot:<token name>) |
 | \`projects:write\` | PUT /api/v1/projects/{slug}, /digests, /summary (relay link in site mode) |
-| \`webhooks:write\` | /api/v1/webhooks: list, add, remove, test |
-| \`work:claim\` | the worker protocol: POST /api/v1/workers, /api/v1/workers/{id}/heartbeat, GET /api/v1/work/doorbell (also feed:read), POST /api/v1/work/claim, /api/v1/work/{owner}/{repo}%23{n}/start and /release; relay_work_register, relay_work_heartbeat, relay_work_doorbell, relay_work_claim, relay_work_start, relay_work_release, relay_work_job. What a machine's relay work token carries, and an external app's agent that serves its own lane ([Build a worker agent](/docs/worker-agents)) |
-| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode); /api/v1/access and /api/v1/invites; relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke. A token (not a signed-in person) may approve or invite only to scopes it holds itself, and never tokens:write (403). Also POST /api/v1/tasks/{id}/release and relay_task_release: lift the injection gate's hold on a task, never one the bot opened itself |
+| \`tokens:write\` | /api/v1/tokens: list, mint, revoke (relay token in site mode); /api/v1/access and /api/v1/invites; relay_access_list, relay_access_approve, relay_invite_create, relay_invite_revoke. A token (not a signed-in person) may approve or invite only to scopes it holds itself, and never tokens:write (403). Also POST /api/v1/tasks/{id}/release and relay_task_release: lift the injection gate's hold on a task, never one whose text the bot wrote any part of |
 
 The operator can also mint tokens by hand, under "Mint a token by hand" on the [Access page](/access) while signed in or with the CLI (locally against the database, or in site mode against \`POST /api/v1/tokens\`), and invites the same way:
 
@@ -185,38 +184,36 @@ curl -X PUT ${SITE_URL}/api/v1/assets/<id>/review -H "Authorization: Bearer $TOK
   -d '{"decision":"rejected","note":"Keep one accent hue; lower the chroma to match the light theme."}'
 \`\`\`
 
-### Tasks, external events, webhooks
+### Tasks and external events
 
 The integration surface for an external bot ([Integrations](/docs/integrations)):
 
 | Operation | Scope | Does |
 |---|---|---|
-| \`POST /api/v1/tasks\` (\`createTask\`) | \`tasks:write\` | \`{"project","title","body","lane","priority","idempotency_key"}\`: opens the GitHub issue with \`agent:<lane>\`, records the task, writes \`issue.opened\` and \`task.created\`; 201, or 200 for a repeated key |
-| \`GET /api/v1/tasks\` (\`listTasks\`) | \`tasks:read\` | tasks newest first with derived state; \`project\`, \`state\`, \`limit\` |
-| \`GET /api/v1/tasks/{owner}/{repo}%23{n}\` (\`getTask\`) | \`tasks:read\` | one task: \`state\` (queued, held, claimed, running, review, done, failed), \`runner\`, \`pr_url\`, \`preview_url\` and \`preview_state\`, \`run_summary\`, \`usage\`, \`review\`, \`merged_at\`, last \`summary\` |
-| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/approve\` (\`approveTask\`) | \`tasks:write\` | squash-merge the PR of a task in review, delete its branch, write \`task.approved\` (the task is done); a bot may not approve a PR its own lane produced, and GitHub's refusal comes back as 502 with \`task.merge_failed\` |
-| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/request-changes\` (\`requestTaskChanges\`) | \`tasks:write\` | \`{"note"}\`: comment on the PR, write \`task.changes_requested\`, queue the task again; the next run gets the note in its brief |
-| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/requeue\` (\`requeueTask\`) | \`tasks:write\` | \`{"lane"?,"reason"?}\`: put a task back in the queue from any state but done, optionally on another lane (the \`agent:*\` label on the issue moves, best effort); a live worker claim is released and \`task.requeued\` written; for a task stuck running or on the wrong lane |
-| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/close\` (\`closeTask\`) | \`tasks:write\` | \`{"reason"?}\`: close a task without a merge from any state but done: the issue is closed on GitHub as not planned with the reason as a comment and an open PR closed with it (best effort); a live worker claim is released and \`task.closed\` written (the task is done) |
-| \`POST /api/v1/tasks/{owner}/{repo}%23{n}/release\` (\`releaseTask\`) | \`tokens:write\` | \`{"note"?}\`: release a task the injection gate \`held\` (its issue text read as instructions aimed at the agent; the \`task.held\` row has the score and reasons); writes \`task.released\`, the task is queued again and the next worker grades it again. Never for a task the bot opened itself |
+| \`POST /api/v1/tasks\` (\`createTask\`) | \`tasks:write\` | \`{"project","title","body"?,"lane","model"?,"needs"?,"base"?,"plan"?,"idempotency_key"?}\`: opens a thread in the project's queue on the team's Vercel Board as the caller's profile, in the repository the project is registered with; a lane no worker serves is refused with the lanes that have one; \`"plan": true\` opens a planning task, whose proposed tasks open only when the plan is approved; 201, or 200 for a repeated key |
+| \`GET /api/v1/tasks\` (\`listTasks\`) | \`tasks:read\` | tasks on the board, oldest first; \`project\`, \`state\` (a state, \`open\` by default, or \`all\`), \`lane\`, \`limit\` |
+| \`GET /api/v1/tasks/{id}\` (\`getTask\`) | \`tasks:read\` | one task by its ID on the board: \`state\` (waiting, queued, running, review, held, blocked, done, failed, closed), \`lane\`, \`model\`, \`repo\`, \`pr\`, \`hold\`, \`needs\`, \`claim\`, \`result\`, \`reason\`, plus the \`usage\` rows and the \`notes\` in its thread |
+| \`POST /api/v1/tasks/{id}/approve\` (\`approveTask\`) | \`tasks:decide\` | squash-merge the pull request a task in review waits on and delete its branch (or accept its attached outputs, mark its report as read, or open the tasks of its proposed plan, answered in \`opened\`), then complete the task; a bot never approves a task it opened (403), and the site checks that it can settle the task on the board before anything merges; a task whose own pull request is already merged is finished from any open state; GitHub's refusal comes back as 502 with its message in the task's thread |
+| \`POST /api/v1/tasks/{id}/request-changes\` (\`requestTaskChanges\`) | \`tasks:write\` | \`{"note"}\`: the note goes in the task's thread and on the pull request, and the task is queued; the next run reads the thread |
+| \`POST /api/v1/tasks/{id}/requeue\` (\`requeueTask\`) | \`tasks:write\` | \`{"lane"?,"model"?}\`: put a failed, held or blocked task back in the queue, optionally on another lane or model (\`"model": null\` is the lane's default); a running task is refused with who holds it, a finished one with 409 |
+| \`POST /api/v1/tasks/{id}/close\` (\`closeTask\`) | \`tasks:decide\` | \`{"reason"?}\`: finish a task without a merge from any state but done or closed: canceled on the board with the reason, which also stops a run in progress; its open pull request and the issue it answers are closed on GitHub (best effort) |
+| \`POST /api/v1/tasks/{id}/release\` (\`releaseTask\`) | \`tokens:write\` | release a task the injection gate \`held\` (its text read as instructions aimed at the agent; the hold's reason says what the gate saw) for the text as it stands: the task is queued, and only text added later is graded again. Never for a task whose text the bot wrote any part of (the task, or a note in its thread) |
 | \`POST /api/v1/events\` (\`logEvent\`) | \`events:write\` | \`{"kind":"external.<x>","project","summary","url","cost_equiv","source"}\`; the actor is the token's |
 | \`GET /api/v1/usage\` (\`getUsage\`) | \`feed:read\` | per-subscription totals since \`since\` |
 | \`GET /api/v1/projects/{slug}/decisions\` (\`listProjectDecisions\`) | \`memory:read\` | decision history, \`current=1\` for open ones |
 | \`PUT /api/v1/projects/{slug}\`, \`/digests\`, \`/summary\` | \`projects:write\` | what \`relay link\` uploads in site mode |
-| \`GET\`, \`POST /api/v1/webhooks\`; \`GET\`, \`DELETE /api/v1/webhooks/{id}\`; \`POST /api/v1/webhooks/{id}/test\` | \`webhooks:write\` | outbound webhooks; the signing secret is returned once on create; [payload and signature](/docs/feed#outbound-webhooks) |
 | \`GET\`, \`POST /api/v1/tokens\`; \`DELETE /api/v1/tokens/{id}\` | \`tokens:write\` | list, mint (plaintext once), revoke |
-| \`GET /api/v1/workers\` (\`listWorkers\`); \`DELETE /api/v1/workers/{id}\` (\`forgetWorker\`) | \`feed:read\`; \`work:claim\` | the machines running \`relay work\` with their state, \`retired\` (offline over 7 days) and current claim; forget one by id or name (\`relay work forget\`): 409 while it holds a live claim, \`worker.forgotten\` written, its past runs kept; the rest of the worker protocol is in [Workers](/docs/workers) |
 | \`GET /api/v1/whoami\` (\`whoami\`) | any credential | the caller's token name, scopes, expiry and source |
 | \`GET /api/v1/access\`; \`POST /api/v1/access/{user_code}/approve\` | \`tokens:write\` | pending device requests; approve (or \`{"decision":"deny"}\`) one by its code |
 | \`GET\`, \`POST /api/v1/invites\`; \`DELETE /api/v1/invites/{id}\` | \`tokens:write\` | invite codes: list (never the code), mint (code once), revoke |
 
 \`\`\`bash
 curl -s -X POST ${SITE_URL}/api/v1/tasks -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" \\
-  -d '{"project":"site","title":"Add dark mode to pricing","lane":"codex","priority":"high","idempotency_key":"conv-91:1"}'
-curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN" | jq '.tasks[] | {id, state, pr_url, preview_url, run_summary}'
-curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/approve" -H "Authorization: Bearer $TOKEN"
-curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/request-changes" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"note":"The toggle has no focus ring; match the one on /settings."}'
-curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/requeue" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"lane":"claude","reason":"the cloud lane is not wired"}'
+  -d '{"project":"site","title":"Add dark mode to pricing","lane":"codex","idempotency_key":"conv-91:1"}'
+curl -s "${SITE_URL}/api/v1/tasks?state=review" -H "Authorization: Bearer $TOKEN" | jq '.tasks[] | {id, title, state, lane, pr: .pr.url}'
+curl -s -X POST "${SITE_URL}/api/v1/tasks/$TASK_ID/approve" -H "Authorization: Bearer $TOKEN"
+curl -s -X POST "${SITE_URL}/api/v1/tasks/$TASK_ID/request-changes" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"note":"The toggle has no focus ring; match the one on /settings."}'
+curl -s -X POST "${SITE_URL}/api/v1/tasks/$TASK_ID/requeue" -H "Authorization: Bearer $TOKEN" -H "content-type: application/json" -d '{"lane":"claude","model":"fable"}'
 \`\`\`
 
 ## MCP server
@@ -233,22 +230,20 @@ curl -s -X POST "${SITE_URL}/api/v1/tasks/acme/site%2342/requeue" -H "Authorizat
 | \`relay_brief\` | \`memory:read\` | the compiled brief for a project and intent |
 | \`relay_guidance\` | \`memory:read\` | official vendor guidance for a model |
 | \`relay_feed\`, \`relay_project\` | \`memory:read\` | compact text forms for a CLI session |
-| \`relay_decide\`, \`relay_prefer\` | \`memory:write\` | record a decision; set a preference |
+| \`relay_decide\`, \`relay_prefer\` | \`memory:write\` | record a decision (\`source_ref\`, optional, says where it came from); set a preference |
 | \`relay_asset_list\`, \`relay_asset_get\` | \`assets:read\` | the library, and one asset with signed URLs |
 | \`relay_asset_request_upload\`, \`relay_asset_finalize\` | \`assets:write\` | reserve an id and upload URL; turn the upload into an asset |
-| \`relay_asset_review\` | \`assets:review\` | approve (closes the task's issue; the task is done) or reject with a note (reopens it, queues the task; the note is the next run's review feedback); never an asset the caller's own runs produced |
-| \`relay_task_create\` | \`tasks:write\` | open a task: GitHub issue with the lane label; idempotent on \`idempotency_key\` |
-| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | derived task state (queued, held, claimed, running, review, done, failed) with runner, PR, preview URL, run summary, usage and the review decision; \`held\` is what the injection gate stopped |
-| \`relay_task_approve\`, \`relay_task_request_changes\` | \`tasks:write\` | approve a task in review (relay squash-merges the PR and deletes the branch) or send it back with a note (PR comment, task queued again, note in the next brief). A bot never approves a PR its own lane produced |
-| \`relay_task_requeue\` | \`tasks:write\` | put a task back in the queue from any state but done, optionally on another lane (the issue's \`agent:*\` label moves with it, a live claim is released, \`task.requeued\` is written); for a task stuck running or on the wrong lane |
-| \`relay_task_release\` | \`tokens:write\` | release a task the injection gate held (\`task.released\`; queued again, graded again by the next worker); for text a person has read. A bot never releases a task it opened itself |
+| \`relay_asset_review\` | \`assets:review\` | approve or reject an asset in the library; a rejection needs a note, which becomes the decision the next attempt reads; never an asset the caller's own runs produced |
+| \`relay_task_create\` | \`tasks:write\` | open a task: a thread in the project's queue on the team's Vercel Board, labelled with its lane and model, with its brief in the thread before a worker can claim it; a lane that is neither built in nor served by a worker is refused; \`plan: true\` opens a planning task, whose proposed tasks open only when the plan is approved, like any task in review; idempotent on \`idempotency_key\`, which is looked up first |
+| \`relay_task_get\`, \`relay_task_list\` | \`tasks:read\` | a task's state on the board (waiting, queued, running, review, held, blocked, done, failed, closed) with its lane, model, pull request, hold, claim, usage and latest notes; \`review\` is what waits for a decision, \`held\` what the injection gate stopped |
+| \`relay_task_approve\`, \`relay_task_close\` | \`tasks:decide\` | approve a task in review (relay squash-merges the pull request its hold names and deletes the branch, or accepts its outputs, marks its report as read, or opens the tasks of its plan; a bot never approves a task it opened), or close one without a merge (canceled on the board with the reason, which also stops a run in progress) |
+| \`relay_task_request_changes\` | \`tasks:write\` | send a task in review back with a note (in the thread and on the pull request; the task is queued and the next run reads it) |
+| \`relay_task_requeue\` | \`tasks:write\` | put a failed, held or blocked task back in the queue, optionally on another lane or model; a running task is refused with who holds it (\`relay_task_close\` stops a run) |
+| \`relay_task_release\` | \`tokens:write\` | release a task the injection gate held, for its text as it stands (queued again; only text added later is graded again); for text a person has read. A bot never releases a task whose text it wrote any part of |
 | \`relay_event_log\` | \`events:write\` | log an \`external.*\` event; the actor is always \`bot:<token name>\` |
 | \`relay_whoami\` | public | this connection's token name, scopes, expiry and source; anonymous callers are told where the authorization server is |
-| \`relay_webhook_subscribe\`, \`relay_webhook_unsubscribe\` | \`webhooks:write\` | register an outbound webhook (the signing secret is returned once) and remove one |
 | \`relay_access_list\`, \`relay_access_approve\` | \`tokens:write\` | pending device requests (and approvals awaiting the poll); approve or deny one by its \`RLAY-XXXX\` code, the same decision the Access page makes: how a chief-of-staff bot lets other agents in. A bot can approve only scopes it holds itself, never \`tokens:write\` |
 | \`relay_invite_create\`, \`relay_invite_revoke\` | \`tokens:write\` | mint an invite code (returned once, with the \`relay setup --site … --invite\` line) for an agent trusted in advance; revoke one by id or name. The same ceiling applies |
-| \`relay_work_register\`, \`relay_work_heartbeat\`, \`relay_work_claim\`, \`relay_work_start\`, \`relay_work_release\`, \`relay_work_job\` | \`work:claim\` | the worker protocol for an app's own agent ([Build a worker agent](/docs/worker-agents)): register a lane, renew leases, claim the oldest queued task (with the issue, the brief and the parsed \`relay-job\` manifest, its input assets signed), start, release finished or failed with usage, re-read a job after a restart. The same functions the REST routes under /api/v1/workers and /api/v1/work call |
-| \`relay_work_doorbell\` | \`work:claim\` or \`feed:read\` | the queue version and a queued estimate for some lanes: what an idle worker reads instead of claiming |
 
 Anyone can connect: \`initialize\` and \`tools/list\` need no token, and \`relay_get_info\` and \`relay_get_methodology\` always answer anonymously. With public read enabled (\`RELAY_PUBLIC_READ=1\`, the demo default) the \`feed:read\` and \`memory:read\` tools answer without a token too. Every other call without the right scope returns an MCP tool error (\`isError: true\`) naming the missing scope, not an HTTP error; only a bearer token the server does not recognise gets HTTP \`401\`. Every response carries the same \`RateLimit\` headers as the API.
 
@@ -268,7 +263,7 @@ pnpm relay feed -n 20      # the same feed, in the terminal
 pnpm relay usage --days 7
 \`\`\`
 
-A machine without the database can use this site instead: \`pnpm relay setup --site ${SITE_URL}\` prints a code, you approve it at [/activate](/activate) (or with \`--invite <code>\` from \`relay invite create\`, no approval), and the CLI stores a token that renews itself. From then on the memory, feed, token, invite, task and webhook commands and the session hooks call \`/api/v1\` and \`/mcp\` here; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)). \`relay doctor\` shows the token's name, source and expiry.
+A machine without the database can use this site instead: \`pnpm relay setup --site ${SITE_URL}\` prints a code, you approve it at [/activate](/activate) (or with \`--invite <code>\` from \`relay invite create\`, no approval), and the CLI stores a token that renews itself. From then on the memory, feed, token and invite commands and the session hooks call \`/api/v1\` and \`/mcp\` here, and the task commands work on the team's Vercel Board with the machine's own \`vercel login\`; \`relay link\` still digests locally and uploads ([Memory, "Site mode"](/docs/memory)). \`relay doctor\` shows the token's name, source and expiry.
 
 ## Link a repository
 

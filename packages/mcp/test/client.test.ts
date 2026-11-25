@@ -5,7 +5,7 @@
  * two implementations answer the same calls the same way.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { openDb, migrate, repo, httpClient, localClient, RelayHttpError, SiteModeError, taskPath, type Db, type HttpFetch, type RelayClient } from "@relay/core";
+import { openDb, migrate, repo, httpClient, localClient, RelayHttpError, SiteModeError, type Db, type HttpFetch, type RelayClient } from "@relay/core";
 import { createMcpHandler } from "../src/http.ts";
 
 let db: Db;
@@ -19,7 +19,7 @@ beforeAll(async () => {
   db = await openDb({ file: ":memory:" });
   await migrate(db);
   await repo.upsertProject(db, { slug: "demo", repo: "acme/demo", path: "/tmp/demo" });
-  local = localClient(db, { actor: "human:test", dispatch: false });
+  local = localClient(db, { actor: "human:test" });
   const grant = { scopes: [...repo.TOKEN_SCOPES], actor: "token:grok-bot" };
   const mcp = createMcpHandler(db, { authorize: async (b) => (b === TOKEN ? grant : undefined) });
 
@@ -38,7 +38,7 @@ beforeAll(async () => {
     }
     const p = u.pathname.replace(/^\/api\/v1/, "");
     const sp = u.searchParams;
-    const admin = localClient(db, { actor: grant.actor, dispatch: false });
+    const admin = localClient(db, { actor: grant.actor });
     if (p === "/info") return json(200, { name: "relay", version: "test" });
     if (p === "/feed") return json(200, { events: (await admin.listEvents({ limit: Number(sp.get("limit") ?? 50), ...(sp.get("kind") ? { kind: sp.get("kind")! } : {}) })).map(({ payload: _p, dedupe_key: _d, ...rest }) => rest) });
     if (p === "/usage") return json(200, { since: sp.get("since"), subscriptions: await admin.usageSummary(sp.get("since")!) });
@@ -77,26 +77,6 @@ beforeAll(async () => {
       const row = await admin.revokeToken(decodeURIComponent(tk[1]!));
       return row ? json(200, { revoked: row }) : problem(404, "Not Found", "No live token matches.", u.pathname);
     }
-    if (p === "/tasks" && init.method === "GET") return json(200, { tasks: await admin.listTasks({ ...(sp.get("state") ? { state: sp.get("state") as "queued" } : {}) }) });
-    const task = /^\/tasks\/(.+)$/.exec(p);
-    if (task) {
-      const id = task[1]!.split("/").map(decodeURIComponent).join("/");
-      const t = await admin.getTask(id);
-      return t ? json(200, t) : problem(404, "Not Found", `No task ${id}.`, u.pathname);
-    }
-    const wk = /^\/workers\/([^/]+)$/.exec(p);
-    if (wk && init.method === "DELETE") {
-      try {
-        const row = await admin.forgetWorker(decodeURIComponent(wk[1]!));
-        return row ? json(200, { forgotten: row }) : problem(404, "Not Found", "No such worker.", u.pathname);
-      } catch (e) {
-        return problem(409, "Conflict", (e as Error).message, u.pathname);
-      }
-    }
-    if (p === "/webhooks" && init.method === "POST") return json(201, await admin.addWebhook(body as unknown as Parameters<RelayClient["addWebhook"]>[0]));
-    if (p === "/webhooks" && init.method === "GET") return json(200, { webhooks: await admin.listWebhooks() });
-    const wh = /^\/webhooks\/([^/]+)(\/test)?$/.exec(p);
-    if (wh && init.method === "DELETE") return (await admin.removeWebhook(wh[1]!)) ? json(200, { removed: wh[1] }) : problem(404, "Not Found", "No webhook.", u.pathname);
     return problem(404, "Not Found", "No such operation.", u.pathname);
   };
   site = httpClient({ site: "https://relay.test/", token: TOKEN, fetch: apiFetch });
@@ -173,43 +153,5 @@ describe("RelayClient over HTTP", () => {
     expect((await site.revokeToken("ci"))?.id).toBe(row.id);
     expect(await site.revokeToken("ci")).toBeUndefined();
     expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/api/v1/tokens/ci" });
-  });
-
-  it("tasks: ids travel with %23 and come back with derived state", async () => {
-    expect(taskPath("acme/demo#42")).toBe("acme/demo%2342");
-    await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 42, createdBy: "human:test" });
-    await repo.writeEvent(db, { kind: "run.started", actor: "runner:mini", repo: "acme/demo", issue: 42, lane: "claude", summary: "go" });
-    const t = await site.getTask("acme/demo#42");
-    expect(calls.at(-1)).toMatchObject({ method: "GET", path: "/api/v1/tasks/acme/demo%2342" });
-    expect(t).toMatchObject({ id: "acme/demo#42", state: "running", runner: "runner:mini", lane: "claude" });
-    expect((await site.listTasks({ state: "running" })).map((x) => x.id)).toEqual(["acme/demo#42"]);
-    expect(await site.getTask("acme/demo#999")).toBeUndefined();
-  });
-
-  it("workers: forget by name, undefined once gone, a live claim is a 409 on both sides", async () => {
-    const reg = await repo.registerWorker(db, { name: "old-mac", lanes: ["claude"] });
-    const gone = await site.forgetWorker("old-mac");
-    expect(gone?.id).toBe(reg.worker.id);
-    expect(calls.at(-1)).toMatchObject({ method: "DELETE", path: "/api/v1/workers/old-mac" });
-    expect(await site.forgetWorker("old-mac")).toBeUndefined();
-    expect(await local.forgetWorker("old-mac")).toBeUndefined();
-    expect((await local.listEvents({ kind: "worker.forgotten" })).map((e) => e.actor)).toEqual(["token:grok-bot"]);
-    // a worker on a task cannot be forgotten
-    const busy = await repo.registerWorker(db, { name: "busy", lanes: ["claude"] });
-    const { task } = await repo.createTask(db, { project: "demo", repo: "acme/demo", issue: 9001, createdBy: "human:test", lane: "claude" });
-    expect((await repo.claimNext(db, { workerId: busy.worker.id, lanes: ["claude"] }))?.task.id).toBe(task.id);
-    await expect(site.forgetWorker("busy")).rejects.toMatchObject({ status: 409 });
-    await expect(local.forgetWorker(busy.worker.id)).rejects.toMatchObject({ status: 409 });
-  });
-
-  it("webhooks: add shows the secret once, list hides it, rm removes", async () => {
-    const r = await site.addWebhook({ url: "https://bot.example/relay", events: ["pr.merged", "run.failed"], bearer: "bk" });
-    expect(r.secret).toMatch(/^whsec_/);
-    expect(r.webhook).not.toHaveProperty("secret");
-    expect(r.webhook.has_bearer).toBe(true);
-    const list = await site.listWebhooks();
-    expect(list.map((w) => w.id)).toContain(r.webhook.id);
-    expect(await site.removeWebhook(r.webhook.id)).toBe(true);
-    expect(await site.removeWebhook(r.webhook.id)).toBe(false);
   });
 });

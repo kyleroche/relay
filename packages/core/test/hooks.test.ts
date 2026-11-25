@@ -138,6 +138,19 @@ describe("claude status line", () => {
     expect(planSetup(ctx, { only: "claude" })[0]!.files.every((f) => f.action === "unchanged")).toBe(true);
   });
 
+  it("rewrites its own status line when the recorded Node moved, keeping the remembered one", () => {
+    mkdirSync(join(ctx.userHome, ".claude"));
+    const stale = "/opt/homebrew/Cellar/node@24/24.18.0/bin/node /opt/relay/packages/cli/hooks/statusline.mjs";
+    writeFileSync(settingsPath(), JSON.stringify({ statusLine: { type: "command", command: stale, padding: 0 } }));
+    mkdirSync(ctx.relayHome, { recursive: true });
+    writeFileSync(prevPath(), JSON.stringify({ type: "command", command: "~/.claude/my-statusline.sh" }));
+    const [plan] = planSetup(ctx, { only: "claude" });
+    expect(plan!.files[0]!.action).toBe("update");
+    applyPlan(plan!);
+    expect(settings().statusLine).toEqual({ type: "command", command: RELAY_CMD, padding: 0 });
+    expect(readPreviousStatusLine(ctx)?.command).toBe("~/.claude/my-statusline.sh");
+  });
+
   it("remembers a foreign status line in statusline.prev.json before replacing it, and --remove restores it", () => {
     mkdirSync(join(ctx.userHome, ".claude"));
     writeFileSync(settingsPath(), JSON.stringify({ statusLine: { type: "command", command: "~/.claude/my-statusline.sh", padding: 0 } }));

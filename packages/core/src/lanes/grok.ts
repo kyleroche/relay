@@ -1,6 +1,6 @@
 /**
  * Grok lane over the native Grok Build CLI: one `grok -p` process per call on the machine's own login (`grok login`).
- * Mirrors scripts/runner/run-lane.sh: JSON output, `--no-subagents --no-plan`, `--permission-mode acceptEdits`
+ * Flags: JSON output, `--no-subagents --no-plan`, `--permission-mode acceptEdits`
  * (`plan` for read-only calls), `-m <model>` when asked. Never a bypass flag.
  */
 import { execFile } from "node:child_process";
@@ -44,7 +44,7 @@ export async function runGrok(req: LaneRequest, opts: GrokOptions = {}): Promise
     delete env["XAI_API_KEY"];
     const t0 = Date.now();
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-      const child = execFile(bin, args, { cwd: req.cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000 }, (err, stdout, stderr) =>
+      const child = execFile(bin, args, { cwd: req.cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000, ...(req.signal ? { signal: req.signal } : {}) }, (err, stdout, stderr) =>
         resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
       );
       child.stdin?.end();

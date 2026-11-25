@@ -32,7 +32,7 @@ export default function OpenGraphImage() {
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           <div style={{ fontSize: 60, fontWeight: 600, lineHeight: 1.1, letterSpacing: -1 }}>Your coding-agent subscriptions, working as one system.</div>
           <div style={{ fontSize: 28, color: "#a7a7a3", lineHeight: 1.4 }}>
-            GitHub issues as the task bus · runners on your machines · shared memory · a feed of everything agents did and what it cost.
+            A Vercel Board as the task bus · workers on your machines · shared memory · a feed of everything agents did and what it cost.
           </div>
         </div>
         <div style={{ display: "flex", justifyContent: "space-between", fontSize: 24, color: "#7fb3dc" }}>

@@ -30,7 +30,7 @@ export function GET() {
         ...DOCS.map((d) => ({ url: `${SITE_URL}/docs/${d.slug}`, title: d.title, description: d.description, markdown: true })),
         { url: `${SITE_URL}/projects`, title: "Projects", description: "Linked repositories with decisions and digest coverage.", access: "session" },
         { url: `${SITE_URL}/usage`, title: "Usage", description: "Calls, tokens, cost equivalent and plan meters per subscription.", access: "session" },
-        { url: `${SITE_URL}/workers`, title: "Workers", description: "Health of self-hosted runners.", access: "session" },
+        { url: `${SITE_URL}/workers`, title: "Workers", description: "The machines running relay work: lanes, what each is on, when it last checked in.", access: "session" },
       ],
       apis: [
         { type: "openapi", url: `${SITE_URL}/openapi.json`, base_url: `${SITE_URL}/api/v1`, docs: `${SITE_URL}/docs/api` },

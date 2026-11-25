@@ -2,14 +2,18 @@
 
 **Your coding-agent subscriptions, working as one system.**
 
-relay turns Claude Code, Codex, and Grok Build into a team that shares memory, picks up work from GitHub, runs on machines you own, and shows you everything it did and what it cost. No new agent to learn, no tokens leaving your machines.
+relay turns Claude Code, Codex, and Grok Build into a team that shares memory, picks up tasks from your team's Vercel Board, runs on machines you own, and shows you everything it did and what it cost. No new agent to learn, no tokens leaving your machines.
 
-> Status: alpha, deployed. The reference deployment is [relay.kyro.house](https://relay.kyro.house); its public pages, API, and MCP endpoint are open to agents and it scores 100/100 on [is-agentic.com](https://is-agentic.com/scan/relay.kyro.house). The first end-to-end runner lane is being wired.
+> Status: alpha, deployed. The reference deployment is [relay.kyro.house](https://relay.kyro.house); its public pages, API, and MCP endpoint are open to agents and it scores 100/100 on [is-agentic.com](https://is-agentic.com/scan/relay.kyro.house). Tasks live on your team's Vercel Board: the CLI, the workers, the web app, its API and its MCP tools all work on the same threads.
 
 ## What you get
 
 - **One memory.** Decisions made in Codex show up in Claude and Grok. A generated rules file in each repo plus a small MCP server keep every tool on the same page.
-- **Work from anywhere.** File an issue from your phone, a chat bot, or a terminal. A worker on your own machine claims it, opens a PR, and your deploy preview appears on the task page. Approve there, from the chat bot, or with `relay task approve`, and relay merges; send it back with a note and the next run picks the note up; a task stuck or on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the issue text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
+- **Work from anywhere.** Open a task with `relay task create` from any machine that has your Vercel login, from a chat bot through the site's MCP tools, or by labelling a GitHub issue `agent:<lane>` where the site is connected to the repository. A worker on your own machine claims it, opens a PR and holds the task for your review. `relay task approve` merges the pull request the worker opened for that task and nothing else; `relay task changes --note` sends it back and the next run reads the note; a task that failed or is on the wrong lane goes back to the queue with `relay task requeue`. Before a worker runs anything, an injection gate grades the task text and holds what reads as instructions to the agent; `relay task release` lets it through once you have read it ([docs/SECURITY.md](docs/SECURITY.md), "The gate").
+- **Plans before work.** `relay task create --plan` opens a planning task: a lane reads the repository and proposes the tasks, and nothing is opened until the plan is approved. A read-only step that ends without a plan is a report you read and accept.
+- **A second opinion before yours.** A project lists the steps its tasks run: comment cleanup before the PR opens, a second lane that judges the finished work and the first lane's answer to each finding, a cleanup pass on demand. Steps are Markdown files you can replace ([docs/STEPS.md](docs/STEPS.md)).
+- **A profile per project.** `.relay/project.json` on the default branch names the commands a worker runs before and after the work, the project's tools and skills, and the capability sets a task may be granted: environment variable names and hosts, never values. A task gets a set only when a person grants it ([docs/PROFILE.md](docs/PROFILE.md)).
+- **Your machines first, paid credits only on your word.** Waiting for one of your own workers is the default. A hosted relay can offer a queued task that none of them can take a run in a Vercel Sandbox on paid credits; nothing starts or spends until you approve a cap for that one task. The credentials it needs cannot be read inside the sandbox, but code a fooled model runs there can use them: push to that one repository, call the model gateway past the cap, write in that project's queue. So a run starts only where the repository's default branch requires an approved pull request, and the gateway's key should carry a budget ([docs/SECURITY.md](docs/SECURITY.md), "What a paid run's lane can reach"). Experimental: this path has not been run against a real sandbox yet.
 - **Every dollar and token accounted for.** An event feed records what each agent did, on which subscription, at what cost. You see which plan is about to run out before it does.
 - **Vendor guidance built in.** Before relay lets a lane use a model, it ingests that vendor's official docs and skills, so prompts for image and video models follow the maker's own guide.
 
@@ -26,10 +30,12 @@ Or by hand, with Node 24 or newer and no checkout:
 ```bash
 npx @kyleroche/relay setup --site https://relay.example.com   # join a hosted relay (device flow or --invite <code>); skip for a single machine
 npm install -g @kyleroche/relay   # the relay command; doctor's path line says what to do if the shell cannot find it
+vercel login                      # the tasks live on your team's Vercel Board, which takes this machine's own login (Vercel CLI 66 or newer)
+relay setup --board               # checks that login on the board, saves which board and whose tasks, registers relay's schemas (--site-project <name> also takes the tasks a hosted relay opens)
 relay doctor                      # what is installed, logged in, reachable, and which lanes this machine can serve
 npx @kyleroche/relay work --install --yes   # this machine becomes a worker: a service that claims and runs tasks for those lanes (add --isolation container to run it all in a Linux container; then `relay work container login all` makes the logins inside)
 npx @kyleroche/relay setup      # hooks + memory server into each CLI you have, and Claude Code's plan-meter status line; --yes writes
-cd ~/code/some-repo && npx @kyleroche/relay link
+cd ~/code/some-repo && npx @kyleroche/relay link   # add a repository: one command, then one pull request to merge
 ```
 
 The published package (`@kyleroche/relay` on npm) carries the CLI, the session hooks and the memory MCP server;
@@ -39,6 +45,7 @@ entry points, which the hooks then call through `tsx`:
 ```bash
 git clone https://github.com/kyleroche/relay && cd relay   # needs Node 24+ (.node-version) and pnpm
 pnpm install
+pnpm relay setup --board
 pnpm relay doctor
 pnpm relay setup
 cd ~/code/some-repo && ~/relay/bin/relay link
@@ -54,18 +61,29 @@ npx @kyleroche/relay setup --site https://relay.kyro.house --invite <code>   # z
 Agents get access the same way, by themselves: `POST /oauth/device`, a person approves the short code once, then the
 bearer token works on `/mcp` and `/api/v1` and renews itself ([Connect in one step](docs/INTEGRATIONS.md)).
 
-`relay link` is the only per-repo step: it registers the repo, digests its files and writes the project summary
-(Sonnet, a few cents), renders `relay.md` from that summary, and installs the owned sections and
-labels. On a hosted relay it ends by checking that the site's GitHub App is installed on the repo, and prints the
-install link when it is not (without it the repo's issues, labels, PRs and previews never reach the site). It prints
-each stage and one cost line, and a second run with nothing changed makes no model calls. `--refresh` rewrites the
-summary after memory changes; `--no-digest` skips the model steps; `--no-events` skips the GitHub App check.
+Adding a repository is one command and one pull request to merge. `relay link` registers the repo, digests its files
+and writes the project summary (Sonnet, a few cents), adopts what Claude Code already knows about the repo on this
+machine, and proposes every repository file relay needs as one pull request against the default branch, on the branch
+`relay/link`: the owned sections of `AGENTS.md` and `CLAUDE.md`, `.relay/rules.json`, `relay.md`, the adopted notes
+under `docs/context/` with an index, and a drafted `.relay/project.json` when the repo has none. Your checkout is not
+written. Without an `origin` on GitHub or without `gh`, or with `--no-pr`, the same files are written into the working
+tree for you to commit. Workers read these files from the default branch, so they take effect when the pull request
+is merged.
+
+`relay link` also adds the GitHub labels, and on a hosted relay it checks that the site's GitHub App is installed on
+the repo and prints the install link when it is not (without it the repo's issues, labels, PRs and previews never
+reach the site). It prints each stage and one cost line, then a `left:` line for each thing only you can do (merge the
+pull request, install the App), or `done:` when nothing is left. It asks one question: before the notes it adopted
+are pushed and the preferences recorded, it lists them and waits for a yes (`--yes` answers in advance). A second run
+with nothing changed makes no model calls and opens no second pull request; while the pull request is open, a later
+run adds a commit on top of whatever a reviewer pushed there and never replaces it. `--refresh` rewrites the summary after memory changes; `--no-digest` skips the
+model steps; `--no-adopt` skips adoption; `--no-labels` and `--no-events` skip the labels and the GitHub App check.
+`relay adopt` prints what adoption would take from this machine and writes nothing.
 
 A project without a checkout, such as a film production whose tasks end in an asset rather than a pull request, is
 registered with `npx @kyleroche/relay project add <slug> --repo owner/name`; several productions can share one
-issues-only repository, and the board filters by project (`/?project=<slug>`). The asset lands on the issue, and the
-card shows it with Approve and Reject where a PR card shows Approve-and-merge ([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md),
-"A task's life").
+repository. A worker with Griptape Nodes runs the task's workflow and attaches the outputs to the task's thread,
+held for review ([docs/WORKERS.md](docs/WORKERS.md), "The nodes lane").
 
 ## Link your model accounts
 
@@ -77,6 +95,7 @@ relay never asks for a token. Log in to each tool you own, on each machine that 
 | Codex | `codex login`, or `fx login codex` | ChatGPT |
 | Grok Build | `grok login`, or `fx login grok` | SuperGrok |
 | GitHub | `gh auth login` | any |
+| Vercel (the board the tasks live on) | `vercel login` (Vercel CLI 66 or newer), then `relay setup --board` | a team with a board |
 | Griptape Nodes (the `nodes` lane: video, image and audio workflows) | install the engine from [docs.griptapenodes.com](https://docs.griptapenodes.com); the vendor keys the workflow uses stay in that machine's environment | pay per output |
 
 `relay doctor` tells you which ones it found. Machines without a login simply do not get that lane's label.
@@ -100,11 +119,11 @@ See [docs/MEMORY.md](docs/MEMORY.md) for the data model, the brief compiler and 
 
 ## How it fits together
 
-Issues are tasks. Labels pick the lane. Workers (your machines running `relay work`) claim tasks from relay, run the vendor CLI in a fresh clone and open a PR; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the feed, projects, workers, and usage. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, and [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker.
+A task is a thread in its project's queue on your team's Vercel Board. A `lane` label picks the lane; where the work happens is in the task's own text, and what a run produced is in blocks the board verifies the author of. Workers (your machines running `relay work`) claim tasks from the board, run the vendor CLI in a fresh clone, open a PR on GitHub and report in the task's thread; no GitHub Actions runner is needed. Postgres holds memory and the event feed. A small web app shows the board, the feed, projects, workers, and usage; it is one more caller on the board, and copies what happens there into the feed. An optional agent, the lead ([apps/lead](apps/lead/README.md)), takes an ask in plain language and opens tasks through the site's MCP server; it cannot approve, release or close one, and it is the one part of relay billed per token. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the rules and the task lifecycle, [docs/WORKERS.md](docs/WORKERS.md) for how a machine becomes a worker, and [docs/STEPS.md](docs/STEPS.md) for the steps a project runs around a task.
 
 ## Hosting
 
-The web app deploys to Vercel with a Neon Postgres database. Locally it runs on an embedded Postgres with no setup. See `docs/HOSTING.md`.
+The web app deploys to Vercel with a Neon Postgres database, in a project on the Vercel team that owns the board. Locally it runs on an embedded Postgres and a demo board with no setup. See `docs/HOSTING.md`.
 
 ## Contributing
 

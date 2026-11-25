@@ -42,13 +42,23 @@ describe("compileBrief", () => {
   it("includes every section under a generous cap, in a fixed render order", async () => {
     const b = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000 });
     expect(b.sections.map((s) => s.name)).toEqual(["summary", "preferences", "decisions"]);
-    expect(b.omitted).toEqual(["review", "guidance"]); // no issue (so no review notes), no model given
+    expect(b.omitted).toEqual(["guidance"]); // no model given
     expect(b.text.indexOf("## Project: demo")).toBeLessThan(b.text.indexOf("## Preferences"));
     expect(b.text).toContain("test_runner = vitest");
     expect(b.text).toContain("Globally we keep pull requests small");
     expect(b.text).not.toContain("Other project uses");
     expect(b.tokens).toBeLessThanOrEqual(6000);
     expect(b.sections.reduce((a, s) => a + s.tokens, 0)).toBeGreaterThanOrEqual(b.tokens - 8);
+  });
+
+  it("leaves out what the owner holds everywhere when the brief is one others will read", async () => {
+    const own = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000 });
+    const shared = await compileBrief(db, { project: "demo", intent: "parser work", maxTokens: 6000, shared: true });
+    expect(own.text).toContain("Globally we keep pull requests small");
+    expect(shared.text).not.toContain("Globally we keep pull requests small");
+    // what is the project's own is in both
+    expect(shared.text).toContain("## Project: demo");
+    expect(shared.text).toContain("test_runner = vitest");
   });
 
   it("respects a hard cap and never truncates a section mid-way", async () => {
@@ -63,7 +73,7 @@ describe("compileBrief", () => {
       for (const line of b.text.split("\n").filter((l) => l.startsWith("- Decision"))) expect(line).toMatch(/because reason \d+ \[human\]$/);
       // every considered section is either rendered or reported omitted
       const names = new Set([...b.sections.map((s) => s.name), ...b.omitted]);
-      expect([...names].sort()).toEqual(["decisions", "guidance", "preferences", "review", "summary"]);
+      expect([...names].sort()).toEqual(["decisions", "guidance", "preferences", "summary"]);
     }
   });
 

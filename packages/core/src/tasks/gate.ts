@@ -1,30 +1,24 @@
 /**
  * The injection gate (docs/SECURITY.md, "The gate"): before a worker runs a task, a cheap model call with no tools
- * grades the task's text (issue title and body, and the latest `task.changes_requested` note) for instructions aimed
- * at the agent rather than at the work. Flagged tasks are *held* until a person or a `tokens:write` bot releases them.
+ * grades the task's text (its title and body, and what people added in its thread) for instructions aimed at the
+ * agent rather than at the work. Flagged tasks are *held* until a person or a `tokens:write` bot releases them.
  *
  * A tripwire in front of the sandbox, not a boundary: the OS sandbox, the tool allowlist and branch protection are
  * what contain a fooled lane (docs/SECURITY.md, "Workers"). The gate only keeps the obvious cases from costing a run.
  *
  *   precheckTask   deterministic: regexes for the markers nobody types into an honest feature request (GATE_MARKERS).
- *                  Runs everywhere the text is seen, including on the site at task creation, where no vendor login exists.
+ *                  Runs everywhere the text is seen, including as a task is opened, where no vendor login is needed.
  *   gradeTask      the pre-check, then the model grade (Sonnet by default, through the Claude adapter with no tools,
  *                  `--setting-sources ""`, strict MCP off, structured output against GATE_SCHEMA); the text is data
  *                  under a fence and the only output is the grade. `RELAY_GATE=off` skips the model call (the pre-check
  *                  still runs); `RELAY_GATE_MODEL` picks fable, opus or sonnet. A grader that cannot run (no login, a
  *                  timeout) does not hold the task: the verdict is `clear` with `error` set and the worker logs it,
  *                  because the gate is not the boundary and a worker without a Claude login could never run a task otherwise.
- *   releaseTask    lift a hold: `task.released` (the task is `queued` again) with the same guard rails as review.ts,
- *                  except that a bot needs `tokens:write`, never the bot that opened the task.
  *
- * The worker runs `gradeTask` in `work/job.ts` after the clone and before the lane; a hold is reported as the release
- * outcome `held` (`work/server.ts` writes `task.held` and the gate's `step.usage` row, lane `gate`). `openTask`
- * (create.ts) runs the pre-check on the site, so an obviously bad task is held before any worker touches it.
+ * The worker runs `gradeTask` in `work/job.ts` after the clone and before the lane, and holds the task on the board
+ * with kind `gate`. `openTask` (board/tasks.ts) runs the pre-check as the task is made, so an obviously bad task is
+ * held before any worker touches it. `releaseTask` there lifts a hold for the text as it stands.
  */
-import type { Db } from "../db/client.ts";
-import { writeEvent, type EventInput, type EventRow } from "../db/events.ts";
-import { bumpQueueVersion } from "../db/queue.ts";
-import { deriveTaskStatus, getTask, taskClaims, taskEvents, taskView, type TaskRow, type TaskView } from "../db/tasks.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
 import { recordLane, type LaneRequest, type LaneResult } from "../lanes/types.ts";
 import type { Ledger } from "../ledger/ledger.ts";
@@ -113,6 +107,9 @@ export interface GateVerdict {
   result?: LaneResult;
 }
 
+/** The most one grade may cost on paid credits when the run gives no smaller figure: one short call with no tools. */
+export const GATE_BUDGET_USD = 0.25;
+
 export interface GradeOptions {
   /** The model call: default `runClaude` on the utility lane with no tools. Tests inject one. */
   lane?: (req: LaneRequest) => Promise<LaneResult>;
@@ -125,6 +122,9 @@ export interface GradeOptions {
   task?: string;
   timeoutMs?: number;
   cwd?: string;
+  /** A paid run (work/job.ts): the grade goes through the run's model gateway, within what is left of its cap. */
+  gateway?: { baseUrl: string; token: string };
+  budgetUsd?: number;
 }
 
 const MODELS: readonly ClaudeModel[] = ["fable", "opus", "sonnet"];
@@ -180,7 +180,7 @@ export async function gradeTask(text: string, opts: GradeOptions = {}): Promise<
   };
   if (opts.project) req.project = opts.project;
   if (opts.task) req.task = opts.task;
-  const lane = opts.lane ?? ((r: LaneRequest) => runClaude(r, { model, tools: [], sandbox: false }));
+  const lane = opts.lane ?? ((r: LaneRequest) => runClaude(r, { model, tools: [], sandbox: false, ...(opts.gateway ? { gateway: opts.gateway, maxBudgetUsd: opts.budgetUsd ?? GATE_BUDGET_USD } : {}) }));
   let result: LaneResult;
   try {
     result = await lane(req);
@@ -201,117 +201,4 @@ function tryJson(text: string): unknown {
   } catch {
     return undefined;
   }
-}
-
-/** What a `task.held` row carries in its payload, and what the task page shows. */
-export interface HeldInfo {
-  score: number;
-  reasons: string[];
-  grader: string;
-  model: string | null;
-  /** The actor that held it: `runner:<name>` from a worker, `bot:relay` from the site's pre-check at creation. */
-  by: string;
-  at: string;
-}
-
-/** The `task.held` row for a verdict, ready for `writeEvent`. Shared by the worker protocol and task creation. */
-export function heldEvent(task: Pick<TaskRow, "project" | "repo" | "issue" | "lane">, actor: string, v: Pick<GateVerdict, "score" | "reasons" | "grader" | "model">, extra: { payload?: Record<string, unknown>; dedupe_key?: string | null; lane?: string | null } = {}): EventInput {
-  const first = v.reasons.find((r) => r.trim()) ?? "flagged by the gate";
-  return {
-    kind: "task.held",
-    actor,
-    project: task.project,
-    repo: task.repo,
-    issue: task.issue,
-    lane: extra.lane ?? task.lane,
-    url: `https://github.com/${task.repo}/issues/${task.issue}`,
-    summary: `Held #${task.issue} at the gate (${v.grader}, ${v.score.toFixed(2)}): ${first}`.slice(0, 500),
-    payload: { score: v.score, reasons: v.reasons, grader: v.grader, model: v.model ?? null, ...(extra.payload ?? {}) },
-    ...(extra.dedupe_key !== undefined ? { dedupe_key: extra.dedupe_key } : {}),
-  };
-}
-
-/** The latest hold on a task, from its events, or undefined when it was never held. */
-export function heldInfo(events: ReadonlyArray<Pick<EventRow, "kind" | "ts" | "id" | "actor" | "payload">>): HeldInfo | undefined {
-  let best: Pick<EventRow, "kind" | "ts" | "id" | "actor" | "payload"> | undefined;
-  for (const e of events) if (e.kind === "task.held" && (!best || e.ts > best.ts || (e.ts === best.ts && e.id > best.id))) best = e;
-  if (!best) return undefined;
-  const p = best.payload;
-  return {
-    score: typeof p.score === "number" ? p.score : 1,
-    reasons: Array.isArray(p.reasons) ? p.reasons.map((r) => String(r)) : [],
-    grader: typeof p.grader === "string" ? p.grader : "unknown",
-    model: typeof p.model === "string" ? p.model : null,
-    by: best.actor,
-    at: best.ts,
-  };
-}
-
-export class TaskGateError extends Error {
-  constructor(
-    message: string,
-    readonly status: 400 | 403 | 404 | 409 = 400,
-  ) {
-    super(message);
-    this.name = "TaskGateError";
-  }
-}
-
-export interface TaskReleaseOptions {
-  /** Why it is safe to run, for the feed row. */
-  note?: string | null;
-  /** The scopes the actor's grant carries; omitted means unrestricted (a local user, a signed-in viewer). */
-  scopes?: readonly string[];
-}
-
-export interface TaskReleaseResult {
-  task: TaskView;
-  events: EventRow[];
-}
-
-/** Who can release a held task, in the words a refusal uses. */
-export const RELEASERS_TEXT = "a signed-in person, or a bot whose token holds tokens:write and that did not open the task itself";
-
-/** The name behind an actor, so `bot:oauth:grok-bot` and `bot:grok-bot` compare equal (as review.ts does). */
-const nameOf = (actor: string): string =>
-  actor
-    .slice(actor.indexOf(":") + 1)
-    .replace(/^oauth:/, "")
-    .toLowerCase();
-
-/**
- * Release a held task: it is `queued` again and the next worker that serves its lane claims it (the gate grades it
- * again on that worker, so a pre-check hit holds it again; a person who wants the text to run as written edits the
- * issue or sets RELAY_GATE=off on the worker). A person may release anything held; a bot needs `tokens:write` and
- * may not release a task it opened itself. 409 when the task is not held.
- */
-export async function releaseTask(db: Db, taskId: string, actor: string, opts: TaskReleaseOptions = {}): Promise<TaskReleaseResult> {
-  const task = await getTask(db, taskId.trim());
-  if (!task) throw new TaskGateError(`No task ${taskId}.`, 404);
-  const note = opts.note?.trim() || null;
-  if (note && note.length > 2000) throw new TaskGateError("The note must be at most 2000 characters.", 400);
-  if (!actor.startsWith("human:")) {
-    if (opts.scopes && !opts.scopes.includes("tokens:write")) throw new TaskGateError(`${actor} cannot release ${task.id}: its token lacks tokens:write. Who can: ${RELEASERS_TEXT}.`, 403);
-    if (nameOf(task.created_by) === nameOf(actor)) throw new TaskGateError(`${actor} cannot release ${task.id}: it opened this task. A bot never releases its own hold; who can: ${RELEASERS_TEXT}.`, 403);
-  }
-  const [events, claims] = await Promise.all([taskEvents(db, task), taskClaims(db, task.id)]);
-  const status = deriveTaskStatus(task, events, claims);
-  if (status.state !== "held") throw new TaskGateError(`${task.id} is ${status.state}, not held; only a held task can be released.`, 409);
-  const held = heldInfo(events);
-  const written: EventRow[] = [];
-  const row = await writeEvent(db, {
-    kind: "task.released",
-    actor,
-    project: task.project,
-    repo: task.repo,
-    issue: task.issue,
-    lane: task.lane ?? status.lane,
-    pr: status.pr,
-    url: status.issue_url,
-    summary: `Released #${task.issue} from the gate${note ? `: ${note.split("\n").find((l) => l.trim()) ?? ""}` : ""}`.slice(0, 500),
-    payload: { note, held: held ?? null, previous_state: "held" },
-  });
-  if (row) written.push(row);
-  await bumpQueueVersion(db); // the task is queued again: idle workers' doorbells ring
-  return { task: await taskView(db, task), events: written };
 }

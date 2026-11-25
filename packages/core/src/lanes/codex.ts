@@ -1,6 +1,6 @@
 /**
  * Codex lane over the native CLI: one `codex exec --json` process per call on the machine's own ChatGPT login
- * (`codex login`). Mirrors the flags scripts/runner/run-lane.sh used: `--sandbox workspace-write` (read-only for
+ * (`codex login`). Flags: `--sandbox workspace-write` (read-only for
  * review calls), `-c agents.enabled=false` so no subagents inflate the run, `-m <model>` when asked. Output is
  * JSONL; usage arrives in `turn.completed` events and the final text in the last `agent_message` item.
  */
@@ -72,7 +72,7 @@ export async function runCodex(req: LaneRequest, opts: CodexOptions = {}): Promi
     delete env["OPENAI_API_KEY"]; // the lane runs on the subscription, never on a stray key
     const t0 = Date.now();
     const { stdout, stderr, code } = await new Promise<{ stdout: string; stderr: string; code: number }>((resolve) => {
-      const child = execFile(bin, args, { cwd: req.cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000 }, (err, stdout, stderr) =>
+      const child = execFile(bin, args, { cwd: req.cwd, env, maxBuffer: 64 * 1024 * 1024, timeout: req.timeoutMs ?? 20 * 60_000, ...(req.signal ? { signal: req.signal } : {}) }, (err, stdout, stderr) =>
         resolve({ stdout: String(stdout), stderr: String(stderr), code: err && "code" in err && typeof err.code === "number" ? err.code : err ? 1 : 0 }),
       );
       child.stdin?.end();

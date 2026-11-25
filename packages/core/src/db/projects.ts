@@ -60,8 +60,8 @@ export async function listProjects(db: Db): Promise<ProjectRow[]> {
 
 /**
  * Every project on one repository, by slug. One repo is usually one project; a productions repo (issues only, one
- * project per production) has several, and then an issue's project is told by its task row or a `production:<slug>`
- * label (tasks/create.ts). Case-insensitive, as GitHub names are.
+ * project per production) has several, and then an issue's project is told by a `production:<slug>` label.
+ * Case-insensitive, as GitHub names are.
  */
 export async function projectsOnRepo(db: Db, repo: string): Promise<ProjectRow[]> {
   return (await db.query(`SELECT ${projectCols} FROM projects WHERE lower(repo) = lower($1) ORDER BY slug`, [repo])).map(toProject);

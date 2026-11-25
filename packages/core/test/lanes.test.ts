@@ -42,7 +42,7 @@ describe("claudeSandboxSettings", () => {
 
   it("denies every credential path three ways: sandbox denyRead, credentials.files, and Read/Edit permission rules", () => {
     const s = claudeSandboxSettings();
-    for (const p of ["~/.harness/credentials.json", "~/.harness/config.json", "~/.harness/relay.pglite", "~/.claude", "~/.claude.json", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.gitconfig"]) expect(SANDBOX_DENIED_PATHS).toContain(p);
+    for (const p of ["~/.harness/credentials.json", "~/.harness/config.json", "~/.harness/relay.pglite", "~/.claude", "~/.claude.json", "~/.codex", "~/.grok", "~/.fx", "~/.ssh", "~/.aws", "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.gitconfig", "~/Library/Application Support/com.vercel.cli", "~/.local/share/com.vercel.cli", "~/.config/board"]) expect(SANDBOX_DENIED_PATHS).toContain(p);
     expect(s.sandbox.filesystem.denyRead).toEqual([...SANDBOX_DENIED_PATHS]);
     expect(s.sandbox.credentials.files).toEqual(SANDBOX_DENIED_PATHS.map((path) => ({ path, mode: "deny" })));
     for (const d of SANDBOX_DENIED_DIRS) {
@@ -167,6 +167,39 @@ describe("the sandbox on a machine that cannot provide it", () => {
     const i = argv.indexOf("--settings");
     expect(i).toBeGreaterThan(0);
     expect(JSON.parse(argv[i + 1]!)).toEqual(claudeSandboxSettings());
+  });
+});
+
+describe("where the claude lane's credential comes from", () => {
+  let bins: string;
+  let echoEnv: string;
+  const KEYS = ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"];
+  beforeAll(() => {
+    delete process.env.RELAY_FAKE_LANES;
+    bins = mkdtempSync(join(tmpdir(), "relay-claude-env-"));
+    const script = join(bins, "echo-env.mjs");
+    writeFileSync(script, `console.log(JSON.stringify({ type: "result", is_error: false, result: JSON.stringify(Object.fromEntries(${JSON.stringify(KEYS)}.map((k) => [k, process.env[k] ?? null]))) }));\n`);
+    echoEnv = join(bins, "claude-env");
+    writeFileSync(echoEnv, `#!/bin/sh\nexec "${process.execPath}" "${script}" "$@"\n`);
+    chmodSync(echoEnv, 0o755);
+  });
+  afterAll(() => rmSync(bins, { recursive: true, force: true }));
+  const stray = { ...process.env, ANTHROPIC_API_KEY: "stray-key", ANTHROPIC_AUTH_TOKEN: "stray-token", ANTHROPIC_BASE_URL: "https://elsewhere.example" };
+
+  it("a subscription run hands the CLI no key, token or other endpoint, whatever the environment holds", async () => {
+    const r = await runClaude({ ...codeReq, cwd: bins, timeoutMs: 20_000, env: stray }, { model: "opus", bin: echoEnv, sandbox: false });
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(r.text)).toEqual({ ANTHROPIC_API_KEY: null, ANTHROPIC_AUTH_TOKEN: null, ANTHROPIC_BASE_URL: null });
+    expect(r.subscription).toBe("max");
+  });
+
+  it("a gateway run hands it the gateway's address and credential and nothing stray, and its usage says gateway", async () => {
+    const r = await runClaude({ ...codeReq, cwd: bins, timeoutMs: 20_000, env: stray }, { model: "opus", bin: echoEnv, sandbox: false, gateway: { baseUrl: "https://gateway.example", token: "gw-token" }, maxBudgetUsd: 2 });
+    expect(r.ok).toBe(true);
+    expect(JSON.parse(r.text)).toEqual({ ANTHROPIC_API_KEY: null, ANTHROPIC_AUTH_TOKEN: "gw-token", ANTHROPIC_BASE_URL: "https://gateway.example" });
+    expect(r.subscription).toBe("gateway");
+    const args = claudeArgs(codeReq, { model: "opus", sandbox: false, maxBudgetUsd: 2 });
+    expect(args[args.indexOf("--max-budget-usd") + 1]).toBe("2");
   });
 });
 

@@ -1,0 +1,16 @@
+{
+  "task": {
+    "title": "Expire cache entries after five minutes"
+  },
+  "must_remove": [
+    "// Entries expire after 60 seconds."
+  ],
+  "must_keep": [
+    "/\\/\\/.*deleted on read/i"
+  ],
+  "unchanged": [
+    "package.json"
+  ],
+  "no_code_change": true,
+  "rubric": "The change's comment said entries expire after 60 seconds while the code keeps them five minutes. That comment now either gives the five minutes the code has or is gone; it does not still say 60 seconds, and the code was not changed to match the comment. The comment about deleting expired entries on read is kept."
+}

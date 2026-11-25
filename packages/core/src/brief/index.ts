@@ -16,7 +16,6 @@ import { approxTokens } from "../util.ts";
 import type { HarnessConfig } from "../config.ts";
 import type { Ledger } from "../ledger/ledger.ts";
 import { embedTexts } from "../onboard/embed.ts";
-import { reviewNotes } from "../tasks/review.ts";
 
 export interface BriefIssue {
   number?: number;
@@ -24,7 +23,7 @@ export interface BriefIssue {
   body?: string;
 }
 
-export type BriefSectionName = "review" | "summary" | "preferences" | "decisions" | "guidance";
+export type BriefSectionName = "summary" | "preferences" | "decisions" | "guidance";
 
 export interface CompileBriefOptions {
   /** Project slug; preferences at `project` scope and decisions for this project are selected. */
@@ -38,12 +37,18 @@ export interface CompileBriefOptions {
   lane?: string;
   /** Hard cap on the whole envelope, in approximate tokens (≈4 chars/token). */
   maxTokens: number;
-  /** Which sections to consider, in priority order. Default: review, preferences, decisions, summary, guidance. */
+  /** Which sections to consider, in priority order. Default: preferences, decisions, summary, guidance. */
   sections?: BriefSectionName[];
   /** Optional embedder (set when AI_GATEWAY_API_KEY is configured); vector retrieval is used when it returns a vector. */
   embed?: (text: string) => Promise<number[] | null>;
   /** How many decisions / guidance chunks to retrieve before fitting. */
   k?: number;
+  /**
+   * True for a brief that is posted where others can read it (a task's thread on the team's board): only what is
+   * scoped to this project goes in. The owner's own preferences and decisions, the ones that hold everywhere, stay
+   * in memory, where a worker with access to it reads them privately.
+   */
+  shared?: boolean;
 }
 
 export interface BriefSection {
@@ -59,10 +64,10 @@ export interface Brief {
   omitted: BriefSectionName[];
 }
 
-/** Default allocation order: the reviewer's notes first (they are why this run exists), then cheapest and most binding; the big summary after; guidance last. */
-const DEFAULT_ORDER: BriefSectionName[] = ["review", "preferences", "decisions", "summary", "guidance"];
+/** Default allocation order: cheapest and most binding first; the big summary after; guidance last. */
+const DEFAULT_ORDER: BriefSectionName[] = ["preferences", "decisions", "summary", "guidance"];
 /** Rendering order is fixed so the envelope always reads the same way. */
-const RENDER_ORDER: BriefSectionName[] = ["review", "summary", "preferences", "decisions", "guidance"];
+const RENDER_ORDER: BriefSectionName[] = ["summary", "preferences", "decisions", "guidance"];
 
 const SCOPE_RANK: Record<repo.PreferenceRow["scope"], number> = { global: 0, project: 1, lane: 2, model: 3 };
 
@@ -158,31 +163,7 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
 
   for (const name of order) {
     let text = "";
-    if (name === "review") {
-      // notes a reviewer left with "Request changes" on this issue's PR, or by rejecting the asset it delivered
-      // (tasks/review.ts reviewNotes); the next run must address them
-      if (project && opts.issue?.number != null) {
-        const notes = await reviewNotes(db, { repo: project.repo ?? "", project: project.slug, issue: opts.issue.number });
-        if (notes.length) {
-          const last = notes.at(-1)!;
-          const lead = last.asset
-            ? `A reviewer rejected the asset delivered for #${opts.issue.number}. Address every point below and deliver a new version on the same issue (upload it with --replaces ${last.asset} so it becomes the next version).`
-            : `A reviewer sent the pull request for #${opts.issue.number} back. Address every point below; the branch and PR already exist and this run replaces the branch.`;
-          text =
-            heading("Review feedback") +
-            `${lead}\n\n` +
-            notes.map((n) => `- ${n.at.slice(0, 16)} ${n.by}${n.pr ? ` on PR #${n.pr}` : n.asset ? ` on asset ${n.asset}` : ""}:\n  ${n.note.trim().replace(/\n/g, "\n  ")}`).join("\n") +
-            "\n";
-        }
-      }
-      const t = approxTokens(text);
-      if (!text || t > remaining) {
-        omitted.push(name);
-        continue;
-      }
-      rendered.set(name, { text, tokens: t });
-      remaining -= t;
-    } else if (name === "summary") {
+    if (name === "summary") {
       if (project?.summary) text = heading(`Project: ${project.slug}`) + project.summary.trim() + "\n";
       const t = approxTokens(text);
       if (!text || t > remaining) {
@@ -192,7 +173,8 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
       rendered.set(name, { text, tokens: t });
       remaining -= t;
     } else if (name === "preferences") {
-      const prefs = await mergedPreferences(db, { project: opts.project, ...(opts.lane ? { lane: opts.lane } : {}), ...(opts.model ? { model: opts.model } : {}) });
+      const merged = await mergedPreferences(db, { project: opts.project, ...(opts.lane ? { lane: opts.lane } : {}), ...(opts.model ? { model: opts.model } : {}) });
+      const prefs = opts.shared ? merged.filter((p) => p.scope === "project") : merged;
       if (prefs.length) text = heading("Preferences (hard rules)") + prefs.map(renderPreference).join("\n") + "\n";
       const t = approxTokens(text);
       if (!text || t > remaining) {
@@ -204,7 +186,8 @@ export async function compileBrief(db: Db, opts: CompileBriefOptions): Promise<B
     } else if (name === "decisions") {
       const head = heading("Current decisions");
       const headT = approxTokens(head);
-      const items = await matchingDecisions(db, opts.project, query, { embed: opts.embed, ...(opts.k ? { k: opts.k } : {}) });
+      const matched = await matchingDecisions(db, opts.project, query, { embed: opts.embed, ...(opts.k ? { k: opts.k } : {}) });
+      const items = opts.shared ? matched.filter((d) => d.project === opts.project) : matched;
       const fit = fitItems(items, renderDecision, remaining - headT);
       if (!fit.lines.length) {
         omitted.push(name);
@@ -264,7 +247,7 @@ export async function renderRulesFile(db: Db, project: string, opts: RulesFileOp
   const header =
     `# relay rules for ${project}\n\n` +
     `Generated by relay from shared memory; do not edit by hand (run \`relay link --refresh\`). ` +
-    `This repository is managed with relay: issues labelled \`agent:claude\`, \`agent:codex\` or \`agent:grok\` are picked up by relay workers (machines running \`relay work\` with that vendor's login) that open pull requests from \`relay/<lane>-<issue>\` branches of \`${repoName}\`; a person, or a bot they trust, approves each PR from relay's task page before it merges.\n\n` +
+    `This repository is managed with relay: tasks are opened on the team's board (\`relay task create\`, the site, or an issue labelled \`agent:<lane>\` where the site is connected to GitHub) and claimed by relay workers (machines running \`relay work\` with that vendor's login) that open pull requests from \`relay/<lane>-<task>\` branches of \`${repoName}\`; a person, or a bot they trust, approves each pull request before it merges.\n\n` +
     `Memory tools: call \`relay_recall\` before deciding how to do something, \`relay_decide\` when you settle a durable choice ("we do X because Y"), and \`relay_prefer\` for settings that should hold across sessions. The \`relay\` MCP server provides them; the CLI equivalents are \`relay recall\`, \`relay decide\` and \`relay prefer\`.\n`;
   let remaining = cap - approxTokens(header);
   const parts: string[] = [header];

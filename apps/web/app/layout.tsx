@@ -14,14 +14,14 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: { default: "relay — your coding-agent subscriptions as one system", template: "%s · relay" },
   description:
-    "relay is an open-source harness that turns Claude Code, Codex and Grok subscriptions into one system: GitHub issues as the task bus, runners on your own machines, shared memory, and a feed of everything agents did and what it cost.",
+    "relay is an open-source harness that turns Claude Code, Codex and Grok subscriptions into one system: a Vercel Board as the task bus, workers on your own machines, shared memory, and a feed of everything agents did and what it cost.",
   applicationName: "relay",
-  keywords: ["coding agents", "Claude Code", "Codex", "Grok", "GitHub Actions", "self-hosted runners", "agent harness", "open source"],
+  keywords: ["coding agents", "Claude Code", "Codex", "Grok", "Vercel Board", "task board", "agent harness", "open source"],
   openGraph: {
     type: "website",
     siteName: "relay",
     title: "relay — your coding-agent subscriptions as one system",
-    description: "GitHub issues as the task bus, runners on your own machines, shared memory, and a feed of everything agents did and what it cost.",
+    description: "A Vercel Board as the task bus, workers on your own machines, shared memory, and a feed of everything agents did and what it cost.",
     url: SITE_URL,
   },
   twitter: { card: "summary_large_image" },

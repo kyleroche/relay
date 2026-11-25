@@ -2,7 +2,8 @@
  * Plan meters for the header and /usage. The numbers are the vendor's, not relay's: the ledger counts relay's own runs,
  * a subscription counts everything the login did. The one documented source is Claude Code's status line, which
  * `relay setup` points at relay's script; it saves the 5-hour and 7-day used percentages under ~/.harness/meters and
- * `relay work` sends them with every heartbeat (packages/core/src/meters.ts). Composition, in priority:
+ * `relay work` keeps them in the worker's own message on the board (packages/core/src/meters.ts,
+ * packages/core/src/board/workers.ts). Composition, in priority:
  *
  *   1. RELAY_PLAN_METERS, a JSON array of { id, label, subscription, percentUsed, resetsAt, note? }: a manual override
  *      per meter id (source `manual`). It is also the only way to show a third Claude meter (a per-model weekly one);
@@ -14,15 +15,15 @@
  */
 import { METERS_MAX_AGE_MS, type MeterReading, type MeterWindow } from "@relay/core";
 import { fmtAgo, fmtUntil } from "./format.ts";
-import type { PlanMeter, Subscription, WorkerStatus } from "./types.ts";
+import type { PlanMeter, Subscription } from "./types.ts";
 
 export const NO_READING_NOTE = "No reading yet. Install relay's status line with `relay setup` on a machine that uses Claude Code.";
 
-/** The worker fields composition needs; `WorkerView` from @relay/core satisfies it. */
+/** The worker fields composition needs; the board's `WorkerView` (`board.listWorkers`) satisfies it. */
 export interface MeterWorker {
   name: string;
   host?: string;
-  state: WorkerStatus;
+  state: "online" | "idle" | "offline";
   meters: MeterReading[];
 }
 
@@ -127,11 +128,11 @@ export function composeMeters(input: ComposeInput): PlanMeter[] {
 
 /**
  * The line /usage prints under the meters: what they are (the vendor's numbers, read by relay's status line on a
- * worker and sent with its heartbeat), the machine and age of the current reading, or how to get one; demo and manual
- * numbers are named as such.
+ * worker and kept in its message on the board), the machine and age of the current reading, or how to get one; demo
+ * and manual numbers are named as such.
  */
 export function meterSourceLine(meters: PlanMeter[], now: number = Date.now()): string {
-  const base = "Plan usage is the vendor's number, not relay's ledger (which counts only relay's runs). Claude Code hands its 5-hour and weekly rate limits to its status line; `relay setup` points that at relay's script, which saves them under ~/.harness/meters, and `relay work` sends them with each heartbeat. Codex and Grok publish no meter.";
+  const base = "Plan usage is the vendor's number, not relay's ledger (which counts only relay's runs). Claude Code hands its 5-hour and weekly rate limits to its status line; `relay setup` points that at relay's script, which saves them under ~/.harness/meters, and `relay work` posts them in the worker's message on the board. Codex and Grok publish no meter.";
   const vendor = meters.filter((m) => m.source === "vendor" && m.capturedAt);
   if (vendor.length) {
     const freshest = vendor.reduce((a, b) => (Date.parse(b.capturedAt!) > Date.parse(a.capturedAt!) ? b : a));

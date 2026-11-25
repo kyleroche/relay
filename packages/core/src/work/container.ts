@@ -24,7 +24,7 @@ export const CONTAINER_RELAY_HOME = `${CONTAINER_HOME}/.harness`;
 /** The site token `relay setup --site` inside writes; present in the volume means the container has joined already. */
 export const CONTAINER_CREDENTIALS = `${CONTAINER_RELAY_HOME}/credentials.json`;
 /** Host environment `--install` passes into the container when set, and `update` carries over from the container. */
-export const CONTAINER_PASSTHROUGH_ENV = ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_WORK_MAX_INTERVAL", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"] as const;
+export const CONTAINER_PASSTHROUGH_ENV = ["RELAY_LANE_ALLOWED_DOMAINS", "RELAY_BOARD_TEAM", "RELAY_BOARD_NAME", "RELAY_BOARD_FROM", "RELAY_MODEL_CLAUDE", "RELAY_MODEL_CODEX", "RELAY_MODEL_GROK"] as const;
 /** Set in the image; `relay work` inside reads it to know it is the container worker. */
 export const CONTAINER_ENV = "RELAY_ISOLATION";
 /** The worker name and host the container worker registers with (set on the container at create time). */
@@ -62,9 +62,9 @@ export interface ContainerSpec {
   /** The worker's name and the Mac's hostname, both passed into the container as environment. */
   workerName: string;
   host: string;
-  /** `relay work` arguments baked into the container's command (`--lanes`, `--labels`, `--jobs`, `--max-interval`). */
+  /** `relay work` arguments baked into the container's command (`--lanes`, `--jobs`). */
   args?: string[];
-  /** Extra environment for the worker inside (`RELAY_LANE_ALLOWED_DOMAINS`, `RELAY_WORK_MAX_INTERVAL`). */
+  /** Extra environment for the worker inside (`RELAY_LANE_ALLOWED_DOMAINS`, the `RELAY_BOARD_*` settings). */
   env?: Record<string, string>;
   /** The VM's memory (`container create --memory`); default CONTAINER_MEMORY. The runtime's own default, 1 GB, is too little: PGlite alone reserves about that on first open and the kernel kills the worker. */
   memory?: string;
@@ -110,7 +110,7 @@ export interface ContainerPlan {
   exec: (argv: string[], interactive?: boolean) => string[];
   /**
    * `relay work container login` (login.ts): fx with its browser turned off, stdin kept open (`-i`, no TTY) so the
-   * Mac side can paste the code; Claude Code and gh as TTY passthroughs; `gh auth setup-git` after gh's login; and a
+   * Mac side can paste the code; Claude Code, gh and the Vercel CLI as TTY passthroughs; `gh auth setup-git` after gh's login; and a
    * `curl` inside to replay the browser's redirect to a login server on the container's loopback.
    */
   login: {
@@ -118,6 +118,7 @@ export interface ContainerPlan {
     claude: string[];
     gh: string[];
     ghSetupGit: string[];
+    vercel: string[];
     replay: (url: string) => string[];
   };
 }
@@ -185,6 +186,7 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
       claude: exec(["claude"], true),
       gh: exec(["gh", "auth", "login", "--git-protocol", "https", "--web"], true),
       ghSetupGit: exec(["gh", "auth", "setup-git"]),
+      vercel: exec(["vercel", "login"], true),
       replay: (url) => exec(["curl", "-fsS", "-o", "/dev/null", url]),
     },
   };
@@ -192,7 +194,7 @@ export function containerPlan(s: ContainerSpec): ContainerPlan {
 
 /** The one command that makes every missing login from the Mac (docs/WORKERS.md, "Isolation"; login.ts). */
 export const CONTAINER_LOGIN_COMMAND = "relay work container login all";
-export const CONTAINER_LOGIN_COMMAND_WHY = "one command; opens this Mac's browser for each login and skips the ones already in the volume (claude, gh, then the optional codex and grok)";
+export const CONTAINER_LOGIN_COMMAND_WHY = "one command; opens this Mac's browser for each login and skips the ones already in the volume (claude, gh, vercel for the board, then the optional codex and grok)";
 
 /**
  * The manual fallback: the login commands the operator runs inside, in order; printed under CONTAINER_LOGIN_COMMAND
@@ -203,6 +205,7 @@ export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; lo
   { cmd: "relay work container shell", why: "a shell inside the container, as the relay user" },
   { cmd: "claude", why: "then /login: the OAuth paste-code flow (open the URL on this Mac, paste the code back, /exit)", login: "claude" },
   { cmd: "gh auth login && gh auth setup-git", why: "the account the worker clones, pushes and opens PRs as (device code)", login: "gh" },
+  { cmd: "vercel login", why: "the login the worker reaches the board with (device code)", login: "vercel" },
   { cmd: "fx login codex", why: "optional: the codex lane (the browser's redirect to localhost:1455 reaches the container through the published port)", login: "codex" },
   {
     cmd: "FX_NO_OPEN_BROWSER=1 fx login grok",
@@ -216,6 +219,8 @@ export const CONTAINER_LOGIN_STEPS: ReadonlyArray<{ cmd: string; why: string; lo
 export interface LoginStates {
   claude: boolean;
   gh: boolean;
+  /** The Vercel login the board takes: doctor's `board` line answers (a warning there is a login that works). */
+  vercel: boolean;
   /** The codex CLI's login, or an fx Codex login. */
   codex: boolean;
   /** The grok CLI, or an fx Grok login. */
@@ -238,6 +243,7 @@ export function loginStatesFromDoctorOutput(text: string): LoginStates {
   return {
     claude: doctorLine(text, "login:claude")?.status === "ok",
     gh: doctorLine(text, "login:gh")?.status === "ok",
+    vercel: ["ok", "warn"].includes(doctorLine(text, "board")?.status ?? ""),
     codex: doctorLine(text, "login:codex")?.status === "ok" || fx.includes("codex"),
     grok: doctorLine(text, "cli:grok")?.status === "ok" || fx.includes("grok"),
   };
@@ -298,11 +304,24 @@ export function fmtMemory(bytes: number): string {
   return String(bytes);
 }
 
+/** Options `relay work` took, with a value, before the worker waited on the board. A container made then still carries them. */
+export const RETIRED_WORK_OPTIONS: readonly string[] = ["--interval", "--max-interval", "--labels"];
+
+/** The `relay work` arguments without the options it no longer takes, each dropped with its value. */
+export function currentWorkArgs(args: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (RETIRED_WORK_OPTIONS.includes(args[i]!)) i++;
+    else out.push(args[i]!);
+  }
+  return out;
+}
+
 export function containerSettingsFrom(listJson: string, name: string = CONTAINER_NAME): ContainerSettings | undefined {
   const row = listRow(listJson, name);
   if (!row) return undefined;
   const argv = row.configuration?.initProcess?.arguments ?? [];
-  const out: ContainerSettings = { args: argv[0] === "relay" && argv[1] === "work" ? argv.slice(2) : [], env: {} };
+  const out: ContainerSettings = { args: argv[0] === "relay" && argv[1] === "work" ? currentWorkArgs(argv.slice(2)) : [], env: {} };
   for (const kv of row.configuration?.initProcess?.environment ?? []) {
     const eq = kv.indexOf("=");
     if (eq < 0) continue;

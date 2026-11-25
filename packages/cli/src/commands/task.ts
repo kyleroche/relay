@@ -1,55 +1,72 @@
 /**
- * `relay task …`: open, read, review, requeue, close and release tasks (GitHub issues with a lane label, addressed as owner/repo#n). Locally
- * the issue is opened and the PR merged with the machine's gh login; in site mode the site does it with its own
- * GitHub credential. State is derived from the feed every time it is asked for (docs/INTEGRATIONS.md).
+ * `relay task …`: open, read, review, requeue, close and release tasks. A task is a thread in its project's queue
+ * on the team's Vercel Board (`work/<project>`), addressed by the ID the board gave it. Every command acts as this
+ * machine's own Vercel login, so what it may do is what the board's grants give that login; approve merges the
+ * pull request with the machine's gh login (docs/WORKERS.md).
  */
 import type { Command } from "commander";
 import { readFileSync } from "node:fs";
-import { CLOUD_LANES, isLaneName, JOB_FENCE, jobManifestFromValue, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, TASK_PRIORITIES, TASK_STATES, isTaskState, WORKER_LANES, type TaskPriority, type TaskView } from "@relay/core";
-import { log, openReady, resolveProject } from "./_common.ts";
+import { board, detectGitHub, isLaneName, laneNameProblem, MANIFEST_FENCE, manifestFromValue, parseManifestText, WORKER_LANES } from "@relay/core";
+import { log, resolveProject } from "./_common.ts";
+import { act, openBoard, repoOf } from "./_board.ts";
 
-function line(t: TaskView): string {
-  const who = t.runner ? ` ${t.runner}` : "";
-  const pr = t.pr ? ` PR #${t.pr}` : "";
-  return `${t.id.padEnd(28)} ${t.state.padEnd(8)} ${(t.lane ?? "-").padEnd(7)}${who}${pr}  ${(t.summary ?? "").slice(0, 70)}`;
+type Task = board.BoardTask;
+
+function line(t: Task): string {
+  const who = t.claim ? ` ${t.claim.actor.split("+").pop()}` : "";
+  const pr = t.pr ? ` PR #${t.pr.number}` : "";
+  const why = t.state === "failed" ? `  (${(t.reason ?? "").slice(0, 60)})` : t.hold && t.state !== "review" ? `  (${t.hold.reason.slice(0, 60)})` : "";
+  return `${t.id.padEnd(12)} ${t.state.padEnd(8)} ${(t.project ?? "-").padEnd(16)} ${(t.lane ?? "-").padEnd(7)}${who}${pr}  ${t.title.slice(0, 70)}${why}`;
 }
 
-function show(t: TaskView): void {
-  console.log(`${t.id}  ${t.state}${t.lane ? `  lane ${t.lane}` : ""}${t.runner ? `  ${t.runner}` : ""}`);
-  console.log(`issue: ${t.issue_url}${t.pr_url ? `\npr:    ${t.pr_url}` : ""}${t.branch ? `\nbranch: ${t.branch}` : ""}`);
-  if (t.preview_url || t.preview_state !== "none") console.log(`preview: ${t.preview_state}${t.preview_url ? ` ${t.preview_url}` : ""}`);
-  if (t.asset) console.log(`asset: ${t.asset.kind} v${t.asset.version} ${t.asset.id} (relay asset review ${t.asset.id} --approve|--reject)`);
-  if (t.run_summary) console.log(`run:   ${t.run_summary.slice(0, 200)}`);
-  if (t.usage) console.log(`usage: ${t.usage.runs} run${t.usage.runs === 1 ? "" : "s"}, ${t.usage.tokens_in + t.usage.cache_read} in / ${t.usage.tokens_out} out, $${t.usage.cost_equiv.toFixed(2)} equiv${t.usage.model ? ` (${t.usage.model})` : ""}`);
-  if (t.review.decided) console.log(`review: ${t.review.decided.replace("_", " ")} by ${t.review.by} ${t.review.at?.slice(0, 16) ?? ""}${t.review.note ? `: ${t.review.note.split("\n")[0]?.slice(0, 120)}` : ""}`);
-  if (t.merged_at) console.log(`merged: ${t.merged_at.slice(0, 16)}`);
-  console.log(`last:  ${t.last_kind ?? "-"} ${t.updated_at ? t.updated_at.slice(0, 16) : ""} ${t.summary ?? ""}`.trimEnd());
-  console.log(`events: ${t.events}  created ${t.created_at.slice(0, 16)} by ${t.created_by}${t.idempotency_key ? `  key ${t.idempotency_key}` : ""}`);
+function show(d: board.TaskDetail): void {
+  const t = d.task;
+  console.log(`${t.id}  ${t.state}${t.lane ? `  lane ${t.lane}` : ""}${t.model ? `  model ${t.model}` : ""}${t.claim ? `  held by ${t.claim.actor} until ${t.claim.until.slice(11, 16)}Z` : ""}`);
+  console.log(`title: ${t.title}`);
+  console.log(`queue: ${t.channel}${t.repo ? `  repo ${t.repo}` : ""}${t.base ? `  base ${t.base}` : ""}`);
+  if (t.issue) console.log(`issue: https://github.com/${t.issue.repo}/issues/${t.issue.number}`);
+  const pr = t.pr ?? d.thread.replies.flatMap((m) => board.blocksOf<board.RunBlock>(m, board.RUN_SCHEMA)).at(-1)?.pr;
+  if (pr) console.log(`pr:    ${pr.url}`);
+  if (t.evaluates) console.log(`looks at: ${t.evaluates}${t.branch ? ` (${t.branch})` : ""}`);
+  if (t.needs.length) console.log(`needs: ${t.needs.join(", ")}`);
+  if (t.hold) console.log(`held:  ${t.hold.kind}${t.hold.reason ? `: ${t.hold.reason.slice(0, 200)}` : ""}`);
+  if (t.result) console.log(`result: ${t.result.slice(0, 200)}`);
+  if (t.reason) console.log(`reason: ${t.reason.slice(0, 200)}`);
+  const runs = d.usage.filter((u) => u.kind === "run");
+  if (d.usage.length) {
+    const sum = (f: (u: board.UsageBlock) => number): number => d.usage.reduce((s, u) => s + f(u), 0);
+    const model = runs.at(-1)?.model;
+    console.log(`usage: ${runs.length} run${runs.length === 1 ? "" : "s"}, ${sum((u) => u.tokens_in + u.cache_read)} in / ${sum((u) => u.tokens_out)} out, $${sum((u) => u.cost_equiv).toFixed(2)} equiv${model ? ` (${model})` : ""}`);
+  }
+  for (const n of d.notes.slice(-3)) console.log(`note:  ${n.by} ${n.at.slice(0, 16)}: ${n.text.split("\n")[0]?.slice(0, 120)}`);
+  console.log(`made:  ${t.created_at.slice(0, 16)} by ${t.owner}`);
 }
 
-/** The `--lane` help: the built-ins and the cloud lanes by name; a registered worker's lane is checked by the server (or the local openTask), not here. */
-const LANE_HELP = `${WORKER_LANES.join(", ")} (built-in, run by relay work), ${CLOUD_LANES.join(", ")} (the vendors' hosted tiers), or the lane any registered worker serves (an app's own craft; relay work status lists workers and their lanes)`;
+/** The `--lane` help: the built-ins by name; a registered worker's lane is checked against the board's workers. */
+const LANE_HELP = `${WORKER_LANES.join(", ")} (run by relay work), ${board.ANY_LANE} (whichever code lane is free), or the lane another worker registered (relay work status lists workers and their lanes)`;
 
 export function registerTask(program: Command): void {
-  const task = program.command("task").description("Tasks: GitHub issues with a lane label, with state derived from the feed (docs/INTEGRATIONS.md)");
+  const task = program.command("task").description("Tasks: threads in a project's queue on the team's Vercel Board, with the state the board keeps (docs/WORKERS.md)");
 
   task
     .command("create")
     .requiredOption("--title <text>")
     .requiredOption("--lane <lane>", LANE_HELP)
     .option("--project <slug>", "project slug (default: the linked project of the cwd)")
-    .option("--body <text>", "issue body (markdown)")
+    .option("--repo <owner/name>", "the repository to work in (default: the project's)")
+    .option("--body <text>", "the task's text (markdown)")
     .option("--body-file <path>", "read the body from a file ('-' for stdin)")
     .option("--manifest <path>", "a relay-nodes manifest (JSON or YAML: workflow, inputs, outputs, model, stage) appended to the body as the fenced block the nodes lane runs")
-    .option("--job <path>", "a relay-job manifest for an app worker (JSON or YAML: inputs as asset ids, params, outputs) appended to the body as the fenced block the worker reads (docs/WORKER-AGENTS.md)")
-    .option("--priority <p>", `one of ${TASK_PRIORITIES.join(", ")}`)
+    .option("--model <id>", "the model the lane should use (fable, gpt-6-astra, …); the lane's default without it")
+    .option("--needs <ids>", "tasks that must complete first, comma separated")
+    .option("--base <branch>", "start from this branch instead of the repository's default one")
+    .option("--plan", "open it as a planning task: a lane reads the repository and proposes tasks, and approving the plan (relay task approve) is what opens them")
     .option("--key <idempotency-key>", "repeat calls with the same key return the same task")
     .option("--cwd <path>")
     .option("--json")
-    .description("Open a task: a GitHub issue with agent:<lane> (and priority:<p>) labels")
-    .action(async (o: { title: string; lane: string; project?: string; body?: string; bodyFile?: string; manifest?: string; job?: string; priority?: string; key?: string; cwd?: string; json?: boolean }) => {
+    .description("Open a task in the project's queue, labelled with its lane")
+    .action(async (o: { title: string; lane: string; project?: string; repo?: string; body?: string; bodyFile?: string; manifest?: string; model?: string; needs?: string; base?: string; plan?: boolean; key?: string; cwd?: string; json?: boolean }) => {
       if (!isLaneName(o.lane)) throw new Error(`--lane: ${laneNameProblem(o.lane)}`);
-      if (o.priority && !(TASK_PRIORITIES as readonly string[]).includes(o.priority)) throw new Error(`--priority must be one of ${TASK_PRIORITIES.join(", ")}`);
       const ref = resolveProject({ ...(o.cwd ? { cwd: o.cwd } : {}), ...(o.project ? { project: o.project } : {}) });
       if (!ref.slug) throw new Error("no project: pass --project or run relay link in the repo");
       let body = o.bodyFile ? readFileSync(o.bodyFile === "-" ? 0 : o.bodyFile, "utf8") : o.body ?? "";
@@ -58,165 +75,145 @@ export function registerTask(program: Command): void {
         manifestFromValue(parseManifestText(text)); // throws ManifestError with the line to fix before anything is opened
         body = `${body.trimEnd()}\n\n\`\`\`${MANIFEST_FENCE}\n${text.trim()}\n\`\`\`\n`;
       }
-      if (o.job) {
-        const text = readFileSync(o.job, "utf8");
-        jobManifestFromValue(parseManifestText(text, JOB_FENCE)); // same: refuse a bad block locally; the server checks the asset ids
-        body = `${body.trimEnd()}\n\n\`\`\`${JOB_FENCE}\n${text.trim()}\n\`\`\`\n`;
-      }
-      const h = await openReady();
-      try {
-        const r = await h.client.createTask({ project: ref.slug, title: o.title, body, lane: o.lane, ...(o.priority ? { priority: o.priority as TaskPriority } : {}), idempotency_key: o.key ?? null });
-        if (o.json) console.log(JSON.stringify(r, null, 2));
+      const slug = ref.slug;
+      const repo = o.repo ?? (await repoOf(slug, ref));
+      if (!repo) throw new Error(`no repository for project '${slug}': pass --repo owner/name, or register it with relay project add ${slug} --repo owner/name`);
+      await act(async () => {
+        const b = openBoard();
+        const { task: t } = await board.openServedTask(b, {
+          project: slug,
+          repo,
+          title: o.title,
+          body,
+          lane: o.lane,
+          ...(o.model ? { model: o.model } : {}),
+          ...(o.needs ? { needs: o.needs.split(",").map((s) => s.trim()).filter(Boolean) } : {}),
+          ...(o.base ? { base: o.base } : {}),
+          ...(o.plan ? { step: "plan" } : {}),
+          ...(o.key ? { idempotencyKey: o.key } : {}),
+        });
+        if (o.json) console.log(JSON.stringify(t, null, 2));
         else {
-          console.log(r.task_id);
-          log(`${r.created ? "opened" : "already open (same key)"}: ${r.issue_url} [${r.task.state}]`);
+          console.log(t.id);
+          log(`opened in ${t.channel} [${t.state}]${t.hold ? `: ${t.hold.reason}` : ""}`);
         }
-      } finally {
-        await h.close();
-      }
+      });
     });
 
   task
     .command("get")
-    .argument("<task-id>", "owner/repo#n")
+    .argument("<task-id>", "the task's ID on the board")
     .option("--json")
-    .description("One task with its derived state, runner, PR and last summary")
-    .action(async (id: string, o: { json?: boolean }) => {
-      const h = await openReady();
-      try {
-        const t = await h.client.getTask(id);
-        if (!t) {
-          log(`no task ${id}`);
-          process.exitCode = 1;
-          return;
-        }
-        if (o.json) console.log(JSON.stringify(t, null, 2));
-        else show(t);
-      } finally {
-        await h.close();
-      }
-    });
+    .description("One task with its state, who holds it, its pull request, usage and the last notes in its thread")
+    .action((id: string, o: { json?: boolean }) =>
+      act(async () => {
+        const d = await board.getTask(openBoard(), id);
+        if (o.json) console.log(JSON.stringify({ ...d.task, usage: d.usage, notes: d.notes }, null, 2));
+        else show(d);
+      }),
+    );
 
   task
     .command("approve")
-    .argument("<task-id>", "owner/repo#n")
+    .argument("<task-id>", "the task's ID on the board")
     .option("--json")
-    .description("Approve a task in review: squash-merge its PR, delete the branch, record task.approved (the task is done)")
-    .action(async (id: string, o: { json?: boolean }) => {
-      const h = await openReady();
-      try {
-        const t = await h.client.approveTask(id);
-        if (o.json) console.log(JSON.stringify(t, null, 2));
-        else {
-          log(`approved and merged ${t.pr_url ?? `PR #${t.pr}`}`);
-          show(t);
-        }
-      } finally {
-        await h.close();
-      }
-    });
+    .description("Approve a task in review: squash-merge its pull request and delete the branch (or accept its attached outputs), and complete the task")
+    .action((id: string, o: { json?: boolean }) =>
+      act(async () => {
+        const b = openBoard();
+        const r = await board.approveTask(b, detectGitHub(), id, { by: (await b.me()).handle });
+        if (o.json) console.log(JSON.stringify(r, null, 2));
+        else log(`approved ${id}: ${r.pr_url ? `merged ${r.pr_url}${r.merge_sha ? ` (${r.merge_sha.slice(0, 7)})` : ""}${r.branch_deleted ? ", branch deleted" : ""}` : r.task.result}`);
+      }),
+    );
 
   task
     .command("changes")
-    .argument("<task-id>", "owner/repo#n")
-    .requiredOption("--note <text>", "what should change; posted on the PR and handed to the next run's brief")
+    .argument("<task-id>", "the task's ID on the board")
+    .requiredOption("--note <text>", "what should change; posted in the thread and on the PR, and read by the next run")
     .option("--json")
-    .description("Request changes on a task in review: comment on the PR, record task.changes_requested, queue it again")
-    .action(async (id: string, o: { note: string; json?: boolean }) => {
-      const h = await openReady();
-      try {
-        const t = await h.client.requestChanges(id, o.note);
+    .description("Send a task in review back to the queue with a note for the next run")
+    .action((id: string, o: { note: string; json?: boolean }) =>
+      act(async () => {
+        const t = await board.requestChanges(openBoard(), detectGitHub(), id, o.note);
         if (o.json) console.log(JSON.stringify(t, null, 2));
-        else {
-          log(`changes requested on ${t.pr_url ?? `PR #${t.pr}`}; the task is ${t.state} and the next run gets your note`);
-          show(t);
-        }
-      } finally {
-        await h.close();
-      }
-    });
+        else log(`sent ${id} back: ${t.state}`);
+      }),
+    );
 
   task
     .command("requeue")
-    .argument("<task-id>", "owner/repo#n")
-    .option("--lane <lane>", `move it to this lane: ${LANE_HELP}; the agent:* label on the issue follows`)
-    .option("--reason <text>", "why, for the feed")
+    .argument("<task-id>", "the task's ID on the board")
+    .option("--lane <lane>", `move it to this lane: ${LANE_HELP}`)
+    .option("--model <id>", "ask for this model on the next run ('default' goes back to the lane's own)")
     .option("--json")
-    .description("Put a task back in the queue from any state but done: release its claim, move its lane label, record task.requeued (a worker claims it again)")
-    .action(async (id: string, o: { lane?: string; reason?: string; json?: boolean }) => {
-      if (o.lane && !isLaneName(o.lane)) throw new Error(`--lane: ${laneNameProblem(o.lane)}`);
-      const h = await openReady();
-      try {
-        const t = await h.client.requeueTask(id, { lane: o.lane ?? null, reason: o.reason ?? null });
+    .description("Put a failed or held task back in the queue, optionally on another lane or model")
+    .action((id: string, o: { lane?: string; model?: string; json?: boolean }) =>
+      act(async () => {
+        const t = await board.requeueTask(openBoard(), id, { ...(o.lane ? { lane: o.lane } : {}), ...(o.model ? { model: o.model === "default" ? null : o.model } : {}) });
         if (o.json) console.log(JSON.stringify(t, null, 2));
-        else {
-          log(`requeued; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""}`);
-          show(t);
-        }
-      } finally {
-        await h.close();
-      }
-    });
+        else log(`${id}: ${t.state}${t.lane ? ` on ${t.lane}` : ""}${t.model ? ` (${t.model})` : ""}`);
+      }),
+    );
 
   task
     .command("close")
-    .argument("<task-id>", "owner/repo#n")
-    .option("--reason <text>", "why, for the feed and the issue comment")
+    .argument("<task-id>", "the task's ID on the board")
+    .option("--reason <text>", "why, for the thread and the comment on GitHub")
     .option("--json")
-    .description("Close a task without a merge from any state but done: the issue (and an open PR) is closed on GitHub, a live claim released, task.closed recorded")
-    .action(async (id: string, o: { reason?: string; json?: boolean }) => {
-      const h = await openReady();
-      try {
-        const t = await h.client.closeTask(id, { reason: o.reason ?? null });
+    .description("Finish a task without a merge: canceled on the board, its open pull request and its issue closed on GitHub")
+    .action((id: string, o: { reason?: string; json?: boolean }) =>
+      act(async () => {
+        const r = await board.closeTask(openBoard(), detectGitHub(), id, { ...(o.reason ? { reason: o.reason } : {}) });
+        if (o.json) console.log(JSON.stringify(r, null, 2));
+        else log(`closed ${id}${r.github.pr_closed ? "; its pull request is closed" : ""}${r.github.issue_closed ? "; its issue is closed" : ""}${r.to_review ? `; ${r.to_review} goes to review without it` : ""}${r.canceled.length ? `; called off ${r.canceled.join(", ")}, which was looking at it` : ""}${r.github.error ? `; GitHub: ${r.github.error}` : ""}`);
+      }),
+    );
+
+  task
+    .command("grant")
+    .argument("<task-id>", "the task's ID on the board")
+    .option("--set <name>", "a capability set of the project's profile (.relay/project.json): its hosts and its environment variables, by name")
+    .option("--cloud <usd>", "a paid sandbox run of this task, up to this many US dollars")
+    .option("--json")
+    .description("Let one task use what no task has by default, for its text as it stands: a capability set, or a paid sandbox run up to a cap. A grant given before the task's text was edited counts for nothing")
+    .action((id: string, o: { set?: string; cloud?: string; json?: boolean }) =>
+      act(async () => {
+        if ((o.set === undefined) === (o.cloud === undefined)) throw new board.TaskError("say what to grant: --set <name>, or --cloud <usd>", 400);
+        const t = await board.grantTask(openBoard(), id, o.set !== undefined ? { set: o.set } : { cloudCapUsd: Number(o.cloud) });
         if (o.json) console.log(JSON.stringify(t, null, 2));
-        else {
-          log(`closed; the task is ${t.state}`);
-          show(t);
-        }
-      } finally {
-        await h.close();
-      }
-    });
+        else log(`granted ${id} ${o.set !== undefined ? `the set ${o.set}` : `a paid sandbox run of up to $${Number(o.cloud).toFixed(2)}`}; a worker that takes your tasks will use it on its next run`);
+      }),
+    );
 
   task
     .command("release")
-    .argument("<task-id>", "owner/repo#n")
-    .option("--note <text>", "why it is safe to run, for the feed")
+    .argument("<task-id>", "the task's ID on the board")
     .option("--json")
-    .description("Release a task the injection gate held: record task.released and queue it again (docs/SECURITY.md, \"The gate\")")
-    .action(async (id: string, o: { note?: string; json?: boolean }) => {
-      const h = await openReady();
-      try {
-        const t = await h.client.releaseTask(id, { note: o.note ?? null });
+    .description("Lift the injection gate's hold on a task for its text as it stands: it returns to the queue, and only text added later is graded again")
+    .action((id: string, o: { json?: boolean }) =>
+      act(async () => {
+        const t = await board.releaseTask(openBoard(), id);
         if (o.json) console.log(JSON.stringify(t, null, 2));
-        else {
-          log(`released; the task is ${t.state}${t.lane ? ` on the ${t.lane} lane` : ""} (the worker's gate grades it again)`);
-          show(t);
-        }
-      } finally {
-        await h.close();
-      }
-    });
+        else log(`released ${id}: ${t.state}`);
+      }),
+    );
 
   task
     .command("ls")
     .option("--project <slug>")
-    .option("--state <state>", `one of ${TASK_STATES.join(", ")}`)
+    .option("--state <state>", `one of ${board.RELAY_STATES.join(", ")}, open (the default) or all`)
+    .option("--lane <lane>")
     .option("-n <n>", "rows", "50")
     .option("--json")
-    .description("Tasks with derived state, newest first")
-    .action(async (o: { project?: string; state?: string; n: string; json?: boolean }) => {
-      if (o.state && !isTaskState(o.state)) throw new Error(`--state must be one of ${TASK_STATES.join(", ")}`);
-      const h = await openReady();
-      try {
-        const rows = await h.client.listTasks({ ...(o.project ? { project: o.project } : {}), ...(o.state && isTaskState(o.state) ? { state: o.state } : {}), limit: Number(o.n) });
+    .description("Tasks oldest first, the order the queue works them in")
+    .action((o: { project?: string; state?: string; lane?: string; n: string; json?: boolean }) =>
+      act(async () => {
+        const state = o.state as board.RelayState | "open" | "all" | undefined;
+        if (state && state !== "open" && state !== "all" && !(board.RELAY_STATES as readonly string[]).includes(state)) throw new board.TaskError(`--state must be one of ${board.RELAY_STATES.join(", ")}, open or all`, 400);
+        const rows = await board.listTasks(openBoard(), { ...(o.project ? { project: o.project } : {}), ...(state ? { state } : {}), ...(o.lane ? { lane: o.lane } : {}), limit: Number(o.n) || 50 });
         if (o.json) console.log(JSON.stringify(rows, null, 2));
-        else {
-          if (!rows.length) log("no tasks");
-          for (const t of rows) console.log(line(t));
-        }
-      } finally {
-        await h.close();
-      }
-    });
+        else for (const t of rows) console.log(line(t));
+      }),
+    );
 }

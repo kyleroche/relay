@@ -1,9 +1,10 @@
 import { Command } from "commander";
 import { writeFileSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import {
   openHarness, loadConfig, ensureHome, openDb, migrate, currentVersion, seedRegistry, onboardModel, retrieveGuidance, assertOnboarded, NotOnboardedError, repo,
-  runFx, runClaude, recordLane, defaultHookContext, hookPaths,
+  runFx, runClaude, recordLane, defaultHookContext, hookPaths, planSetup, SERVICE_LABEL, SYSTEMD_UNIT,
 } from "@relay/core";
 import type { FxProvider, ClaudeModel, FileConfig } from "@relay/core";
 import { registerAssetCommands } from "./commands/assets.ts";
@@ -18,12 +19,14 @@ import { registerMemory } from "./commands/memory.ts";
 import { registerToken } from "./commands/token.ts";
 import { registerInvite } from "./commands/invite.ts";
 import { registerTask } from "./commands/task.ts";
-import { registerWebhook } from "./commands/webhook.ts";
+import { registerSteps } from "./commands/steps.ts";
+import { registerAdopt } from "./commands/adopt.ts";
+import { registerHandoff } from "./commands/handoff.ts";
 import { registerWork } from "./commands/work.ts";
 import { registerLane } from "./commands/lane.ts";
 import { registerProjectCommands } from "./commands/project.ts";
 import { openReady, RELAY_ROOT } from "./commands/_common.ts";
-import { containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, sandboxCheck, type Check } from "./commands/probes.ts";
+import { boardCheck, containerCheck, containerReport, inContainer, lanesFromChecks, mcpCheck, metersCheck, pathCheck, probeTools, recordedNodeCheck, sandboxCheck, type Check } from "./commands/probes.ts";
 import { projectsEventsReport } from "./commands/events-check.ts";
 
 const log = (m: string) => console.error(`[relay] ${m}`);
@@ -36,7 +39,9 @@ registerAssetCommands(program);
 registerToken(program);
 registerInvite(program);
 registerTask(program);
-registerWebhook(program);
+registerSteps(program);
+registerAdopt(program);
+registerHandoff(program);
 registerWork(program, version);
 registerLane(program);
 registerProjectCommands(program);
@@ -91,7 +96,7 @@ program
     // the config after openReady() renewed the site token, so the mcp line probes with the token the bridge would send
     let live = cfg;
     if (cfg.site && !cfg.siteToken) checks.push({ status: "fail", name: "mode", detail: `site ${cfg.site} is configured without a token; run: relay setup --site ${cfg.site}` });
-    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token, invite, task and webhook commands, the hooks and the MCP server use it)` : "local: the database on this machine" });
+    else checks.push({ status: "ok", name: "mode", detail: siteMode ? `site: ${cfg.site} (memory, feed, token and invite commands, the hooks and the MCP server use it; tasks and workers are on the board)` : "local: the database on this machine" });
     if (siteMode) {
       const t0 = Date.now();
       // Where the credential came from, never the credential: device flow, invite, pasted token, or RELAY_TOKEN.
@@ -136,10 +141,14 @@ program
     } catch (e) {
       checks.push({ status: siteMode ? "warn" : "fail", name: "database", detail: `unreachable: ${(e instanceof Error ? e.message : String(e)).slice(0, 120)}` });
     }
+    checks.push(await boardCheck(cfg.board));
     // the stdio MCP server the CLIs start follows the same mode; in site mode, prove the site answers it
     checks.push(await mcpCheck(live, { entry: hookPaths(defaultHookContext(RELAY_ROOT)).mcpBin }));
     checks.push({ status: cfg.gateway.apiKey ? "ok" : "warn", name: "gateway", detail: cfg.gateway.apiKey ? "AI_GATEWAY_API_KEY set (embeddings on)" : "AI_GATEWAY_API_KEY unset; retrieval uses full-text only" });
     checks.push(metersCheck(cfg.home));
+    // a Node path relay recorded that has since been removed (a Homebrew upgrade): hooks and the MCP server fail silently
+    const hookCtx = defaultHookContext(RELAY_ROOT);
+    checks.push(recordedNodeCheck({ configs: planSetup(hookCtx).flatMap((p) => p.files.map((f) => f.path)), owned: [join(hookCtx.userHome, "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`), join(hookCtx.userHome, ".config", "systemd", "user", SYSTEMD_UNIT)] }));
 
     for (const c of checks) console.log(`${c.status.padEnd(5)} ${c.name.padEnd(13)} ${c.detail}`);
     if (checks.some((c) => c.status === "fail")) process.exitCode = 1;

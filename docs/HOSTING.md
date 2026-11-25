@@ -1,8 +1,9 @@
 # Hosting the web app
 
-The web app (`apps/web`) is a Next.js app that shows the feed, projects and usage meters, serves the HTTP memory
-server, and ingests webhooks from GitHub and Vercel. It holds no vendor credentials: it only ever receives events
-and usage numbers that runners and GitHub send it. It deploys to Vercel with a Neon Postgres database.
+The web app (`apps/web`) is a Next.js app that shows the board, the feed, projects and usage meters, serves the HTTP
+memory server and the task API, and ingests webhooks from GitHub and Vercel. Tasks and workers are not in its
+database: it reads and writes them on the team's Vercel Board, as its own deployment (`docs/ARCHITECTURE.md`, "The
+site and the board"). It holds no vendor credentials. It deploys to Vercel with a Neon Postgres database.
 
 ## 1. Vercel project
 
@@ -25,14 +26,46 @@ Or from the CLI: `vercel link` in the repo root, then `vercel --cwd apps/web`.
 4. Locally, leave `DATABASE_URL` unset and the app runs on embedded PGlite. `vercel env pull` fetches the Neon URL
    into `.env.local` if you want to run against production data from your machine; do not commit that file.
 
+## 2b. The team's Vercel Board
+
+Tasks and workers live on the board of a Vercel team (`docs/WORKERS.md`, "The board"), and the site reaches it with
+its deployment's own identity, so there is no board credential to set.
+
+1. **The project must be on the team that owns the board.** A deployment of another team cannot read it, and every
+   page that shows tasks or workers says so in place of the board.
+2. **Grant the site the queues.** A team's projects start with read, post and label on its board. From a machine
+   whose Vercel login manages the board, run `relay setup --board --site-project <the Vercel project's name>`: it
+   grants the project's production deployment everything in `work/`, adds that deployment
+   (`vercel:project:<id>:production`) to the machine's `board.from` so its workers take the tasks the site opens,
+   and prints the `RELAY_BOARD_FROM` line for step 3 (`docs/WORKERS.md`, "A machine becomes a worker"). The same
+   command registers relay's schemas, once per team. Without the grant the site can open tasks but cannot approve,
+   release, requeue or close one someone else opened: an approval is refused before anything merges, and the board
+   page shows a warning that the deployment does not manage `work/`.
+3. **Tell the site whose blocks to believe.** Set `RELAY_BOARD_FROM` on the project to the worker logins, as
+   comma-separated actor IDs. The site counts a usage or run block only from its own deployment and those logins;
+   without it the feed shows tasks opening, being claimed and closing, and no run outcomes or usage. Set it before
+   the workers run: usage from a login that was not yet listed is not counted, and is not backfilled later.
+4. **Another board than the team's default** is `RELAY_BOARD_TEAM` and `RELAY_BOARD_NAME`, the same names a worker
+   reads.
+
+The board wakes the deployment at `https://<site>/api/board` for its two watchers, the ledger and the brief; the
+route needs no configuration and no session, since the board verifies its own wake-ups.
+
+Locally the site uses your `vercel login`, or the board at `BOARD_URL` (`npx vb serve` prints it). Nothing wakes a
+local server, so the pages that show the feed sync it themselves, at most every 15 seconds. With `RELAY_DATA=mock`
+the site runs on an in-memory demo board and needs no login.
+
 ## 3. Environment variables
 
-`.env.example` at the repo root lists every name the app reads. Set each one in Vercel → Project → Settings →
+`.env.example` at the repo root and `apps/web/.env.example` list the names the app reads. Set each one in Vercel → Project → Settings →
 Environment Variables (Production and Preview), or with `vercel env add NAME`.
 
 | Name | From | Used by |
 |---|---|---|
 | `DATABASE_URL` | Neon integration (automatic) | everything that touches Postgres |
+| `RELAY_BOARD_FROM` | the worker logins, as comma-separated actor IDs; `relay setup --board --site-project` prints the line | whose `relay-usage@1` and `relay-run@1` blocks the site believes, besides its own (step 2b) |
+| `RELAY_BOARD_TEAM`, `RELAY_BOARD_NAME` | optional: a team ID or slug, a named board | a board other than the default one of the project's own team |
+| `BOARD_URL` | local only: what `npx vb serve` prints | a local board in place of the team's |
 | `AI_GATEWAY_API_KEY` | Vercel → AI Gateway → API keys | embeddings for memory search; the optional overflow lane |
 | `GITHUB_WEBHOOK_SECRET` | you generate it (`openssl rand -hex 32`) | verifies `X-Hub-Signature-256` on the GitHub webhook |
 | `VERCEL_WEBHOOK_SECRET` | shown once when the Vercel webhook is created | verifies `x-vercel-signature` on the Vercel webhook |
@@ -46,16 +79,22 @@ Environment Variables (Production and Preview), or with `vercel env add NAME`.
 | `BLOB_PUBLIC_READ_WRITE_TOKEN` | a second, public Blob store | `relay asset publish` and `POST /assets/{id}/publish` |
 | `RELAY_ASSET_SIGNING_KEY` | `openssl rand -hex 32` | signs local view/upload URLs and HTML bundle URLs |
 | `CRON_SECRET` | `openssl rand -hex 32` | Vercel sends it as a bearer to `/api/cron/assets-expire` (the daily retention sweep in `apps/web/vercel.json`) |
-| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | opening tasks, asset comments, reopening rejected issues, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
+| `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` | the GitHub App (step 4b), or leave unset and use the manifest flow on `/setup/github` | merging a task's pull request on approval and deleting its branch, the comment on a pull request sent back, closing a closed task's pull request and issue, asset comments, the `relay.md` probe on install, as the app; installation tokens per repository, in memory only. The environment wins over a stored app |
 | `GITHUB_APP_SLUG` | the app's URL slug (optional with the environment pair) | the install link on `/setup/github` |
-| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with issues:write on the managed repos | the fallback when no app is configured: asset comments, reopening rejected issues, opening tasks |
-| `RELAY_ALLOWED_SENDERS` | comma-separated logins | which commenters' usage blocks count towards the ledger (else the repo variable of the same name, else everyone), and who may open a task for a worker by labelling an issue (else the repo variable; with neither, nobody) |
+| `GITHUB_APP_TOKEN` or `GITHUB_TOKEN` | a fine-grained token with contents, pull requests and issues write on the managed repos | the fallback when no app is configured, for the same merges, comments and closes |
+| `RELAY_ALLOWED_SENDERS` | comma-separated logins | whose `agent:<lane>` label on an issue opens a task on the board (else the repository's Actions variable of the same name; with neither, nobody) |
+| `RELAY_GATEWAY_TOKEN` | optional: the model gateway's key (Vercel AI Gateway → API keys). Make it a key of its own, with a budget (step 8c) | paid sandbox runs (step 8c), experimental. Without it no run is offered or started. The sandbox's firewall adds it to requests for the gateway's coding endpoint, from any process in the sandbox; it cannot be read there, and it can be used there |
+| `RELAY_GATEWAY_URL` | optional: an https URL | the gateway endpoint Claude Code is pointed at in a paid run; unset means Vercel AI Gateway's Claude Code endpoint |
+| `RELAY_CLOUD_AFTER_MINUTES` | optional: a positive number | how long a task waits in the queue before a paid run is offered; unset means 15 |
+| `RELAY_CLOUD_MAX_CAP_USD` | optional: a positive number | the most a person may approve for one paid run, in US dollars; unset means 10, and never above 1000 |
+| `RELAY_LEAD_URL` | optional: the origin of relay's lead (step 8b) | when set, the site wakes the lead about a task that failed, was held at the gate or reached review; unset means no lead |
+| `RELAY_LEAD_WAKE_SECRET` | with `RELAY_LEAD_URL`: at least 32 characters (`openssl rand -hex 32`), the same value as on the lead's project | signs each wake-up (HMAC-SHA256) so the lead knows the site sent it; used for nothing else. Unset or shorter means no wake-up is sent |
 | `GITHUB_OAUTH_CLIENT_ID` | the GitHub OAuth app (step 4) | browser sign-in |
 | `GITHUB_OAUTH_CLIENT_SECRET` | the same OAuth app, generated once | browser sign-in; the code exchange |
 | `RELAY_SESSION_SECRET` | `openssl rand -hex 32` (at least 32 characters; shorter is refused) | signs the `relay_session` cookie (HS256) and seals the GitHub App key the manifest flow stores; rotating it signs everyone out and makes a stored app unreadable |
 | `RELAY_ALLOWED_USERS` | comma-separated GitHub logins, e.g. `kyle,octocat` | who may sign in (case-insensitive; empty means nobody) |
 | `RELAY_REVIEWER` | optional actor, mock mode only | who the demo's approve/reject clicks are attributed to (default `human:demo`); with a database the signed-in user is the reviewer |
-| `RELAY_PLAN_METERS` | optional JSON | a manual override for the header's plan meters, per meter id: `[{"id","label","subscription","percentUsed","resetsAt"}]`. By default the meters come from the workers: Claude Code's own 5-hour and weekly rate limits, saved by relay's status line on each machine and sent with the worker heartbeat (`docs/WORKERS.md`, "Plan meters"). Set `max-week-fable` here to show a third Claude bar; nothing documented reports a per-model meter |
+| `RELAY_PLAN_METERS` | optional JSON | a manual override for the header's plan meters, per meter id: `[{"id","label","subscription","percentUsed","resetsAt"}]`. The workers' own readings (Claude Code's 5-hour and weekly rate limits, saved by relay's status line on each machine) are kept by each worker in its message on the board (`docs/WORKERS.md`, "Plan meters"), and the site reads the freshest one when this variable is unset. Set `max-week-fable` here to show a third Claude bar; nothing documented reports a per-model meter |
 
 Tokens for API clients come from the site's authorization server (`docs/INTEGRATIONS.md`: OAuth with consent for MCP
 clients, the device flow for CLIs and bots approved on `/activate`, invite codes from `relay invite create`) or from
@@ -103,14 +142,16 @@ Routes the proxy leaves public (info, docs, the well-known files, OpenAPI, llms.
 webhooks, the cron, signed asset URLs, and `/api/v1` with a bearer) and the ones that need a session are tabled in
 `docs/SECURITY.md`. Mock mode has no sign-in: it runs as the fake viewer `human:demo`.
 
-## 4b. GitHub App (tasks, comments, the task bus)
+## 4b. GitHub App (merges, comments, issue intake)
 
-The web app acts on GitHub as an App installed once per organization, so no person's token is stored anywhere. Two
+The web app acts on GitHub as an App installed once per organization, so no person's token is stored anywhere. It
+is the credential an approval on the site merges with (a worker and the CLI use the machine's own `gh` login), and
+its deliveries are how an `agent:<lane>` label on an issue opens a task and how a merge on GitHub completes one. Two
 ways to set it up; the environment always wins over a stored app, which is also how you rotate.
 
 **One click (fresh deployment).** Sign in, open `https://<site>/setup/github`, optionally name the organization that
 should own the app, and press Create. The page posts a GitHub App manifest (name `relay-<host>`, permissions Actions
-read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues write, Metadata read, Pull requests write; events issues, issue_comment,
+read, Contents write (approve squash-merges the PR and deletes its branch), Deployments read, Issues write, Metadata read, Pull requests write; events issues,
 pull_request, pull_request_review, workflow_run, deployment_status; webhook `https://<site>/api/webhooks/github`) to
 `https://github.com/settings/apps/new` (or the organization's page). GitHub asks you to confirm and redirects to
 `/setup/github/callback`, which exchanges the one-time code (`POST /app-manifests/{code}/conversions`) and stores the
@@ -149,7 +190,7 @@ arrived and when the last one did). Organization → Settings → Webhooks → A
 - Payload URL: `https://<RELAY_PUBLIC_URL>/api/webhooks/github`
 - Content type: `application/json`
 - Secret: the value of `GITHUB_WEBHOOK_SECRET`
-- Events: *Let me select individual events* → Issues, Issue comments, Pull requests, Pull request reviews,
+- Events: *Let me select individual events* → Issues, Pull requests, Pull request reviews,
   Workflow jobs, Workflow runs, Pushes.
 
 `docs/FEED.md` lists which event becomes which feed row. The handler is idempotent on the `X-GitHub-Delivery`
@@ -199,7 +240,8 @@ The firewall answers an over-limit request with 403 before it reaches the app. A
 ## 8. Publishing the CLI to npm
 
 The `relay` command ships as `@kyleroche/relay` (`packages/cli`, built with `tsup` into `dist/`: the CLI, the stdio
-MCP server, the hook scripts and the SQL migrations, plus the workflow templates). `.github/workflows/release.yml`
+MCP server, the hook scripts, the SQL migrations, the shipped steps with their checks, the Griptape Nodes shim and the
+container files). `.github/workflows/release.yml`
 publishes it when a `v*` tag is pushed whose version matches `packages/cli/package.json`; it typechecks, tests, runs
 `scripts/check-package.sh` (pack, install into an empty directory, run `relay` and `relay-mcp`), then
 `pnpm publish --provenance --access public`.
@@ -224,7 +266,86 @@ valid; a checkout records its `packages/cli/hooks` and `packages/mcp/bin` paths 
 
 Releases are staged, not published, by the workflow: pushing a `v<version>` tag (matching `packages/cli/package.json`) runs the checks and `npm stage publish` through the package's trusted publisher, then a maintainer approves the staged version on npmjs.com (Staged packages, 2FA) or with `npm stage approve`. Nothing goes live without that approval, and no npm token exists anywhere.
 
+## 8b. The lead (optional)
+
+The lead (`apps/lead`) is a separate Vercel project on the same team as the site, with its own environment, token
+and deployment steps: `apps/lead/README.md`. It reaches this site only through `/mcp` with a scoped token minted on
+the Access page (`tasks:read`, `tasks:write`, `memory:read`, `feed:read`, `events:write`; never `tasks:decide`,
+`tokens:write` or `memory:write`). Its model calls are billed per token through Vercel AI Gateway to the team that
+owns its project. The site runs without it.
+
+To have the site wake the lead, make one secret of at least 32 characters (`openssl rand -hex 32`), set it as
+`RELAY_LEAD_WAKE_SECRET` on both projects, set `RELAY_LEAD_URL` on the site's project to the lead's origin (https),
+and deploy both. The site then posts to the lead's `/relay/wake` when a task failed, was held at the gate or reached
+review, with a timestamp and an HMAC-SHA256 signature over the timestamp and the body. It sends no token: the site
+deployment's own Vercel OIDC token is its identity on the team's board and goes nowhere else. With the URL set and no
+usable secret the site sends nothing and says why once in its log; a lead without the secret answers 503. The
+`lead` watcher exists only where `RELAY_LEAD_URL` is set, and only the board wakes it: a site the board does not
+wake (local development, a board at `BOARD_URL`) wakes no lead.
+
+The wake-up carries no Vercel credential, so Vercel's Deployment Protection does not let it through. `RELAY_LEAD_URL`
+must be an address of the lead that protection leaves open, normally its production domain; behind protection the
+wake-up gets Vercel's 401 and is dropped (`apps/lead/README.md`, "Deploy").
+
+## 8c. Paid sandbox runs (optional)
+
+A queued task that none of your workers can take can be offered a run in a Vercel Sandbox on paid credits. Nothing
+starts or spends until a signed-in person approves a cap for that one task (`docs/PROFILE.md`, "Paid sandbox runs").
+
+This is experimental: no paid run has been made against a real sandbox or a real gateway. It stays off unless
+`RELAY_GATEWAY_TOKEN` is set. Before you set it, read `docs/SECURITY.md`, "What a paid run's lane can reach": the
+lane can run any code in the sandbox, and that code can use what the sandbox's firewall signs.
+
+The deployment needs:
+
+| Need | Why |
+|---|---|
+| `RELAY_GATEWAY_TOKEN` | the model gateway's key; without it the offer is never shown. Give it a budget (below) |
+| the site's GitHub App (step 4b), installed on the task's repository | the site mints an installation token for that one repository for each start, with `contents: write`, `pull_requests: write` and `metadata: read` only; `GITHUB_TOKEN` alone is not enough |
+| a rule on the default branch of each repository that may run this way | a pull request with at least 1 approval, "Require approval of the most recent reviewable push" on, and relay's GitHub App not on the bypass list. The site asks GitHub before a run is approved and before it starts, and refuses without it (below) |
+| nothing for the board | the sandbox reaches it as the site's deployment, under the worker's profile, with its rights narrowed to the task's own queue (`work/<project>`) and the workers channel |
+| nothing for the sandbox itself on Vercel | it is created with the deployment's own OIDC token; locally, `vercel env pull` provides one |
+
+**A budget on the gateway's key.** The cap a person approves is kept by relay's own model calls. The firewall adds
+this key to any request for the gateway's coding endpoint, whichever process in the sandbox sent it, so code a
+fooled lane runs there can spend past the cap. What it can spend at most is the budget on the key. Make a key for
+paid runs alone and give it one:
+
+```bash
+vercel ai-gateway api-keys create --name relay-paid-runs --amount 50 --refresh-period monthly
+```
+
+Or add one to a key you have (`vercel ai-gateway budgets set api-key relay-paid-runs --amount 50 --refresh-period
+monthly`), or use the key's Edit dialog in the dashboard. Three things to know, from Vercel's own documentation: a
+budget is at least 1 US dollar; it is a soft cap, checked when a request starts, so the request that crosses it
+still completes; and a new budget may not count requests for its first minute or two. A key with no budget of its
+own, and no default budget for the team's keys, is limited only by the team's budget, if there is one. relay does not make a key per run: Vercel's API for that takes a person's
+Vercel access token, which the deployment does not hold and should not.
+
+**The rule on the default branch.** In the repository: Settings, Rules, Rulesets, New branch ruleset, target the
+default branch, "Require a pull request before merging" with 1 required approval and "Require approval of the most
+recent reviewable push", bypass list empty. Why each part is needed is in `docs/PROFILE.md`, "The branch rule". Two
+consequences:
+
+- relay's own Approve merges as the same GitHub App, so on that repository it merges a pull request only after a
+  person approved it on GitHub. Do not put the App on the bypass list to get around that: every paid run's token
+  would bypass the rule too, and the site refuses a run when GitHub says the App may bypass.
+- Classic branch protection does not count unless the App may read its settings (the Administration permission,
+  which relay's App does not ask for). Use a ruleset.
+
+`RELAY_CLOUD_AFTER_MINUTES` and `RELAY_CLOUD_MAX_CAP_USD` set when a run is offered and the most a person may
+approve. A project opts out with `"cloud": "never"` in its profile.
+
+The sandbox installs `@kyleroche/relay` from npm at the version in `packages/cli/package.json` the site was built
+with, and Claude Code at the one version named in `packages/core/src/cloud/plan.ts` (`CLOUD_CLAUDE_CODE_VERSION`).
+The relay version must be published (section 8), with `relay work --task` and `--billing` in it, before a paid run
+can work. Nothing here has been run against a real sandbox or a real gateway yet.
+
 ## 9. Checklist
+
+- [ ] Optional, experimental: `RELAY_GATEWAY_TOKEN` set to a key with a budget, the deployed CLI version published
+      and a ruleset on each repository's default branch (step 8c), if paid sandbox runs are wanted;
+      `RELAY_LEAD_URL` set, and the same `RELAY_LEAD_WAKE_SECRET` on the site and on the lead, if the lead is deployed
 
 - [ ] Project imported with root directory `apps/web`
 - [ ] Neon connected; `DATABASE_URL` present in Production and Preview
@@ -235,4 +356,5 @@ Releases are staged, not published, by the workflow: pushing a `v<version>` tag 
 - [ ] GitHub org webhook created, recent deliveries return 200
 - [ ] Vercel webhook created for the projects that deploy previews
 - [ ] Custom domain resolves and `RELAY_PUBLIC_URL` matches it
-- [ ] A labelled test issue produces `run.started`, `step.usage`, `pr.opened` rows in the feed
+- [ ] The project is on the team that owns the board; `relay setup --board --site-project <name>` ran on a worker machine and `RELAY_BOARD_FROM` is set; the board page lists the workers
+- [ ] A test task (`relay task create`, or an issue labelled `agent:<lane>` by a login in `RELAY_ALLOWED_SENDERS`) shows on the board, and its run produces `task.created`, `run.started`, `step.usage`, `run.finished` and `pr.opened` rows in the feed

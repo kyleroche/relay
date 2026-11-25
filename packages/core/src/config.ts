@@ -3,7 +3,7 @@
  * (`DATABASE_URL`, `AI_GATEWAY_API_KEY`) and ~/.harness/config.json for preferences (`staleDays`, the embedding
  * model). Nothing is read from other tools' config files.
  */
-import { readFileSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readSiteConfig } from "./client/site.ts";
@@ -28,9 +28,6 @@ export interface HarnessConfig {
   staleDays: number;
   /** Shell command used to gate transcript segments before capture (e.g. a Jev invocation). Unset = built-in rule. */
   captureGate?: string;
-  /** `owner/relay` and ref substituted into the caller workflows by `relay link` (env RELAY_REPO / RELAY_REF win). */
-  relayRepo?: string;
-  relayRef?: string;
   /** Hosted site the CLI talks to instead of a database (`relay setup --site`; env RELAY_SITE wins). */
   site?: string;
   /** Bearer token for the site, from ~/.harness/credentials.json (env RELAY_TOKEN wins). Never printed. */
@@ -40,6 +37,25 @@ export interface HarnessConfig {
   siteTokenExpiresAt?: string;
   siteTokenSource?: "device" | "invite" | "manual" | "env";
   siteTokenName?: string;
+  /** The Vercel Board relay's tasks live on (`relay setup --board`); unset, the default board of the login's team. */
+  board: BoardConfig;
+}
+
+/**
+ * Which board, and whose tasks this machine takes. The credential is never here: the Board SDK uses the machine's
+ * own `vercel login` (or `BOARD_TOKEN`, or `BOARD_URL` for a local board), which is why nothing is copied between machines.
+ */
+export interface BoardConfig {
+  /** The team that owns the board, by ID (`team_…`) or slug (env RELAY_BOARD_TEAM). */
+  team?: string;
+  /** A named board of that team instead of its default one (env RELAY_BOARD_NAME). */
+  name?: string;
+  /**
+   * The owners whose tasks a worker here claims, by actor ID, besides the login's own (env RELAY_BOARD_FROM, comma
+   * separated): the project that runs relay's control plane, another person on the team. A task's text is
+   * instructions for whoever claims it, so this list is who the machine takes instructions from.
+   */
+  from: string[];
 }
 
 /** The subset a user may put in ~/.harness/config.json. */
@@ -47,9 +63,9 @@ export interface FileConfig {
   staleDays?: number;
   gateway?: { embeddingModel?: string; embeddingDim?: number };
   capture?: { gateCommand?: string };
-  relay?: { repo?: string; ref?: string };
   /** The hosted relay site the CLI talks to; the token lives in credentials.json next to this file. */
   site?: string;
+  board?: { team?: string; name?: string; from?: string[] };
 }
 
 const HOME = process.env.RELAY_HOME ?? join(homedir(), ".harness");
@@ -63,6 +79,7 @@ export function defaultConfig(): HarnessConfig {
     dbFile: join(HOME, "relay.pglite"),
     gateway: { embeddingModel: "openai/text-embedding-3-small", embeddingDim: 1536 },
     staleDays: 30,
+    board: { from: [] },
   };
 }
 
@@ -74,12 +91,14 @@ export function loadConfig(): HarnessConfig {
     if (file.gateway?.embeddingModel) cfg.gateway.embeddingModel = file.gateway.embeddingModel;
     if (typeof file.gateway?.embeddingDim === "number") cfg.gateway.embeddingDim = file.gateway.embeddingDim;
     if (file.capture?.gateCommand) cfg.captureGate = file.capture.gateCommand;
-    if (file.relay?.repo) cfg.relayRepo = file.relay.repo;
-    if (file.relay?.ref) cfg.relayRef = file.relay.ref;
+    if (file.board?.team) cfg.board.team = file.board.team;
+    if (file.board?.name) cfg.board.name = file.board.name;
+    if (Array.isArray(file.board?.from)) cfg.board.from = file.board.from.filter((a): a is string => typeof a === "string" && a.trim() !== "");
   }
+  if (process.env.RELAY_BOARD_TEAM) cfg.board.team = process.env.RELAY_BOARD_TEAM;
+  if (process.env.RELAY_BOARD_NAME) cfg.board.name = process.env.RELAY_BOARD_NAME;
+  if (process.env.RELAY_BOARD_FROM) cfg.board.from = process.env.RELAY_BOARD_FROM.split(",").map((a) => a.trim()).filter(Boolean);
   if (process.env.RELAY_CAPTURE_GATE) cfg.captureGate = process.env.RELAY_CAPTURE_GATE;
-  if (process.env.RELAY_REPO) cfg.relayRepo = process.env.RELAY_REPO;
-  if (process.env.RELAY_REF) cfg.relayRef = process.env.RELAY_REF;
   if (process.env.DATABASE_URL) cfg.databaseUrl = process.env.DATABASE_URL;
   const site = readSiteConfig(cfg.home);
   if (site.site) cfg.site = site.site;
@@ -90,6 +109,26 @@ export function loadConfig(): HarnessConfig {
   if (site.tokenName) cfg.siteTokenName = site.tokenName;
   if (process.env.AI_GATEWAY_API_KEY) cfg.gateway.apiKey = process.env.AI_GATEWAY_API_KEY;
   return cfg;
+}
+
+/**
+ * Write the `board` entry of the config file: the fields given replace what is there, the rest is kept, and a field
+ * given as null is removed. Returns the entry as written and the file it is in.
+ */
+export function writeBoardConfig(input: { team?: string | null; name?: string | null; from?: string[] | null }, home: string = HOME): { board: NonNullable<FileConfig["board"]>; configPath: string } {
+  const configPath = join(home, "config.json");
+  mkdirSync(home, { recursive: true });
+  const file = (existsSync(configPath) ? JSON.parse(readFileSync(configPath, "utf8")) : {}) as FileConfig;
+  const board: NonNullable<FileConfig["board"]> = { ...(file.board ?? {}) };
+  for (const key of ["team", "name", "from"] as const) {
+    const v = input[key];
+    if (v === null || (Array.isArray(v) && !v.length)) delete board[key];
+    else if (v !== undefined) (board[key] as string | string[]) = v;
+  }
+  if (Object.keys(board).length) file.board = board;
+  else delete file.board;
+  writeFileSync(configPath, JSON.stringify(file, null, 2) + "\n");
+  return { board, configPath };
 }
 
 export function ensureHome(cfg: HarnessConfig): void {

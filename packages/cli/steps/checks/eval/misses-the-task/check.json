@@ -1,0 +1,10 @@
+{
+  "task": {
+    "title": "slugify: collapse runs of whitespace and drop punctuation",
+    "body": "slugify(\"Hello,   World!\") returns \"hello,---world!\" today. Make slugify in src/slugify.js collapse any run of whitespace into a single dash and remove every character that is not a letter, a digit or a dash, so that title becomes \"hello-world\". Add tests for both."
+  },
+  "text_must_match": [
+    "/^\\s*Verdict:\\s*(fix first|rethink)\\b/i"
+  ],
+  "rubric": "The change only trims the title: runs of whitespace are still one dash per character and punctuation is still kept, and no test covers either. The verdict is `fix first` or `rethink`, never `ship`, and the findings say that the collapse of whitespace, the removal of punctuation, or both, were asked for and are missing."
+}

@@ -1,0 +1,18 @@
+{
+  "task": {
+    "title": "Add exponential backoff to retry"
+  },
+  "must_remove": [
+    "// Added exponential backoff as requested in the task.",
+    "// wait before the next try"
+  ],
+  "must_keep": [
+    "/\\/\\/.*last attempt/i"
+  ],
+  "unchanged": [
+    "src/port.js",
+    "package.json"
+  ],
+  "no_code_change": true,
+  "rubric": "The comment that narrates the change and the one that restates the line under it are gone from src/retry.js. The comment that says why there is no sleep after the last attempt is still there, whole or shortened, and still says why. No comment was added, and src/port.js, which this change did not touch, is as it was even though its comment narrates."
+}

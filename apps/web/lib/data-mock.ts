@@ -1,42 +1,12 @@
 /** DataSource over the in-memory dataset in ./mock.ts. */
-import { deriveTaskStatus } from "@relay/core";
-import { stationOf, taskTitle as coreTaskTitle } from "@relay/core/tasks/station.ts";
 import { appendEvent, dataset, MOCK_PROJECTS } from "./mock.ts";
-import type {
-  BoardTask,
-  DataSource,
-  FeedEvent,
-  FeedOptions,
-  ModelInfo,
-  PlanMeter,
-  ProjectDetail,
-  ProjectSummary,
-  Subscription,
-  SubscriptionUsage,
-  TaskView,
-  UsageSummary,
-  UsageWindow,
-} from "./types.ts";
-import { fmtUntil, dayKey } from "./format.ts";
+import type { DataSource, FeedEvent, FeedOptions, LedgerUsage, ModelInfo, ProjectDetail, ProjectSummary, Subscription, SubscriptionUsage, UsageWindow } from "./types.ts";
+import { dayKey } from "./format.ts";
 
 const H = 3_600_000;
 const D = 24 * H;
 
 const WINDOW_MS: Record<UsageWindow, number> = { "5h": 5 * H, "7d": 7 * D, "30d": 30 * D };
-
-/** Plan caps in cost-equivalent dollars. Mock only; real meters come from the vendor. */
-const CAPS = { fiveHour: 1.6, weeklyAll: 7.4, weeklyNamed: 7.2 };
-const NAMED_MODEL = "anthropic/claude-fable-5-1";
-
-function nextFiveHourReset(now: number): string {
-  return new Date(Math.ceil(now / (5 * H)) * 5 * H).toISOString();
-}
-function nextWeeklyReset(now: number): string {
-  // Weekly windows reset every 7 days from a fixed anchor (a Wednesday 14:00 UTC).
-  const anchor = Date.UTC(2026, 0, 7, 14, 0, 0);
-  const period = 7 * D;
-  return new Date(anchor + Math.ceil((now - anchor) / period) * period).toISOString();
-}
 
 function usageRows(events: FeedEvent[], since: number): SubscriptionUsage[] {
   const map = new Map<Subscription, SubscriptionUsage & { ctxSum: number }>();
@@ -66,33 +36,6 @@ function usageRows(events: FeedEvent[], since: number): SubscriptionUsage[] {
     .sort((a, b) => a.subscription.localeCompare(b.subscription));
 }
 
-function meters(events: FeedEvent[], now: number): PlanMeter[] {
-  const sumCost = (since: number, pred: (e: FeedEvent) => boolean) =>
-    events
-      .filter((e) => e.kind === "step.usage" && new Date(e.ts).getTime() >= since && pred(e))
-      .reduce((s, e) => s + e.cost_equiv, 0);
-  const fiveStart = new Date(nextFiveHourReset(now)).getTime() - 5 * H;
-  const weekStart = new Date(nextWeeklyReset(now)).getTime() - 7 * D;
-  const max = (e: FeedEvent) => e.subscription === "max";
-  const five = sumCost(fiveStart, max) / CAPS.fiveHour;
-  const weekAll = sumCost(weekStart, max) / CAPS.weeklyAll;
-  const weekNamed = sumCost(weekStart, (e) => max(e) && e.model === NAMED_MODEL) / CAPS.weeklyNamed;
-  const r5 = nextFiveHourReset(now);
-  const rw = nextWeeklyReset(now);
-  const pct = (x: number) => Math.min(100, Math.round(x * 100));
-  // Demo numbers (source "demo" so the UI can say so): computed from the mock ledger against made-up caps. A real
-  // deployment composes these from the workers' heartbeat readings (lib/meters.ts).
-  const demo = { source: "demo" as const, capturedAt: new Date(now - 4 * 60_000).toISOString(), worker: "laptop" };
-  const none = { source: "none" as const, capturedAt: null, worker: null };
-  return [
-    { id: "max-5h", label: "5-hour", subscription: "max", percentUsed: pct(five), resetsAt: r5, resetsIn: fmtUntil(r5, now), ...demo },
-    { id: "max-week", label: "Weekly, all models", subscription: "max", percentUsed: pct(weekAll), resetsAt: rw, resetsIn: fmtUntil(rw, now), ...demo },
-    { id: "max-week-fable", label: "Weekly, Fable", subscription: "max", percentUsed: pct(weekNamed), resetsAt: rw, resetsIn: fmtUntil(rw, now), ...demo },
-    { id: "codex-week", label: "Weekly", subscription: "codex", percentUsed: null, resetsAt: null, resetsIn: null, ...none, note: "Codex publishes no plan meter; see calls and cost equivalent instead." },
-    { id: "grok-week", label: "Weekly", subscription: "grok", percentUsed: null, resetsAt: null, resetsIn: null, ...none, note: "SuperGrok publishes no plan meter." },
-  ];
-}
-
 function openIssues(events: FeedEvent[], project: string): number {
   const open = new Set<number>();
   for (const e of events) {
@@ -114,25 +57,6 @@ function laneModels(lanes: string[], models: ModelInfo[]): ModelInfo[] {
     if (lane === "grok") ids.add("xai/grok-4.7");
   }
   return models.filter((m) => ids.has(m.id));
-}
-
-/** The board's cache columns, derived here from a folded task (a database holds them on the row). */
-function boardRow(t: TaskView): BoardTask {
-  const assets = dataset().assets;
-  const asset = t.asset ? assets.find((a) => a.id === t.asset?.id) : undefined;
-  return {
-    ...t,
-    station: stationOf(t, []),
-    since: t.updated_at ?? t.created_at,
-    last_error: t.state === "failed" ? t.run_summary : null,
-    cost: t.usage?.cost_equiv ?? null,
-    asset_id: t.asset?.id ?? null,
-    asset_kind: t.asset?.kind ?? null,
-    asset_version: t.asset?.version ?? null,
-    asset_thumb_key: null,
-    asset_thumb_url: asset?.thumb_url ?? null,
-    project_repo: MOCK_PROJECTS.find((p) => p.slug === t.project)?.repo ?? null,
-  };
 }
 
 export const mockSource: DataSource = {
@@ -182,20 +106,20 @@ export const mockSource: DataSource = {
     };
   },
 
-  async getUsage(window: UsageWindow): Promise<UsageSummary> {
+  async getUsage(window: UsageWindow): Promise<LedgerUsage> {
     const ds = dataset();
     const now = Date.now();
     const since = now - WINDOW_MS[window];
     const subscriptions = usageRows(ds.events, since);
     const days = window === "30d" ? 30 : 7;
-    const daily: UsageSummary["daily"] = [];
-    const avgCtx: UsageSummary["avgCtx"] = [];
+    const daily: LedgerUsage["daily"] = [];
+    const avgCtx: LedgerUsage["avgCtx"] = [];
     for (let i = days - 1; i >= 0; i--) {
       const dayStart = new Date(now - i * D);
       dayStart.setHours(0, 0, 0, 0);
       const key = dayKey(dayStart.toISOString());
       const dayEvents = ds.events.filter((e) => e.kind === "step.usage" && dayKey(e.ts) === key);
-      const row: UsageSummary["daily"][number] = { day: key };
+      const row: LedgerUsage["daily"][number] = { day: key };
       for (const e of dayEvents) {
         if (!e.subscription) continue;
         row[e.subscription] = (row[e.subscription] ?? 0) + e.cost_equiv;
@@ -208,56 +132,8 @@ export const mockSource: DataSource = {
     const avgCtxWindow = windowCalls.length
       ? Math.round(windowCalls.reduce((s, e) => s + e.tokens_in + e.cache_read, 0) / windowCalls.length)
       : 0;
-    return { window, since: new Date(since).toISOString(), subscriptions, windows: meters(ds.events, now), daily, avgCtx, avgCtxWindow };
+    return { window, since: new Date(since).toISOString(), subscriptions, daily, avgCtx, avgCtxWindow };
   },
-
-  async getWorkers() {
-    return dataset().workers;
-  },
-
-  /**
-   * The demo's tasks, folded from its events the way the database does it (`deriveTaskStatus`): one task per
-   * (repo, issue) with an issue.opened row, newest first. No claims exist here, so nothing reads `claimed`; the
-   * decisions on the board are disabled (the actions need a database) but every column has cards.
-   */
-  async getTasks(opts = {}) {
-    const now = Date.now();
-    const byTask = new Map<string, FeedEvent[]>();
-    for (const e of dataset().events) {
-      if (!e.repo || e.issue == null) continue;
-      const id = `${e.repo}#${e.issue}`;
-      byTask.set(id, [...(byTask.get(id) ?? []), e]);
-    }
-    const tasks: TaskView[] = [];
-    for (const [id, events] of byTask) {
-      const opened = events.find((e) => e.kind === "issue.opened" || e.kind === "task.created");
-      if (!opened?.project || !opened.repo || opened.issue == null) continue;
-      const row = { id, project: opened.project, repo: opened.repo, issue: opened.issue, idempotency_key: null, created_by: opened.actor, created_at: opened.ts, lane: opened.lane, title: null };
-      const status = deriveTaskStatus(row, events, [], now);
-      tasks.push({ ...row, title: coreTaskTitle(row, events), ...status });
-    }
-    tasks.sort((a, b) => (b.updated_at ?? b.created_at).localeCompare(a.updated_at ?? a.created_at));
-    let out = tasks;
-    if (opts.project) out = out.filter((t) => t.project === opts.project);
-    if (opts.state) out = out.filter((t) => t.state === opts.state);
-    return out.slice(0, opts.limit ?? 100);
-  },
-
-  /** The board from the same folded tasks: the cache columns a database would hold, derived here; `project` narrows it. */
-  async getHistory(opts = {}) {
-    const all = await this.getTasks({ limit: 500, ...(opts.project ? { project: opts.project } : {}), ...(opts.state ? { state: opts.state } : {}) });
-    const rows = all.map(boardRow).sort((a, b) => b.since.localeCompare(a.since) || b.id.localeCompare(a.id));
-    const start = opts.before ? rows.findIndex((r) => r.since < opts.before!.since || (r.since === opts.before!.since && r.id < opts.before!.id)) : 0;
-    return start < 0 ? [] : rows.slice(start, start + (opts.limit ?? 50));
-  },
-
-  async getBoard(opts = {}) {
-    const all = await this.getTasks({ limit: 500, ...(opts.project ? { project: opts.project } : {}) });
-    const live = all.filter((t) => t.state !== "done").slice(0, opts.limit ?? 300);
-    const done = all.filter((t) => t.state === "done").slice(0, opts.doneLimit ?? 10);
-    return [...live, ...done].map(boardRow);
-  },
-
 
   async getModels() {
     return dataset().models;

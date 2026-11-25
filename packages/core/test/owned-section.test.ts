@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BEGIN, END, checkOwnedSection, findOwnedSection, installOwnedSection, isIncludeOnly, readRulesState, removeOwnedSection, renderOwnedSection } from "../src/rules/owned-section.ts";
+import { BEGIN, END, findOwnedSection, isIncludeOnly, parseRulesState, planOwnedSection, readRulesState, renderOwnedSection, STATE_FILE, type InstallOptions, type SectionResult } from "../src/rules/owned-section.ts";
 
 let root: string;
 beforeEach(() => {
@@ -13,6 +13,16 @@ afterEach(() => {
 });
 
 const read = (f: string) => readFileSync(join(root, f), "utf8");
+
+/** The plan applied to a directory, the way `relay link --no-pr` applies it to a checkout. */
+function installOwnedSection(dir: string, opts: InstallOptions = {}): SectionResult[] {
+  const text = (f: string): string | undefined => (existsSync(join(dir, f)) ? readFileSync(join(dir, f), "utf8") : undefined);
+  const plan = planOwnedSection(text, parseRulesState(text(STATE_FILE)), opts);
+  for (const f of plan.files) writeFileSync(join(dir, f.file), f.content);
+  mkdirSync(join(dir, ".relay"), { recursive: true });
+  writeFileSync(join(dir, STATE_FILE), plan.stateText);
+  return plan.results;
+}
 const inner = (f: string) => findOwnedSection(read(f))!.inner;
 
 describe("owned section", () => {
@@ -59,7 +69,6 @@ describe("owned section", () => {
     installOwnedSection(root, { body: "v1" });
     const edited = read("AGENTS.md").replace("v1", "v1 plus my own note");
     writeFileSync(join(root, "AGENTS.md"), edited);
-    expect(checkOwnedSection(root)[0]).toMatchObject({ file: "AGENTS.md", localEdit: true });
     const r = installOwnedSection(root, { body: "v2" });
     expect(r[0]!.action).toBe("refused-local-edit");
     expect(inner("AGENTS.md")).toBe("v1 plus my own note");
@@ -83,22 +92,5 @@ describe("owned section", () => {
     const r = installOwnedSection(root, { project: "demo" });
     expect(r.find((x) => x.file === "CLAUDE.md")?.action).toBe("skipped-include");
     expect(read("CLAUDE.md")).toBe("@AGENTS.md\n");
-  });
-
-  it("removes the section and forgets the hash, keeping the rest of the file", () => {
-    writeFileSync(join(root, "AGENTS.md"), "# Mine\n\nkeep\n");
-    installOwnedSection(root, { body: "v1" });
-    const r = removeOwnedSection(root);
-    expect(r[0]!.action).toBe("removed");
-    expect(read("AGENTS.md")).toBe("# Mine\n\nkeep\n");
-    expect(readRulesState(root).sections["AGENTS.md"]).toBeUndefined();
-  });
-
-  it("reports missing markers as a place relay will not write", () => {
-    installOwnedSection(root, { body: "v1" });
-    writeFileSync(join(root, "AGENTS.md"), "# markers deleted\n");
-    const c = checkOwnedSection(root)[0]!;
-    expect(c.action).toBe("absent");
-    expect(c.detail).toMatch(/markers missing/);
   });
 });

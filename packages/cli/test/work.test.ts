@@ -62,6 +62,7 @@ const DOCTOR_PARTIAL = [
   "fail  login:gh      not logged in; run: gh auth login",
   "warn  lanes         none: gh is not logged in (run: gh auth login); no lane can push without it",
   "ok    auth          approved on /activate (device flow) as oauth:relay-cli@mac-container, expires 2026-11-16T22:10:02.000Z; renews itself with a refresh token",
+  "ok    board         General at api.vercel.com as kyleroche; takes tasks from 1 owner; 1 worker (1 online)",
 ].join("\n");
 const DOCTOR_ALL = DOCTOR_PARTIAL.replace("ok    login:fx      connected: codex", "ok    login:fx      connected: codex, grok")
   .replace("fail  login:gh      not logged in; run: gh auth login", "ok    login:gh      logged in")
@@ -159,7 +160,7 @@ describe("relay work: isolation flag", () => {
   });
   it("bakes the worker options into arguments the same way for the service and the container", () => {
     expect(bakedArgs({ jobs: "1" })).toEqual([]);
-    expect(bakedArgs({ lanes: "claude", labels: "gpu", jobs: "2", maxInterval: "900", sandbox: false })).toEqual(["--lanes", "claude", "--labels", "gpu", "--jobs", "2", "--max-interval", "900", "--no-sandbox"]);
+    expect(bakedArgs({ lanes: "claude", jobs: "2", sandbox: false })).toEqual(["--lanes", "claude", "--jobs", "2", "--no-sandbox"]);
   });
   it("rejects an unknown isolation before doing anything", async () => {
     const f = fakeDeps();
@@ -221,9 +222,12 @@ describe("relay work --isolation container --install (plan only)", () => {
     expect(f.run).toEqual([]);
     expect(f.sh.map((w) => w.slice(1, 3).join(" "))).toEqual(["system status", "list --all", "volume list"]);
   });
-  it("needs a site: the container cannot see this machine's local database", async () => {
+  it("needs no hosted relay: the worker inside reaches the board with its own Vercel login", async () => {
     const f = fakeDeps();
-    await expect(program(f.deps).parseAsync(["node", "relay", "work", "--isolation", "container", "--install"])).rejects.toThrow(/--site <url>/);
+    const out = vi.spyOn(console, "log").mockImplementation(() => {});
+    await program(f.deps).parseAsync(["node", "relay", "work", "--isolation", "container", "--install"]);
+    expect(f.run).toEqual([]);
+    out.mockRestore();
   });
   it("--install --yes over a running container that already joined: recreates it, skips relay setup, prints the logins still missing", async () => {
     const f = fakeDeps({ list: LIST_RUNNING_OLD, credentials: true, doctor: DOCTOR_PARTIAL });
@@ -327,7 +331,7 @@ describe("relay work container update", () => {
     const out = vi.spyOn(console, "log").mockImplementation(() => {});
     await program(f.deps).parseAsync(["node", "relay", "work", "container", "update"]);
     const printed = out.mock.calls.map((c) => String(c[0])).join("\n");
-    expect(printed).toContain("logins      kept in the volume: claude, gh, codex, grok (relay doctor inside)");
+    expect(printed).toContain("logins      kept in the volume: claude, gh, vercel, codex, grok (relay doctor inside)");
     expect(printed).not.toContain("then        log in inside");
   });
   it("--memory and --cpus override what the container has; the rest stays", async () => {
@@ -407,7 +411,7 @@ describe("relay work container login", () => {
     expect(text).toContain("redirect received; pasting the code to fx");
     expect(text).toContain("fx  Signed in to grok.");
     expect(text).toMatch(/^grok\s+signed in$/m);
-    expect(text).toContain("logins:    claude ok, gh missing, codex ok, grok missing (relay doctor inside)");
+    expect(text).toContain("logins:    claude ok, gh missing, vercel ok, codex ok, grok missing (relay doctor inside)");
     expect(text).toContain("lanes:     none yet; log in with: relay work container login all");
     expect(process.exitCode).toBeUndefined();
     await exited(f.children[0]!);
@@ -535,9 +539,18 @@ describe("relay work container login", () => {
     expect(text).toContain("lanes:     claude, codex, grok (the container worker serves these)");
   });
 
+  it("vercel: runs the Vercel CLI's login on a TTY inside, which is the login the worker reaches the board with", async () => {
+    const f = fakeDeps({ list: LIST_RUNNING_OLD, doctor: DOCTOR_PARTIAL.replace(/^ok    board .*$/m, "fail  board         You're not logged in to Vercel.") });
+    const printed = capture();
+    await login(f.deps, "vercel");
+    expect(f.run).toEqual([["/usr/local/bin/container", "exec", "--user", "relay", "-it", CONTAINER_NAME, "vercel", "login"]]);
+    expect(printed()).toMatch(/^vercel\s+signed in$/m);
+    expect(printed()).toContain("The worker inside reaches the board as this login");
+  });
+
   it("needs a running container and a known provider", async () => {
     await expect(login(fakeDeps().deps, "grok")).rejects.toThrow(/no relay-work container; create it with/);
     await expect(login(fakeDeps({ list: LIST_STOPPED }).deps, "grok")).rejects.toThrow(/relay-work is not running; start it with: relay work container start/);
-    await expect(login(fakeDeps({ list: LIST_RUNNING_OLD }).deps, "vercel")).rejects.toThrow(/login: 'vercel' is not one of claude, gh, codex, grok, all/);
+    await expect(login(fakeDeps({ list: LIST_RUNNING_OLD }).deps, "npm")).rejects.toThrow(/login: 'npm' is not one of claude, gh, vercel, codex, grok, all/);
   });
 });
