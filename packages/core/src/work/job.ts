@@ -780,6 +780,15 @@ async function runCodeTask(j: Job): Promise<JobResult> {
       if (r.code !== 0) return j.fail(`setup failed: \`${cmd}\` exited ${r.code}`, `The project's setup did not finish, so the ${lane} lane did not run.\n\n\`${cmd}\` exited ${r.code}:\n\n\`\`\`\n${r.output.slice(-3000)}\n\`\`\``);
     }
   }
+  // What setup left in the clone (a lockfile it wrote, an install directory nothing ignores) is not the lane's work
+  // and must not ride along in the commit: the tree as setup left it is kept, and only what changed after it is committed.
+  const setupIndex = { ...cleanEnv(), GIT_INDEX_FILE: join(j.dir, ".git", "relay-after-setup-index") };
+  let afterSetup: string | undefined;
+  if (!reports && profile.setup.length && (await run("git", ["status", "--porcelain"], { cwd: j.dir })).stdout.trim() !== "") {
+    await must("git", ["read-tree", "HEAD"], { cwd: j.dir, env: setupIndex });
+    await must("git", ["add", "-A"], { cwd: j.dir, env: setupIndex, timeoutMs: 10 * 60_000 });
+    afterSetup = (await must("git", ["write-tree"], { cwd: j.dir, env: setupIndex })).trim();
+  }
 
   const result = await j.laneRun(
     { lane: "code", prompt, cwd: j.dir, env: laneEnv, ...(reports ? { readOnly: true } : {}), access: { tools: profileToolPatterns(profile), hosts: access.hosts }, timeoutMs: j.timeoutMs, signal: j.keeper.signal, project: j.project, task: id },
@@ -820,7 +829,16 @@ async function runCodeTask(j: Job): Promise<JobResult> {
     log(`${id}: step ${stepNotes.at(-1)}`);
   }
 
-  await j.git(["add", "-A"]);
+  await must("git", ["add", "-A"], { cwd: j.dir, timeoutMs: 10 * 60_000 });
+  if (afterSetup) {
+    const names = async (against: string): Promise<string[]> => (await must("git", ["diff", "--cached", "--name-only", "--no-renames", "-z", against], { cwd: j.dir })).split("\0").filter(Boolean);
+    const sinceSetup = new Set(await names(afterSetup));
+    const setupOnly = (await names("HEAD")).filter((path) => !sinceSetup.has(path));
+    if (setupOnly.length) {
+      await must("git", ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul", "HEAD"], { cwd: j.dir, input: setupOnly.join("\0") });
+      log(`${id}: left out of the commit, as setup's own: ${setupOnly.slice(0, 5).join(", ")}${setupOnly.length > 5 ? `, and ${setupOnly.length - 5} more` : ""}`);
+    }
+  }
   const staged = await run("git", ["diff", "--cached", "--quiet"], { cwd: j.dir });
   if (staged.code !== 0) await j.git(["-c", `user.name=${who.name}`, "-c", `user.email=${who.email}`, "commit", "-q", "-m", `${lane}: ${answering ? `answer the eval of ${task.title || id}` : task.title || id}`, "-m", `relay ${lane} lane for task ${id}\n\nCo-Authored-By: relay-agent <relay-agent@users.noreply.github.com>`]);
   if (!(await count(`origin/${base}..HEAD`))) {

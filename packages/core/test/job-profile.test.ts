@@ -4,7 +4,7 @@
  * in what the lane may reach, the worker's own checks after the commit, and a step that delivers a plan.
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { connectBoard } from "../src/board/client.ts";
 import { branchFor, HOLD, parsePlanHold, REPORT_REASON } from "../src/board/mapping.ts";
@@ -138,6 +138,27 @@ describe("a job in a project with a profile", () => {
     expect(result).toContain("`npx tsc --noEmit` passed");
     expect(result).toMatch(/`npm test` FAILED \(exit 1\):[\s\S]*1 failing: greets in English/);
     expect(r.host.comments.at(-1)).toContain("`npm test` FAILED (exit 1)");
+  });
+
+  it("commits the lane's work and not what setup left in the clone", async () => {
+    // setup writes a lockfile and an install directory nothing ignores, as `npm install` does in a repository without either
+    const r = await rig();
+    const t = await r.open();
+    const out = await runJob(
+      await r.claim(t.id),
+      r.job({
+        exec: async (command, at) => {
+          if (command === "npm ci") {
+            writeFileSync(join(at.cwd, "package-lock.json"), '{ "lockfileVersion": 3 }\n');
+            mkdirSync(join(at.cwd, "node_modules", "left-pad"), { recursive: true });
+            writeFileSync(join(at.cwd, "node_modules", "left-pad", "index.js"), "module.exports = () => {};\n");
+          }
+          return { code: 0, output: "", durationMs: 1, sandboxed: true };
+        },
+      }),
+    );
+    expect(out.outcome).toBe("review");
+    expect(sh(origin.bare, ["diff-tree", "-r", "--name-only", "--no-commit-id", out.branch]).split("\n")).toEqual(["greet.ts"]);
   });
 
   it("fails the task when setup fails, with what it printed, and never runs the lane", async () => {
