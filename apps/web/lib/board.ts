@@ -33,7 +33,17 @@ export function siteHandle(): board.Board {
 async function connect(): Promise<board.BoardSession> {
   if (dataMode() !== "db") return (await import("./board-demo.ts")).demoBoard();
   const cfg = loadConfig().board;
-  return board.connectBoard(siteHandle(), cfg);
+  const session = await board.connectBoard(siteHandle(), cfg);
+  // once per instance, where an operator reads it: a site that cannot settle other people's tasks
+  const queues = await queueAccess(session).catch(() => undefined);
+  if (queues && !queues.decides) console.error(`[relay] board: this deployment does not manage the queues. ${queues.access}`);
+  return session;
+}
+
+/** Whether the deployment may settle tasks other people opened in the queues, with what the board said about it. */
+export async function queueAccess(session: board.BoardSession): Promise<{ decides: boolean; access: string }> {
+  const a = await board.accessIn(session.board, board.workChannel("any"), session.me);
+  return { decides: a.can.includes("manage"), access: `As ${session.me.actor} it may ${a.can.join(", ") || "do nothing"} there (${a.how}).` };
 }
 
 /** The board with who the site is on it and whose blocks it believes (its own, then `RELAY_BOARD_FROM`). */

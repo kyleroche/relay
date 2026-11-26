@@ -9,7 +9,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
-import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
+import { boardProblem, queueAccess, siteBoard, siteWorkers } from "@/lib/board";
 import { newestFinished, openTasks } from "@/lib/board-read";
 import { syncFeedAfter } from "@/lib/board-watch";
 import { cloudViews } from "@/lib/cloud/view";
@@ -26,15 +26,6 @@ export const BOARD_METADATA: Metadata = {
 
 /** The newest finished tasks the board keeps; History has the rest. */
 const DONE_SHOWN = 10;
-
-/** Whether the deployment may settle tasks in the queues, with what the board said about it for the warning and the log. */
-async function queueAccess(session: board.BoardSession): Promise<{ decides: boolean; access: string }> {
-  const a = await board.accessIn(session.board, board.workChannel("any"), session.me);
-  const decides = a.can.includes("manage");
-  const access = `As ${session.me.actor} it may ${a.can.join(", ") || "do nothing"} there (${a.how}).`;
-  if (!decides) console.error(`[relay] board: this deployment does not manage the queues. ${access}`);
-  return { decides, access };
-}
 
 export async function BoardPage({ all, project }: { all?: string; project?: string } = {}) {
   const db = dataMode() === "db";

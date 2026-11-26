@@ -548,7 +548,7 @@ export async function accessIn(board: Board, channel: string, me?: Pick<Awaited<
   try {
     const x = await board.explain(channel);
     const from = x.grants.map((g) => g.id).filter(Boolean).join(", ");
-    return { can: [...x.can], how: `the board's answer for ${channel}: rule ${x.pattern ?? "none"}${x.level ? ` (${x.level})` : ""}${from ? `, from grant ${from}` : ""}${x.capped ? ", capped" : ""}` };
+    return { can: [...x.can], how: `the board's answer for ${channel}: rule ${x.pattern ?? "none"}${x.level ? ` (${x.level})` : ""}${from ? `, from grant ${from}` : ""}${x.capped ? `, then capped${typeof x.capped === "string" ? ` by ${x.capped}` : ""}` : ""}` };
   } catch (e) {
     const can = (me ?? (await board.me())).can ?? {};
     const patterns = Object.keys(can);
