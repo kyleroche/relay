@@ -148,7 +148,7 @@ export function openTaskProblem(i: OpenTaskInput): string | undefined {
 export function asTaskError(e: unknown): Error {
   if (e instanceof TaskError) return e;
   if (e instanceof BoardError && e.code === "schema_not_found") return new TaskError(`${describeBoardError(e)}. relay's schemas are registered once per team: relay setup --board`, 409);
-  if (e instanceof BoardError && e.code === "task_not_owned") return new TaskError(`${describeBoardError(e)}. ${NOT_OWNED}`, 403);
+  if (e instanceof BoardError && e.code === "task_not_owned") return new TaskError(`${describeBoardError(e).replace(/[.\s]+$/, "")}. ${NOT_OWNED}`, 403);
   if (e instanceof BoardError) return new TaskError(describeBoardError(e), e.status ?? 502);
   return e instanceof Error ? e : new Error(String(e));
 }
@@ -734,8 +734,11 @@ export async function requestChanges(board: Board, github: GitHubClient | undefi
   const text = note.trim();
   if (!text) throw new TaskError("a note is required: say what to change.", 400);
   if (text.length > 6000) throw new TaskError("the note is at most 6,000 characters.", 400);
-  const { task } = await getTask(board, id);
+  const { task, thread } = await getTask(board, id);
   if (task.state !== "review") throw new TaskError(`${task.id} is ${task.state}, not in review; only a task in review can be sent back.`, 409);
+  // asked first: a caller that cannot lift the hold leaves no note and no comment behind
+  const problem = await settleProblem(board, thread);
+  if (problem) throw new TaskError(problem, 403);
   try {
     await board.reply(id, { text: prose(text), labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
     if (github && task.pr) await github.createComment(task.pr.repo, task.pr.number, `**Changes requested** (relay task ${task.id})\n\n${text}`).catch(() => undefined);
@@ -756,6 +759,8 @@ export async function releaseTask(board: Board, id: string, opts: { own?: Board;
   const thread = await readThread(board, id);
   const task = toTask(thread.message);
   if (task.state !== "held") throw new TaskError(`${task.id} is ${task.state}, not held; only a task the gate holds can be released.`, 409);
+  const problem = await settleProblem(board, thread);
+  if (problem) throw new TaskError(problem, 403);
   try {
     const said = opts.by ? `Released by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}.\n\n` : "";
     await (opts.own ?? board).reply(id, { text: `${said}${releaseText({ digest: (await gateInput(board, thread)).digest })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
@@ -780,9 +785,13 @@ export interface RequeueOptions {
 export async function requeueTask(board: Board, id: string, opts: RequeueOptions = {}): Promise<BoardTask> {
   if (opts.lane !== undefined && !isLaneName(opts.lane)) throw new TaskError(laneNameProblem(opts.lane), 400);
   if (typeof opts.model === "string" && !isModelId(opts.model)) throw new TaskError(`model '${opts.model}' is not a model id`, 400);
-  const { task } = await getTask(board, id);
+  const { task, thread } = await getTask(board, id);
   if (task.state === "done" || task.state === "closed") throw new TaskError(`${task.id} is ${task.state}; a finished task is not requeued. Open a new one.`, 409);
   if (task.state === "running") throw new TaskError(`${task.id} is running on ${task.claim?.actor ?? "a worker"}${task.claim ? ` until ${task.claim.until}` : ""}; it returns to the queue by itself if that worker stops renewing. relay task close stops the run.`, 409);
+  // reopening and lifting a hold are the owner's: asked before the labels move, so a refusal changes nothing
+  const owners = task.state === "failed" || task.state === "review" || task.state === "held" || task.state === "blocked";
+  const problem = owners ? await settleProblem(board, thread) : undefined;
+  if (problem) throw new TaskError(problem, 403);
   try {
     const set: Record<string, string> = {};
     const unset: string[] = [];
@@ -791,7 +800,7 @@ export async function requeueTask(board: Board, id: string, opts: RequeueOptions
     else if (opts.model && opts.model !== task.model) set[LABEL.model] = opts.model;
     if (Object.keys(set).length || unset.length) await board.label(id, { ...(Object.keys(set).length ? { set } : {}), ...(unset.length ? { unset } : {}) });
     if (task.state === "failed") return toTask(await asOwner(board).tasks.reopen(id));
-    if (task.state === "review" || task.state === "held" || task.state === "blocked") return toTask(await asOwner(board).tasks.unblock(id));
+    if (owners) return toTask(await asOwner(board).tasks.unblock(id));
     return toTask((await readThread(board, id)).message);
   } catch (e) {
     throw asTaskError(e);
