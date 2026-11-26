@@ -25,7 +25,7 @@ import { GitHubError } from "../github/client.ts";
 import { gateText, precheckTask } from "../tasks/gate.ts";
 import { laneUnservedProblem, isLaneName, laneNameProblem } from "../tasks/lanes.ts";
 import { sha256 } from "../util.ts";
-import { describeBoardError } from "./client.ts";
+import { boardCode, describeBoardError } from "./client.ts";
 import { PLAN_FILE, planOrder, planProblem, type Plan } from "./plan.ts";
 import { CLOUD_APPROVED, HOLD, isBranchName, isBranchOf, LABEL, mayIn, OPEN_STATES, parsePlanHold, REPORT_REASON, parseEvalHold, parsePullUrl, parseRef, projectOfChannel, RELAY_MESSAGE, relayLabels, relayState, splitTaskText, taskText, TEXT_MAX, WORK_SUBTREE, workChannel, type RelayState } from "./mapping.ts";
 import { ASSET_SCHEMA, blocksOf, evalText, GRANT_SCHEMA, grantText, prose, releaseText, RUN_SCHEMA, TASK_SCHEMA, taskBlockText, trustedBlocks, USAGE_SCHEMA, withoutBlocks, type AssetBlock, type GrantBlock, type RunBlock, type TaskBlock, type UsageBlock } from "./schemas.ts";
@@ -148,9 +148,22 @@ export function openTaskProblem(i: OpenTaskInput): string | undefined {
 export function asTaskError(e: unknown): Error {
   if (e instanceof TaskError) return e;
   if (e instanceof BoardError && e.code === "schema_not_found") return new TaskError(`${describeBoardError(e)}. relay's schemas are registered once per team: relay setup --board`, 409);
+  if (e instanceof BoardError && e.code === "task_not_owned") return new TaskError(`${describeBoardError(e)}. ${NOT_OWNED}`, 403);
   if (e instanceof BoardError) return new TaskError(describeBoardError(e), e.status ?? 502);
   return e instanceof Error ? e : new Error(String(e));
 }
+
+/**
+ * The caller as itself, for the calls the board keeps for a task's owner: lifting a hold, reopening and cancelling.
+ * The board holds a profile to the tasks that profile made, and its principal, as itself, to any of them. relay's
+ * profiles say whose words a message carries (a person's or a bot's on a site, the runner's on a worker) and are
+ * never a narrower caller, so these calls go out as the principal. That is what lets a site, which is one deployment
+ * whoever asked, settle for one person a task another opened through it.
+ */
+export const asOwner = (board: Board): Board => board.as(null);
+
+const NOT_OWNED =
+  "The board lets a task's owner, or a person who manages its queue, hold, reopen and cancel it. A site owns the tasks opened through it (its pages, its API and MCP tools, a labelled GitHub issue) and Vercel's board gives a deployment no manage whatever its grant, so a task opened from a machine is settled from one: relay task approve, changes, requeue or close.";
 
 /** A task as it was just made: not yet in any worker's reach, until `release` puts it there or `hold` keeps it out. */
 interface Made {
@@ -410,9 +423,14 @@ const describeGitHub = (e: unknown): string => (e instanceof GitHubError ? e.mes
  * another reason) decides the rest; a caller that hands the task back to workers puts the lane on again.
  */
 export async function takeHeld(board: Board, id: string): Promise<ClaimedTask> {
+  const thread = await board.thread(id);
+  // a task an earlier attempt left with its hold already lifted is taken as it is: a claim needs no owner
+  const held = thread.message.task?.state === "blocked";
+  // asked before the lane comes off, so a caller that cannot lift the hold leaves the task as it found it
+  const problem = held ? await settleProblem(board, thread) : undefined;
+  if (problem) throw new TaskError(problem, 403);
   await board.label(id, { unset: [LABEL.lane] });
-  // a task an earlier attempt left with its hold already lifted is taken as it is
-  if ((await board.thread(id)).message.task?.state === "blocked") await board.tasks.unblock(id);
+  if (held) await asOwner(board).tasks.unblock(id);
   return board.tasks.claim(id);
 }
 
@@ -527,10 +545,6 @@ export interface ApproveResult {
 }
 
 /**
- * Whether this caller can settle a held task: it made the task, or it manages the task's queue. Asked before
- * anything outside the board changes, so an approval never merges and then finds it cannot complete the task.
- */
-/**
  * Whether the caller may do something in a channel, asked of the board for that one channel (`explain`), which is the
  * decision the board itself applies to a request. The summary in `me().can` is only the fallback for a board that
  * will not explain: on Vercel's board that summary has been seen to leave out a grant made to one project for one
@@ -558,11 +572,21 @@ export async function accessIn(board: Board, channel: string, me?: Pick<Awaited<
   }
 }
 
+/**
+ * Why this caller cannot settle a held task, if it cannot: the task is another principal's and the caller does not
+ * manage its queue. Asked before anything outside the board changes, so an approval never merges and then finds it
+ * cannot complete the task.
+ */
 async function settleProblem(board: Board, thread: ThreadView): Promise<string | undefined> {
-  const me = await board.me();
-  if (thread.message.by.actor === me.actor || (await mayDo(board, thread.message.channel, "manage", me))) return undefined;
-  return `${me.handle} cannot settle ${thread.message.id}: someone else opened it and this login does not manage ${thread.message.channel}. A site needs the grant relay setup --board --site-project <its project> makes (docs/WORKERS.md).`;
+  // asked as the caller itself, which is how the hold is lifted (`asOwner`)
+  const self = asOwner(board);
+  const me = await self.me();
+  if (maySettle(me.principal, thread.message.task?.owner) || (await mayDo(self, thread.message.channel, "manage", me))) return undefined;
+  return `${me.handle} cannot settle ${thread.message.id}: ${thread.message.task?.owner ?? "someone else"} opened it. ${NOT_OWNED}`;
 }
+
+/** Whether a principal settles a task without managing its queue: it owns it, whichever of its profiles made it. */
+export const maySettle = (principal: string, owner: string | undefined): boolean => !!owner && owner === principal;
 
 /**
  * Approve a task in review. With a pull request: squash-merge it, delete its branch and complete the task. The pull
@@ -715,7 +739,7 @@ export async function requestChanges(board: Board, github: GitHubClient | undefi
   try {
     await board.reply(id, { text: prose(text), labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
     if (github && task.pr) await github.createComment(task.pr.repo, task.pr.number, `**Changes requested** (relay task ${task.id})\n\n${text}`).catch(() => undefined);
-    return toTask(await board.tasks.unblock(id));
+    return toTask(await asOwner(board).tasks.unblock(id));
   } catch (e) {
     throw asTaskError(e);
   }
@@ -735,7 +759,7 @@ export async function releaseTask(board: Board, id: string, opts: { own?: Board;
   try {
     const said = opts.by ? `Released by ${opts.by.replace(/\s+/g, " ").slice(0, 100)}.\n\n` : "";
     await (opts.own ?? board).reply(id, { text: `${said}${releaseText({ digest: (await gateInput(board, thread)).digest })}`, labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
-    return toTask(await board.tasks.unblock(id));
+    return toTask(await asOwner(board).tasks.unblock(id));
   } catch (e) {
     throw asTaskError(e);
   }
@@ -766,8 +790,8 @@ export async function requeueTask(board: Board, id: string, opts: RequeueOptions
     if (opts.model === null && task.model) unset.push(LABEL.model);
     else if (opts.model && opts.model !== task.model) set[LABEL.model] = opts.model;
     if (Object.keys(set).length || unset.length) await board.label(id, { ...(Object.keys(set).length ? { set } : {}), ...(unset.length ? { unset } : {}) });
-    if (task.state === "failed") return toTask(await board.tasks.reopen(id));
-    if (task.state === "review" || task.state === "held" || task.state === "blocked") return toTask(await board.tasks.unblock(id));
+    if (task.state === "failed") return toTask(await asOwner(board).tasks.reopen(id));
+    if (task.state === "review" || task.state === "held" || task.state === "blocked") return toTask(await asOwner(board).tasks.unblock(id));
     return toTask((await readThread(board, id)).message);
   } catch (e) {
     throw asTaskError(e);
@@ -798,11 +822,18 @@ export async function closeTask(board: Board, github: GitHubClient | undefined, 
   const dependents: string[] = [];
   let toReview: string | null = null;
   try {
-    canceled = toTask(await board.tasks.cancel(id, reason || "closed without a merge"));
+    canceled = toTask(await asOwner(board).tasks.cancel(id, reason || "closed without a merge"));
     for (const other of task.project ? await listTasks(board, { project: task.project }) : []) {
       if (other.evaluates !== id) continue;
-      await board.tasks.cancel(other.id, `the task it was to look at, ${id}, was closed`);
-      dependents.push(other.id);
+      // a step's task a worker opened is its owner's to call off: left as it is, its run finds this one closed and ends without a model call
+      const off = await asOwner(board).tasks.cancel(other.id, `the task it was to look at, ${id}, was closed`).then(
+        () => true,
+        (e: unknown) => {
+          if (boardCode(e) === "task_not_owned") return false;
+          throw e;
+        },
+      );
+      if (off) dependents.push(other.id);
     }
     if (task.evaluates) toReview = (await skipStep(board, task.evaluates, id, `its task was closed${reason ? ` (${reason})` : ""}`, opts.own ?? board).catch(() => false)) ? task.evaluates : null;
   } catch (e) {

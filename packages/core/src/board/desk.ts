@@ -3,7 +3,7 @@
  * all go through here, so a decision is the same wherever it was asked for. Underneath are the board's own task
  * functions (board/tasks.ts), the ones the CLI calls.
  *
- * A site is one deployment on the board whoever asked, so three things are its own to get right:
+ * A site is one deployment on the board whoever asked, so these are its own to get right:
  *
  *   two voices   a caller's words (a task's text, a review note) and their decisions go out as a profile named for
  *                them, which no worker believes as data. What relay itself says as data (a gate release, an eval that
@@ -14,6 +14,10 @@
  *   grants       what a task may reach or spend beyond the default of nothing (a capability set, a paid sandbox
  *                run) is a signed-in person's to give, never a token's.
  *   the brief    a task the site opens has its brief in the thread before any worker can claim it.
+ *   ownership    the board lets a task's owner lift a hold, reopen and cancel it, and holds a profile to what that
+ *                profile made. The site's deployment owns every task opened through it, so the task functions make
+ *                those calls as the deployment itself (`asOwner`), after the rules above were checked here. A task
+ *                opened from a machine is not the site's, and the refusal says where it is settled.
  *
  * Without an asker the caller is whoever holds the handle (a person at their own machine): one voice, no rules.
  */

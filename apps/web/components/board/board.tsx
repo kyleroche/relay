@@ -6,8 +6,10 @@ import { CloudOffer } from "@/components/tasks/cloud-offer";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
+import { SettleElsewhere } from "@/components/tasks/settle-elsewhere";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
+import { siteSettles, type SiteReach } from "@/lib/board";
 import { BUILTIN_LANES, workerOfClaim } from "@/lib/board-read";
 import type { CloudView } from "@/lib/cloud/view";
 import { claimProfile, COLUMNS, columnOf, decisionsFor, evalWait, reviewKind, taskPagePath, TONE_TEXT } from "@/lib/tasks";
@@ -69,7 +71,7 @@ function Why({ t }: { t: Task }) {
   return null;
 }
 
-function Card({ t, now, workers, canWrite, servedLanes, cloud }: { t: Task; now: number; workers: readonly board.WorkerView[]; canWrite: boolean; servedLanes: readonly string[]; cloud?: CloudView }) {
+function Card({ t, now, workers, canWrite, settles, servedLanes, cloud }: { t: Task; now: number; workers: readonly board.WorkerView[]; canWrite: boolean; settles: boolean; servedLanes: readonly string[]; cloud?: CloudView }) {
   const can = decisionsFor(t.state);
   const worker = workerOfClaim(workers, t.claim);
   return (
@@ -108,7 +110,12 @@ function Card({ t, now, workers, canWrite, servedLanes, cloud }: { t: Task; now:
           </a>
         </p>
       )}
-      {(can.review || can.release || can.requeue || can.close) && (
+      {(can.review || can.release || can.requeue || can.close) && !settles && (
+        <div className="mt-2.5 border-t pt-2.5">
+          <SettleElsewhere id={t.id} state={t.state} />
+        </div>
+      )}
+      {(can.review || can.release || can.requeue || can.close) && settles && (
         <div className="mt-2.5 flex flex-wrap items-center gap-1.5 border-t pt-2.5">
           {can.review && <ReviewActions taskId={t.id} pr={t.pr?.number ?? null} kind={reviewKind(t)} canWrite={canWrite} size="sm" />}
           {can.release && <ReleaseAction taskId={t.id} canWrite={canWrite} size="sm" />}
@@ -120,7 +127,7 @@ function Card({ t, now, workers, canWrite, servedLanes, cloud }: { t: Task; now:
   );
 }
 
-export function Board({ tasks, workers, now, canWrite, all, project, cloud }: { tasks: Task[]; workers: readonly board.WorkerView[]; now: number; canWrite: boolean; all?: string; project?: string; cloud?: ReadonlyMap<string, CloudView> }) {
+export function Board({ tasks, workers, now, canWrite, reach, all, project, cloud }: { tasks: Task[]; workers: readonly board.WorkerView[]; now: number; canWrite: boolean; reach?: SiteReach; all?: string; project?: string; cloud?: ReadonlyMap<string, CloudView> }) {
   const servedLanes = board.servedLanes([...workers]);
   const columns = COLUMNS.map((c) => ({ ...c, list: tasks.filter((t) => columnOf(t) === c.key) })).filter((c) => c.always || c.list.length > 0);
   const href = (column?: string) => {
@@ -146,7 +153,7 @@ export function Board({ tasks, workers, now, canWrite, all, project, cloud }: { 
             ) : (
               <ul className="flex flex-col gap-2 px-2 pb-2">
                 {shown.map((t) => (
-                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} servedLanes={servedLanes} cloud={cloud?.get(t.id)} />
+                  <Card key={t.id} t={t} now={now} workers={workers} canWrite={canWrite} settles={!reach || siteSettles(reach, t)} servedLanes={servedLanes} cloud={cloud?.get(t.id)} />
                 ))}
               </ul>
             )}

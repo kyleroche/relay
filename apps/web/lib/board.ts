@@ -18,6 +18,8 @@ declare global {
   // eslint-disable-next-line no-var
   var __relayBoard: Promise<board.BoardSession> | undefined;
   // eslint-disable-next-line no-var
+  var __relayReach: Promise<SiteReach> | undefined;
+  // eslint-disable-next-line no-var
   var __relayWorkers: { at: number; read: Promise<board.WorkerView[]> } | undefined;
 }
 
@@ -33,18 +35,38 @@ export function siteHandle(): board.Board {
 async function connect(): Promise<board.BoardSession> {
   if (dataMode() !== "db") return (await import("./board-demo.ts")).demoBoard();
   const cfg = loadConfig().board;
-  const session = await board.connectBoard(siteHandle(), cfg);
-  // once per instance, where an operator reads it: a site that cannot settle other people's tasks
-  const queues = await queueAccess(session).catch(() => undefined);
-  if (queues && !queues.decides) console.error(`[relay] board: this deployment does not manage the queues. ${queues.access}`);
-  return session;
+  return board.connectBoard(siteHandle(), cfg);
 }
 
-/** Whether the deployment may settle tasks other people opened in the queues, with what the board said about it. */
-export async function queueAccess(session: board.BoardSession): Promise<{ decides: boolean; access: string }> {
-  const a = await board.accessIn(session.board, board.workChannel("any"), session.me);
-  return { decides: a.can.includes("manage"), access: `As ${session.me.actor} it may ${a.can.join(", ") || "do nothing"} there (${a.how}).` };
+/** Which tasks the site may settle: any in the queues where it manages them, otherwise the ones it owns. */
+export interface SiteReach {
+  principal: string;
+  manages: boolean;
 }
+
+/**
+ * What the site may settle on the board, asked once per instance. The board lets a task's owner hold, reopen and
+ * cancel it, or a person who manages its queue. Vercel's board gives a deployment no `manage` whatever it is granted
+ * (its answer says the grant is capped by role), so a hosted site settles the tasks it owns: the ones opened through
+ * it. A site run with a person's login (development, a local board) manages the queues and settles any. The board's
+ * answer goes to the log, where whoever runs the site can read which of the two it is and why.
+ */
+export function siteReach(): Promise<SiteReach> {
+  globalThis.__relayReach ??= siteBoard()
+    .then(async (s) => {
+      const a = await board.accessIn(s.board, board.workChannel("any"), s.me);
+      const manages = a.can.includes("manage");
+      console.info(`[relay] board: signed on as ${s.me.actor}. It settles ${manages ? "any task in the queues" : "the tasks opened through it"} (${a.how}).`);
+      return { principal: s.me.principal, manages };
+    })
+    .catch((e: unknown) => {
+      globalThis.__relayReach = undefined;
+      throw e;
+    });
+  return globalThis.__relayReach;
+}
+
+export const siteSettles = (reach: SiteReach, t: Pick<board.BoardTask, "owner">): boolean => reach.manages || board.maySettle(reach.principal, t.owner);
 
 /** The board with who the site is on it and whose blocks it believes (its own, then `RELAY_BOARD_FROM`). */
 export function siteBoard(): Promise<board.BoardSession> {

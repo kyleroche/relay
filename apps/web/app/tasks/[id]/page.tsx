@@ -12,13 +12,14 @@ import { GrantSetAction } from "@/components/tasks/grant-set-action";
 import { ReleaseAction } from "@/components/tasks/release-action";
 import { RequeueAction } from "@/components/tasks/requeue-action";
 import { ReviewActions } from "@/components/tasks/review-actions";
+import { SettleElsewhere } from "@/components/tasks/settle-elsewhere";
 import { TaskStateBadge } from "@/components/tasks/state-badge";
 import { Breadcrumb } from "@/components/ui/breadcrumb";
 import { Pill } from "@/components/ui/pill";
 import { RelTime } from "@/components/ui/rel-time";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { boardProblem, siteBoard, siteWorkers } from "@/lib/board";
+import { boardProblem, siteBoard, siteReach, siteSettles, siteWorkers } from "@/lib/board";
 import { BUILTIN_LANES, workerOfClaim } from "@/lib/board-read";
 import { cloudProblem } from "@/lib/cloud/config";
 import { cloudView, type CloudView } from "@/lib/cloud/view";
@@ -42,18 +43,18 @@ interface Access {
   cloud: CloudView | undefined;
 }
 
-type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[]; site: string; access: Access } | { problem: string } | null;
+type Loaded = { detail: board.TaskDetail; workers: board.WorkerView[]; site: string; settles: boolean; access: Access } | { problem: string } | null;
 
 /** The task's thread from the board, once per request (the metadata and the page both ask); null when there is none. */
 const load = cache(async (id: string): Promise<Loaded> => {
   try {
     const session = await siteBoard();
-    const [detail, workers] = await Promise.all([board.getTask(session.board, id, { trusted: session.from }), siteWorkers().catch(() => [])]);
+    const [detail, workers, reach] = await Promise.all([board.getTask(session.board, id, { trusted: session.from }), siteWorkers().catch(() => []), siteReach()]);
     const now = Date.now();
     // only a queued task can be offered a run, or have one coming up; the Grants panel says what was approved for any other
     const [profile, cloud] = await Promise.all([projectProfile(detail.task.repo), cloudView(detail.task, { session, workers, now, thread: detail.thread }).catch(() => undefined)]);
     // grants count only from the authors the site believes, for the task's text as it stands
-    return { detail, workers, site: session.me.principal, access: { profile, sets: board.grantsOf(detail.thread, session.from).sets, cloudCapUsd: cloudGrantOf(detail.thread, session.from)?.capUsd ?? null, cloud } };
+    return { detail, workers, site: session.me.principal, settles: siteSettles(reach, detail.task), access: { profile, sets: board.grantsOf(detail.thread, session.from).sets, cloudCapUsd: cloudGrantOf(detail.thread, session.from)?.capUsd ?? null, cloud } };
   } catch (e) {
     if (e instanceof board.TaskError && e.status === 404) return null;
     return { problem: boardProblem(e) };
@@ -170,11 +171,17 @@ export default async function TaskPage({ params }: Props) {
               The injection gate read the task&apos;s text and found instructions aimed at the agent rather than at the work. No worker runs it until someone reads the text below and releases it; a release covers the text as it stands, and anything added later is graded again. A tripwire, not a boundary: the sandbox and the allowlist still apply after a release.
             </p>
             {t.hold?.reason && <p className="mt-3 whitespace-pre-wrap rounded bg-muted px-2 py-1 font-mono text-xs">{t.hold.reason}</p>}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <ReleaseAction taskId={t.id} canWrite={canWrite} />
-              {requeue}
-              {close}
-            </div>
+            {l.settles ? (
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <ReleaseAction taskId={t.id} canWrite={canWrite} />
+                {requeue}
+                {close}
+              </div>
+            ) : (
+              <div className="mt-3">
+                <SettleElsewhere id={t.id} state={t.state} full />
+              </div>
+            )}
           </section>
         )}
 
@@ -216,11 +223,15 @@ export default async function TaskPage({ params }: Props) {
                         ? "A worker holds this task until its lease ends, so it cannot be requeued. Close stops the run at its next look."
                         : "Requeue moves it to another lane or model; Close finishes it without a merge."}
             </p>
-            <div className="flex flex-wrap items-center gap-2">
-              {can.review && <ReviewActions taskId={t.id} pr={pr} kind={kind} canWrite={canWrite} />}
-              {can.requeue && requeue}
-              {can.close && close}
-            </div>
+            {l.settles ? (
+              <div className="flex flex-wrap items-center gap-2">
+                {can.review && <ReviewActions taskId={t.id} pr={pr} kind={kind} canWrite={canWrite} />}
+                {can.requeue && requeue}
+                {can.close && close}
+              </div>
+            ) : (
+              <SettleElsewhere id={t.id} state={t.state} full />
+            )}
           </section>
         )}
 

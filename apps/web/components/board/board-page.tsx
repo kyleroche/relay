@@ -9,7 +9,7 @@ import { DemoNotice } from "@/components/demo-notice";
 import { HomeTabs } from "@/components/home-tabs";
 import { ReviewPrompt } from "@/components/tasks/review-prompt";
 import { EmptyState } from "@/components/ui/empty-state";
-import { boardProblem, queueAccess, siteBoard, siteWorkers } from "@/lib/board";
+import { boardProblem, siteBoard, siteReach, siteWorkers } from "@/lib/board";
 import { newestFinished, openTasks } from "@/lib/board-read";
 import { syncFeedAfter } from "@/lib/board-watch";
 import { cloudViews } from "@/lib/cloud/view";
@@ -31,16 +31,16 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
   const db = dataMode() === "db";
   syncFeedAfter(siteBoard);
   const [read, pending, projects] = await Promise.all([
-    Promise.all([openTasks(project), newestFinished(DONE_SHOWN, project), siteWorkers(), siteBoard()]).then(
-      async ([open, finished, workers, session]) => ({
+    Promise.all([openTasks(project), newestFinished(DONE_SHOWN, project), siteWorkers(), siteBoard(), siteReach()]).then(
+      async ([open, finished, workers, session, reach]) => ({
         tasks: [...open, ...finished],
         workers,
         problem: null,
-        ...(await queueAccess(session)),
+        reach,
         // the offer of a paid run on a queued card: read from the board as it is now, and nothing is written to make it
         cloud: await cloudViews(open, { session, workers, now: Date.now() }).catch(() => new Map()),
       }),
-      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), decides: true, access: "", cloud: new Map() }),
+      (e: unknown) => ({ tasks: [], workers: [], problem: boardProblem(e), reach: undefined, cloud: new Map() }),
     ),
     getAssets({ status: "pending", limit: 50, ...(project ? { project } : {}) }),
     getProjects(),
@@ -107,11 +107,6 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
           The board could not be read. {read.problem}
         </Alert>
       )}
-      {db && !read.problem && !read.decides && (
-        <Alert tone="warn" className="mb-4">
-          This deployment can open tasks but does not manage the queues (<code>work/</code>) on the board, so it cannot approve, release, requeue or close a task someone else opened. Someone who manages the board runs <code>relay setup --board --site-project &lt;this project&gt;</code> once. <span className="text-muted-foreground">{read.access}</span>
-        </Alert>
-      )}
       {db && !read.problem && read.tasks.length === 0 && !project && (
         <EmptyState title="No tasks yet" command={`relay task create --title "…" --lane claude`} className="mb-4">
           A task is a thread in a project&apos;s queue on the board. Open one with the command, the relay_task_create tool, or by labelling a GitHub issue agent:&lt;lane&gt;; it appears in Queue here.
@@ -122,7 +117,7 @@ export async function BoardPage({ all, project }: { all?: string; project?: stri
           {known ? "This project's queue is empty. Open a task with the command, or pick another project above." : "Register the project first; it then appears in the filter above."}
         </EmptyState>
       )}
-      <Board tasks={tasks} workers={live} now={now} canWrite={db} all={all} project={project} cloud={read.cloud} />
+      <Board tasks={tasks} workers={live} now={now} canWrite={db} reach={read.reach} all={all} project={project} cloud={read.cloud} />
     </>
   );
 }

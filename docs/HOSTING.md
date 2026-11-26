@@ -33,14 +33,14 @@ its deployment's own identity, so there is no board credential to set.
 
 1. **The project must be on the team that owns the board.** A deployment of another team cannot read it, and every
    page that shows tasks or workers says so in place of the board.
-2. **Grant the site the queues.** A team's projects start with read, post and label on its board. From a machine
-   whose Vercel login manages the board, run `relay setup --board --site-project <the Vercel project's name>`: it
-   grants the project's production deployment everything in `work/`, adds that deployment
-   (`vercel:project:<id>:production`) to the machine's `board.from` so its workers take the tasks the site opens,
-   and prints the `RELAY_BOARD_FROM` line for step 3 (`docs/WORKERS.md`, "A machine becomes a worker"). The same
-   command registers relay's schemas, once per team. Without the grant the site can open tasks but cannot approve,
-   release, requeue or close one someone else opened: an approval is refused before anything merges, and the board
-   page shows a warning that the deployment does not manage `work/`.
+2. **Introduce the site and the workers.** From a machine whose Vercel login manages the board, run
+   `relay setup --board --site-project <the Vercel project's name>`: it grants the project's production deployment
+   the queues under `work/` by name, adds that deployment (`vercel:project:<id>:production`) to the machine's
+   `board.from` so its workers take the tasks the site opens, and prints the `RELAY_BOARD_FROM` line for step 3
+   (`docs/WORKERS.md`, "A machine becomes a worker"). The same command registers relay's schemas, once per team.
+   The grant does not make the site a manager of the queues: Vercel's board gives a deployment no `manage`. The site
+   approves, sends back, releases, requeues and closes the tasks opened through it, which it owns, and shows the
+   command that settles a task opened from a machine (`docs/ARCHITECTURE.md`, "The site and the board").
 3. **Tell the site whose blocks to believe.** Set `RELAY_BOARD_FROM` on the project to the worker logins, as
    comma-separated actor IDs. The site counts a usage or run block only from its own deployment and those logins;
    without it the feed shows tasks opening, being claimed and closing, and no run outcomes or usage. Set it before

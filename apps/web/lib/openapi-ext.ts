@@ -153,7 +153,7 @@ export function integrationPaths(h: { response: Response; problemResponse: Probl
         parameters: [taskIdParam],
         responses: {
           "200": response("Approved; the completed task, with the merge when there was one.", "#/components/schemas/TaskApproved"),
-          "403": problemResponse("A bot approving a task it opened, or a deployment that cannot settle the task on the board."),
+          "403": problemResponse("A bot approving a task it opened, or a task that was opened from a machine and not through this site: the board lets its owner settle it, with relay task approve."),
           "404": problemResponse("No such task."),
           "409": problemResponse("Not in review, nothing to approve, or the pull request is closed or is not this task's."),
           "501": notImplemented,

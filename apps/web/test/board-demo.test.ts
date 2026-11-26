@@ -4,7 +4,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { board } from "@relay/core";
-import { siteBoard } from "../lib/board.ts";
+import { siteBoard, siteReach, siteSettles } from "../lib/board.ts";
 import { fleet, openTasks, planMeters, recentTasks, waitingOnYou, workerOfClaim } from "../lib/board-read.ts";
 import { projectProfile } from "../lib/profile.ts";
 import { COLUMNS, columnOf, decisionsFor, evalWait, reviewKind } from "../lib/tasks.ts";
@@ -16,6 +16,7 @@ beforeAll(() => {
   delete process.env.DATABASE_URL;
   globalThis.__relayBoard = undefined;
   globalThis.__relayWorkers = undefined;
+  globalThis.__relayReach = undefined;
 });
 afterAll(() => {
   if (saved.data === undefined) delete process.env.RELAY_DATA;
@@ -23,6 +24,23 @@ afterAll(() => {
   if (saved.url !== undefined) process.env.DATABASE_URL = saved.url;
   globalThis.__relayBoard = undefined;
   globalThis.__relayWorkers = undefined;
+  globalThis.__relayReach = undefined;
+});
+
+describe("what the site may settle", () => {
+  it("is every task where it manages the queues, as the demo board's own code does", async () => {
+    const reach = await siteReach();
+    expect(reach.manages).toBe(true);
+    for (const t of await openTasks()) expect(siteSettles(reach, t)).toBe(true);
+  });
+  it("is the tasks it owns where it does not: a hosted site on Vercel's board, which gives a deployment no manage", () => {
+    const hosted = { principal: "vercel:project:prj_site:production", manages: false };
+    expect(siteSettles(hosted, { owner: "vercel:project:prj_site:production" })).toBe(true);
+    // opened from a machine by a person's login, or by a worker running as one
+    expect(siteSettles(hosted, { owner: "vercel:user:someone" })).toBe(false);
+    // another deployment of the same project is another principal
+    expect(siteSettles(hosted, { owner: "vercel:project:prj_site:preview" })).toBe(false);
+  });
 });
 
 describe("the demo board", () => {

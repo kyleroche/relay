@@ -129,11 +129,17 @@ both as `bot-grok-bot`), so the board shows who opened, approved or closed a tas
 so nothing in a caller's words is data, whatever carried it (`docs/SECURITY.md`, "Who relay believes"). What the
 site itself says as data, a gate release or an eval that could not run, goes out as its own profile `relay-site`,
 after the site has checked who asked. A grant and a gate release are decisions, and a worker believes one only from
-a trusted principal itself or from `relay-site`, never from a worker's profile (`isDecidingActor`). A team's projects
-start with read, post and label on its board; lifting a
-hold or calling off a task someone else opened takes everything in `work/`, which is the grant
-`relay setup --board --site-project <name>` makes (`docs/WORKERS.md`, "A machine becomes a worker"). The board page
-shows a warning when the deployment does not manage `work/`.
+a trusted principal itself or from `relay-site`, never from a worker's profile (`isDecidingActor`). **What it may settle.** The board lets a task's owner, as itself, lift a hold, reopen and cancel it, or a person who
+manages its queue, and it holds a profile to the tasks that profile made. Vercel's board gives a deployment no
+`manage`, whatever grant names it: asked about its own access, it answers the grant and then "capped by role". So a
+hosted site settles the tasks it owns, which are the ones opened through it (its pages, its API and MCP tools, a
+labelled GitHub issue), and it makes those calls as the deployment itself after the desk has checked who asked
+(`asOwner` in `board/tasks.ts`), so one person approves on the site what another person or a bot opened there. A
+task opened from a machine (`relay task create`, `relay handoff`, `relay steps run`, a step's task a worker opened)
+is its login's: the site shows it and names the command that settles it from a machine, and refuses an approval
+before anything merges. People manage the queues, so a machine settles any task, the site's included. A site run
+with a person's login (development, a local board) manages them too. `siteReach` in `apps/web/lib/board.ts` asks
+the board once per instance which of the two it is and logs the answer.
 
 **What it reads.** Open tasks with `listTasks` (the board's working columns, `relay_task_list`,
 `GET /api/v1/tasks`), oldest first as a queue is worked. Finished tasks and History with `recentTasks`, newest

@@ -287,8 +287,9 @@ export async function settleMerged(board: Board, pull: { url: string; head_ref: 
 }
 
 /**
- * Let a Vercel project's production deployment run relay's site on this board: everything in the queues, so it can
- * lift a hold or call off a task someone else opened (a project's deployments start with read, post and label only).
+ * Let a Vercel project's production deployment run relay's site on this board: the queues, by name, so the site keeps
+ * them if the team narrows what every project gets. It is written as everything in `work/`; Vercel's board then caps
+ * a deployment below `manage`, so the site settles the tasks it owns and not other people's (`asOwner` in tasks.ts).
  * Answers the actor that deployment writes as, which is what a worker names to take the tasks the site opens.
  * Asking again finds the grant that is there. It takes `manage` on the queues to make one.
  */

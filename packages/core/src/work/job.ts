@@ -28,7 +28,7 @@ import { describeBoardError } from "../board/client.ts";
 import { branchFor, evalHoldReason, HOLD, isBranchName, isBranchOf, LABEL, parseEvalHold, planHoldReason, RELAY_MESSAGE, REPORT_REASON, taskRef } from "../board/mapping.ts";
 import { parsePlan, PLAN_FILE, planSummary } from "../board/plan.ts";
 import { assetText, ASSET_SCHEMA, blocksOf, EVAL_SCHEMA, evalText, isTrustedActor, prose, RELEASE_SCHEMA, RUN_SCHEMA, runText, trustedBlocks, usageText, type AssetBlock, type EvalBlock, type ReleaseBlock, type RunBlock, type UsageBlock } from "../board/schemas.ts";
-import { fullBody, gateInput, grantsOf, isModelId, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
+import { asOwner, fullBody, gateInput, grantsOf, isModelId, openTaskHeldBack, skipStep, threadNotes, toTask, type BoardTask } from "../board/tasks.ts";
 import { listWorkers, servedLanes } from "../board/workers.ts";
 import { findOnPath } from "../github/client.ts";
 import { runClaude, type ClaudeModel } from "../lanes/claude.ts";
@@ -663,7 +663,7 @@ async function runStepTask(j: Job, at: { step: string; evaluates: string; branch
   const verdict = findings.split("\n").map((l) => l.trim()).find((l) => /^verdict:/i.test(l)) ?? findings.split("\n").find((l) => l.trim())!.trim().slice(0, 200);
   await board.reply(subject.id, { text: prose(`Eval (${step.name}) by the ${lane} lane${result.model ? `, ${result.model}` : ""}:\n\n${findings.slice(0, 9_000)}`), labels: { [LABEL.relay]: RELAY_MESSAGE.note } });
   await board.reply(subject.id, { text: evalText({ step: step.name, task: id, lane, verdict: verdict.slice(0, 900), ran: true }), labels: { [LABEL.relay]: RELAY_MESSAGE.log }, noSync: true });
-  await board.tasks.unblock(subject.id);
+  await asOwner(board).tasks.unblock(subject.id);
   return j.finish("done", () => j.claim.complete(verdict.slice(0, 900)), { text: `${step.name} of task ${subject.id}: ${verdict}` });
 }
 
